@@ -29,9 +29,17 @@ import io
 import json
 import os
 import re
+import sys
 import textwrap
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+# S'assurer que le dossier racine du projet et le dossier modules sont dans sys.path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODULES_DIR = os.path.join(PROJECT_ROOT, "modules")
+for _p in [PROJECT_ROOT, MODULES_DIR]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     from streamlit_mic_recorder import speech_to_text
@@ -51,33 +59,51 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# Module dédié à la gestion des photos de l'effectif sénior RCA (extraction PDF, matching, base64)
+# Modules internes du projet RCA avec fallback robuste
 try:
     from modules import photo_manager
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     import photo_manager
 
-# Module indépendant de Mémoire sélective & Rapports Hebdomadaires RCA
 try:
     from modules import weekly_memory
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     import weekly_memory
+
 try:
     from modules import rpe_connector
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     import rpe_connector
 
 try:
-    import github_sync
-except (ImportError, ModuleNotFoundError):
     from modules import github_sync
+except (ImportError, ModuleNotFoundError):
+    import github_sync
+
+try:
+    from modules import pdf_reports
+except (ImportError, ModuleNotFoundError):
+    try:
+        import pdf_reports
+    except (ImportError, ModuleNotFoundError):
+        pdf_reports = None
+
+try:
+    from modules import gps_processing
+except (ImportError, ModuleNotFoundError):
+    try:
+        import gps_processing
+    except (ImportError, ModuleNotFoundError):
+        gps_processing = None
 
 import importlib
 
 # Forcer le rechargement de weekly_memory et rpe_connector pour éliminer tout cache stale sous Streamlit Cloud
 try:
-    importlib.reload(weekly_memory)
-    importlib.reload(rpe_connector)
+    if "weekly_memory" in locals() and weekly_memory:
+        importlib.reload(weekly_memory)
+    if "rpe_connector" in locals() and rpe_connector:
+        importlib.reload(rpe_connector)
 except Exception:
     pass
 
@@ -3670,7 +3696,10 @@ def generer_rapport_pdf_coachs(
     # Garantie absolue d'enrichissement RPE dans le flux du PDF
     if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
         try:
-            from rpe_connector import enrich_gps_dataframe_with_rpe
+            try:
+                from modules.rpe_connector import enrich_gps_dataframe_with_rpe
+            except (ImportError, ModuleNotFoundError):
+                from rpe_connector import enrich_gps_dataframe_with_rpe
             s_dt = weekly_memory.parse_session_date(date_seance) or datetime.date(2026, 11, 6)
             w_n = s_dt.isocalendar()[1] if hasattr(s_dt, "isocalendar") else 45
             w_d = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][s_dt.weekday()] if hasattr(s_dt, "weekday") else "Vendredi"
@@ -5766,7 +5795,10 @@ def main() -> None:
         if selected_date is None:
             selected_date = datetime.date(2026, 11, 6)
 
-        from rpe_connector import enrich_gps_dataframe_with_rpe
+        try:
+            from modules.rpe_connector import enrich_gps_dataframe_with_rpe
+        except (ImportError, ModuleNotFoundError):
+            from rpe_connector import enrich_gps_dataframe_with_rpe
         current_mapping = st.session_state.get("mapping_gps") or st.session_state.get("mapping_gps_joueurs") or mapping_gps
         w_num_target = selected_date.isocalendar()[1] if isinstance(selected_date, (datetime.date, datetime.datetime)) else 45
         w_day_target = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][selected_date.weekday()] if isinstance(selected_date, (datetime.date, datetime.datetime)) else "Vendredi"
@@ -6309,7 +6341,10 @@ def main() -> None:
         adversaire_input = st.text_input("Adversaire du week-end (Optionnel, ex: RHEU, CAEN)", value="", key="adversaire_weekend_input")
 
         # RPE garanti pour le PDF avec mapping à jour
-        from rpe_connector import enrich_gps_dataframe_with_rpe
+        try:
+            from modules.rpe_connector import enrich_gps_dataframe_with_rpe
+        except (ImportError, ModuleNotFoundError):
+            from rpe_connector import enrich_gps_dataframe_with_rpe
         current_map_pdf = st.session_state.get("mapping_gps") or st.session_state.get("mapping_gps_joueurs") or mapping_gps
         w_n_pdf = session_date_val.isocalendar()[1] if hasattr(session_date_val, "isocalendar") else 45
         w_d_pdf = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][session_date_val.weekday()] if hasattr(session_date_val, "weekday") else "Vendredi"

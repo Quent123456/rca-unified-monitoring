@@ -939,18 +939,22 @@ def generer_rapport_pdf_coachs(
 # RAPPORT INDIVIDUEL ATHLÈTE A4 (REPORTLAB)
 # ==============================================================================
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import cm
-from reportlab.platypus import (
-    HRFlowable,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        HRFlowable,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
 
 def generate_player_pdf_report(
@@ -961,6 +965,33 @@ def generate_player_pdf_report(
     period_str: str = "7 derniers jours"
 ) -> bytes:
     """Génère un rapport individuel en PDF sous forme de flux binaire (bytes)."""
+    if not HAS_REPORTLAB:
+        # Fallback élégant avec FPDF si reportlab n'est pas installé
+        pdf = FPDF(orientation="P", unit="mm", format="A4")
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(31, 78, 121)
+        pdf.cell(0, 10, "RCA - RAPPORT DE PERFORMANCE INDIVIDUEL", ln=True, align="C")
+        pdf.ln(5)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(50, 50, 50)
+        pdf.cell(0, 8, f"Athlète : {player_name} ({player_info.get('poste', '')})", ln=True)
+        pdf.cell(0, 8, f"Période : {period_str}", ln=True)
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "État de Forme & Wellness :", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, f"- Score Hooper Moyen : {wellness_summary.get('score_hooper_moy', 'N/A')} / 28", ln=True)
+        pdf.cell(0, 6, f"- Charge sRPE Totale : {wellness_summary.get('srpe_total', 'N/A')} UA", ln=True)
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Données GPS & Charge Externe :", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, f"- Distance Totale : {gps_summary.get('total_distance_m', 'N/A')} m", ln=True)
+        pdf.cell(0, 6, f"- Vitesse Max : {gps_summary.get('vmax_kmh', 'N/A')} km/h", ln=True)
+        pdf.cell(0, 6, f"- Ratio ACWR : {gps_summary.get('acwr', 'N/A')}", ln=True)
+        return bytes(pdf.output())
+
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
