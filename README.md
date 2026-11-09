@@ -54,12 +54,14 @@ rca-unified-monitoring/
 │   ├── alerts.py                  # Seuils et alertes ACWR, monotonie et contrainte
 │   ├── calculations.py            # Calculs de charge Foster, moyennes glissantes, ACWR
 │   ├── database.py                # Base de données locale de secours
+│   ├── github_sync.py             # Synchronisation permanente des archives sur GitHub
 │   ├── gps_processing.py          # Traitement Catapult, splits, PlayerLoad, injection Excel
 │   ├── gsheets.py                 # Multi-onglets Google Sheets (Saisies, RPE INDV, Lignes)
 │   ├── gsheet_sync.py             # Authentification gspread polyvalente & cache
 │   ├── pdf_reports.py             # Moteur PDF officiel Coachs (FPDF paysage) & Fiche A4 (ReportLab)
 │   ├── photo_manager.py           # Extraction trombinoscope, matching et encodage base64
 │   ├── rpe_connector.py           # Jointure ultra-robuste GPS + RPE (Nom, Date, 'NR', skipna=True)
+│   ├── ui_theme.py                # Identité visuelle RCA (marine & or), CSS global & Sidebar
 │   ├── visualizations.py          # Composants graphiques Plotly (Heatmaps, jauges, radars)
 │   └── weekly_memory.py           # Mémoire sélective & rapports hebdomadaires multi-séances
 │
@@ -73,6 +75,7 @@ rca-unified-monitoring/
 └── scripts/                       # Utilitaires de test et d'initialisation
     ├── init_gsheets.py
     ├── test_gsheets_connection.py
+    ├── test_unified_health.py     # Diagnostic complet (13 modules, assets, 5 pages)
     └── test_write_saisies.py
 ```
 
