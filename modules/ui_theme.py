@@ -16,6 +16,11 @@ import functools
 import os
 import streamlit as st
 
+try:
+    from modules.ui import inject_rca_page_layout
+except Exception:
+    inject_rca_page_layout = None
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -92,12 +97,22 @@ def apply_rca_theme() -> None:
             z-index: 1;
         }}
 
-        /* Barre latérale blanche nette avec bordure bleu club */
+        /* Barre latérale Bleu RCA dégradé avec liseré or */
         section[data-testid="stSidebar"] {{
-            background-color: #FFFFFF !important;
-            border-right: 1px solid rgba(22, 43, 76, 0.10) !important;
+            background: linear-gradient(180deg, #1F4E79 0%, #153452 100%) !important;
+            border-right: 3px solid #D4AF37 !important;
             position: relative;
             z-index: 10;
+        }}
+        section[data-testid="stSidebar"] * {{
+            color: #FFFFFF !important;
+        }}
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a {{
+            color: #FFFFFF !important;
+            font-weight: 600 !important;
+        }}
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span {{
+            color: #FFFFFF !important;
         }}
 
         /* Boutons primaires aux couleurs du RCA */

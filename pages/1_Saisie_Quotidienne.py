@@ -12,10 +12,8 @@ st.set_page_config(page_title="Saisie Quotidienne", page_icon="📝", layout="ce
 
 # ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
 try:
-    from modules.ui_theme import apply_rca_theme, render_rca_header, setup_sidebar
-    apply_rca_theme()
-    setup_sidebar()
-    render_rca_header(page_title="Saisie Quotidienne")
+    from modules.ui import inject_rca_page_layout
+    inject_rca_page_layout("1. Saisie Quotidienne", "Formulaire RPE Foster & Bien-être Hooper")
 except Exception:
     pass
 

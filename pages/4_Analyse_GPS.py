@@ -5123,10 +5123,8 @@ def main() -> None:
 
     # Charte visuelle officielle RCA et habillage complet de la Sidebar
     try:
-        from modules.ui_theme import apply_rca_theme, render_rca_header, setup_sidebar
-        apply_rca_theme()
-        setup_sidebar()
-        render_rca_header(page_title="Analyse GPS & Rapports")
+        from modules.ui import inject_rca_page_layout
+        inject_rca_page_layout("4. Analyse Catapult GPS", "Traitement des boîtiers, métriques rugby & export PDF")
     except Exception:
         pass
 

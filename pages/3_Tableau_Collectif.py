@@ -16,10 +16,8 @@ st.set_page_config(page_title="Tableau Collectif", page_icon="👥", layout="wid
 
 # ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
 try:
-    from modules.ui_theme import apply_rca_theme, render_rca_header, setup_sidebar
-    apply_rca_theme()
-    setup_sidebar()
-    render_rca_header(page_title="Tableau Collectif")
+    from modules.ui import inject_rca_page_layout
+    inject_rca_page_layout("3. Tableau Collectif", "Vue globale d'équipe & charges cumulées")
 except Exception:
     pass
 

@@ -20,38 +20,12 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Application du thème officiel RCA et initialisation de la Sidebar ─────────
+# ── Injection du layout officiel RCA & Bannière universelle ───────────────────
 try:
-    from modules.ui_theme import apply_rca_theme, setup_sidebar
-    apply_rca_theme()
-    setup_sidebar()
+    from modules.ui import inject_rca_page_layout
+    inject_rca_page_layout("RCA Unified Monitoring", "Plateforme centralisée RPE & Catapult GPS")
 except Exception:
     pass
-
-# ── En-tête officiel avec Logo RCA ────────────────────────────────────────────
-logo_path = None
-for candidate in ["assets/logo_rca.png", "logo_rca.png"]:
-    if os.path.exists(candidate):
-        logo_path = candidate
-        break
-
-header_col1, header_col2 = st.columns([1, 8])
-
-with header_col1:
-    if logo_path:
-        st.image(logo_path, width=110)
-    else:
-        st.markdown("<div style='font-size: 4rem; text-align: center;'>🏉</div>", unsafe_allow_html=True)
-
-with header_col2:
-    st.markdown('<div class="badge-club">🏉 Rugby Club Amiénois • Fédérale 2</div>', unsafe_allow_html=True)
-    st.markdown('<div class="main-title">RCA Unified Monitoring</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub-title">Plateforme centralisée de suivi athlétique — RPE, Wellness & Métriques GPS Catapult</div>',
-        unsafe_allow_html=True,
-    )
-
-st.divider()
 
 # ── Grille des 5 modules principaux (Cartes HTML 100% cliquables) ──────────────
 st.subheader("🚀 Modules de Performance & Suivi")
@@ -60,14 +34,12 @@ st.caption("Cliquez directement sur une carte pour ouvrir le module correspondan
 def render_module_card(title: str, desc: str, url_path: str, btn_text: str) -> str:
     return f"""
 <a href="{url_path}" target="_self" style="text-decoration: none; color: inherit; display: block; height: 100%;">
-  <div class="rca-card-box"
-       onmouseover="this.style.transform='translateY(-4px)'; this.style.borderColor='#162B4C'; this.style.boxShadow='0 12px 24px rgba(22,43,76,0.18)'; const b=this.querySelector('.rca-card-btn'); if(b){{ b.style.backgroundColor='#F3C300'; b.style.color='#162B4C'; b.style.borderColor='#F3C300'; }}"
-       onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='rgba(22, 43, 76, 0.2)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)'; const b=this.querySelector('.rca-card-btn'); if(b){{ b.style.backgroundColor='#162B4C'; b.style.color='#FFFFFF'; b.style.borderColor='#162B4C'; }}">
+  <div class="rca-card">
     <div>
-      <h3 style="margin-top: 0; margin-bottom: 0.45rem; color: #162B4C; font-size: 1.15rem; font-weight: 700;">{title}</h3>
-      <p style="font-size: 0.91rem; color: #4A5568; margin-bottom: 0.9rem; line-height: 1.45;">{desc}</p>
+      <h3>{title}</h3>
+      <p>{desc}</p>
     </div>
-    <div class="rca-card-btn" style="display: inline-block; background-color: #162B4C; color: #FFFFFF; border: 1px solid #162B4C; padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.85rem; font-weight: 700; text-align: center; width: fit-content; transition: all 0.2s ease;">{btn_text}</div>
+    <div class="rca-card-btn">{btn_text}</div>
   </div>
 </a>
 """
