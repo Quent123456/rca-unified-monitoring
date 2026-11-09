@@ -33,16 +33,16 @@ RUGBY_POSITIONS = [
 ]
 
 MOCK_PLAYERS = [
-    {"id": "J01", "nom": "Dupont", "prenom": "Antoine", "poste": "Demi de mêlée", "groupe": "Arrières"},
-    {"id": "J02", "nom": "Alldritt", "prenom": "Grégory", "poste": "Troisième ligne centre", "groupe": "Avants"},
-    {"id": "J03", "nom": "Ntamack", "prenom": "Romain", "poste": "Demi d'ouverture", "groupe": "Arrières"},
-    {"id": "J04", "nom": "Atonio", "prenom": "Uini", "poste": "Pilier droit", "groupe": "Avants"},
-    {"id": "J05", "nom": "Marchand", "prenom": "Julien", "poste": "Talonneur", "groupe": "Avants"},
-    {"id": "J06", "nom": "Flament", "prenom": "Thibaud", "poste": "Deuxième ligne", "groupe": "Avants"},
-    {"id": "J07", "nom": "Penaud", "prenom": "Damian", "poste": "Ailier droit", "groupe": "Arrières"},
-    {"id": "J08", "nom": "Ramos", "prenom": "Thomas", "poste": "Arrière", "groupe": "Arrières"},
-    {"id": "J09", "nom": "Fickou", "prenom": "Gaël", "poste": "Premier centre", "groupe": "Arrières"},
-    {"id": "J10", "nom": "Ollivon", "prenom": "Charles", "poste": "Troisième ligne aile", "groupe": "Avants"},
+    {"id": "J01", "nom": "DUPONT", "prenom": "Antoine", "poste": "Demi de mêlée", "groupe": "Équipe A"},
+    {"id": "J02", "nom": "ALLDRITT", "prenom": "Grégory", "poste": "Troisième ligne centre", "groupe": "Équipe A"},
+    {"id": "J03", "nom": "NTAMACK", "prenom": "Romain", "poste": "Demi d'ouverture", "groupe": "Équipe A"},
+    {"id": "J04", "nom": "ATONIO", "prenom": "Uini", "poste": "Pilier droit", "groupe": "Équipe A"},
+    {"id": "J05", "nom": "MARCHAND", "prenom": "Julien", "poste": "Talonneur", "groupe": "Équipe A"},
+    {"id": "J06", "nom": "FLAMENT", "prenom": "Thibaud", "poste": "Deuxième ligne", "groupe": "Équipe B"},
+    {"id": "J07", "nom": "PENAUD", "prenom": "Damian", "poste": "Ailier droit", "groupe": "Équipe B"},
+    {"id": "J08", "nom": "RAMOS", "prenom": "Thomas", "poste": "Arrière", "groupe": "Équipe B"},
+    {"id": "J09", "nom": "FICKOU", "prenom": "Gaël", "poste": "Premier centre", "groupe": "Équipe B"},
+    {"id": "J10", "nom": "OLLIVON", "prenom": "Charles", "poste": "Troisième ligne aile", "groupe": "Équipe B"},
 ]
 
 
@@ -129,17 +129,52 @@ def get_worksheet_data(spreadsheet_name: str, worksheet_name: str) -> pd.DataFra
 
 
 def get_players() -> pd.DataFrame:
-    """Retourne la liste des joueurs (effectif)."""
-    # Si Google Sheets est configuré, tenter de lire l'onglet 'Effectif'
+    """Retourne la liste des joueurs (effectif).
+    
+    Tente de lire l'onglet 'Effectif' ou 'Joueurs' du Google Sheet,
+    normalise les colonnes et effectue un tri alphabétique par NOM, Prénom.
+    """
     target_sheet = st.secrets.get("spreadsheet_url") or st.secrets.get("spreadsheet_name")
-    if target_sheet and is_gsheet_configured():
-        df_sheet = get_worksheet_data(target_sheet, "Effectif")
-        if not df_sheet.empty:
-            return df_sheet
+    df_raw = pd.DataFrame()
 
-    if "mock_players" not in st.session_state:
-        st.session_state["mock_players"] = pd.DataFrame(MOCK_PLAYERS)
-    return st.session_state["mock_players"]
+    if target_sheet and is_gsheet_configured():
+        for ws_name in ["Effectif", "effectif", "Joueurs", "joueurs"]:
+            df_raw = get_worksheet_data(target_sheet, ws_name)
+            if not df_raw.empty:
+                break
+
+    if df_raw.empty:
+        if "mock_players" not in st.session_state:
+            st.session_state["mock_players"] = pd.DataFrame(MOCK_PLAYERS)
+        df_raw = st.session_state["mock_players"].copy()
+
+    # Normalisation des colonnes
+    col_mapping = {}
+    for col in df_raw.columns:
+        c_clean = str(col).strip().lower()
+        if c_clean in ["nom", "last_name", "lastname"]:
+            col_mapping[col] = "nom"
+        elif c_clean in ["prénom", "prenom", "first_name", "firstname"]:
+            col_mapping[col] = "prenom"
+        elif c_clean in ["groupe", "équipe", "equipe", "group", "team"]:
+            col_mapping[col] = "groupe"
+        elif c_clean in ["poste", "position"]:
+            col_mapping[col] = "poste"
+        elif c_clean in ["id", "joueur_id", "id_joueur"]:
+            col_mapping[col] = "id"
+
+    df_clean = df_raw.rename(columns=col_mapping)
+    for expected_col in ["nom", "prenom", "groupe", "poste", "id"]:
+        if expected_col not in df_clean.columns:
+            df_clean[expected_col] = "Inconnu" if expected_col != "id" else ""
+
+    # Tri alphabétique NOM puis Prénom
+    df_clean = df_clean.sort_values(
+        by=["nom", "prenom"],
+        key=lambda s: s.astype(str).str.upper()
+    ).reset_index(drop=True)
+
+    return df_clean
 
 
 def get_wellness_data(days_back: int = 30) -> pd.DataFrame:
@@ -195,7 +230,7 @@ def get_wellness_data(days_back: int = 30) -> pd.DataFrame:
 
 
 def save_wellness_entry(entry: Dict[str, Any]) -> bool:
-    """Enregistre une nouvelle saisie quotidienne (Google Sheets ou Session State)."""
+    """Enregistre une nouvelle saisie quotidienne dans Google Sheets (onglet Réponses/Wellness) ou Session State."""
     client = get_gsheet_client()
     target_sheet = st.secrets.get("spreadsheet_url") or st.secrets.get("spreadsheet_name")
 
@@ -206,33 +241,47 @@ def save_wellness_entry(entry: Dict[str, Any]) -> bool:
             else:
                 sh = client.open(target_sheet)
 
-            sheet = sh.worksheet("Wellness")
+            available_titles = [w.title for w in sh.worksheets()]
+            sheet = None
+            for candidate in ["Réponses", "Reponses", "RPE", "Wellness", "Form Responses 1"]:
+                if candidate in available_titles:
+                    sheet = sh.worksheet(candidate)
+                    break
+            if not sheet:
+                sheet = sh.worksheet(available_titles[0])
+
             row = [
                 str(entry.get("Date", datetime.date.today().isoformat())),
                 str(entry.get("Joueur_ID", "")),
                 str(entry.get("Nom", "")),
+                str(entry.get("Prenom", "")),
                 str(entry.get("Poste", "")),
                 str(entry.get("Groupe", "")),
+                str(entry.get("Session_Type", "Rugby Collectif")),
+                entry.get("Duree_min", 60),
+                entry.get("RPE", 5),
+                entry.get("Charge_Foster", entry.get("Charge_sRPE", 300)),
                 entry.get("Sommeil", 3),
                 entry.get("Fatigue", 3),
                 entry.get("Courbatures", 3),
                 entry.get("Stress", 3),
                 entry.get("Score_Hooper", 12),
-                entry.get("RPE", 5),
-                entry.get("Duree_min", 60),
-                entry.get("Charge_sRPE", 300),
                 str(entry.get("Douleurs_Localisation", "Aucune")),
                 str(entry.get("Commentaires", ""))
             ]
             sheet.append_row(row)
-            # Invalider le cache de lecture pour recharger les données fraîches
-            get_worksheet_data.clear()
+            # Invalidation immédiate du cache de Streamlit
+            st.cache_data.clear()
             return True
         except Exception as e:
             st.error(f"Échec de l'enregistrement Google Sheets : {e}")
 
-    # Fallback Session State
+    # Fallback Session State (Mode Démo / Hors ligne)
     df = get_wellness_data()
-    new_df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+    entry_dict = dict(entry)
+    if "Charge_sRPE" not in entry_dict and "Charge_Foster" in entry_dict:
+        entry_dict["Charge_sRPE"] = entry_dict["Charge_Foster"]
+    new_df = pd.concat([df, pd.DataFrame([entry_dict])], ignore_index=True)
     st.session_state["mock_wellness"] = new_df
+    st.cache_data.clear()
     return True
