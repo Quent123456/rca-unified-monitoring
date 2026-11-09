@@ -815,15 +815,20 @@ MOCK_DEMO_DATA: List[Dict[str, Any]] = [
 
 
 def get_template_path() -> Optional[str]:
-    """Recherche le fichier modèle Modele_Vierge_STAPS.xlsx."""
+    """Recherche le fichier modèle Modele_Vierge_STAPS.xlsx de manière absolue et robuste."""
     possible_paths = [
+        os.path.join(PROJECT_ROOT, "data", TEMPLATE_FILENAME),
+        os.path.join(PROJECT_ROOT, TEMPLATE_FILENAME),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", TEMPLATE_FILENAME),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), TEMPLATE_FILENAME),
+        os.path.join(os.getcwd(), "data", TEMPLATE_FILENAME),
         os.path.join(os.getcwd(), TEMPLATE_FILENAME),
+        os.path.join("data", TEMPLATE_FILENAME),
         TEMPLATE_FILENAME,
     ]
     for p in possible_paths:
-        if os.path.exists(p):
-            return p
+        if p and os.path.exists(p):
+            return os.path.abspath(p)
     return None
 
 
