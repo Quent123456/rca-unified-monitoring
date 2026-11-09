@@ -358,7 +358,13 @@ def save_session_to_memory(
             json.dump(week_data, f, ensure_ascii=False, indent=2)
 
         try:
-            import github_sync
+            try:
+
+                import github_sync
+
+            except (ImportError, ModuleNotFoundError):
+
+                from modules import github_sync
             github_sync.push_file_to_github(
                 fp,
                 commit_message=f"data: enregistrement séance {clean_day} (Semaine {week_num:02d} — {year})"
@@ -393,7 +399,13 @@ def delete_session_from_memory(year: int, week_num: int, session_id: str) -> Tup
                 if os.path.exists(fp):
                     os.remove(fp)
                 try:
-                    import github_sync
+                    try:
+
+                        import github_sync
+
+                    except (ImportError, ModuleNotFoundError):
+
+                        from modules import github_sync
                     github_sync.delete_file_from_github(
                         fp,
                         commit_message=f"data: suppression de la semaine {week_num:02d} — {year} (vide)"
@@ -406,7 +418,13 @@ def delete_session_from_memory(year: int, week_num: int, session_id: str) -> Tup
                 with open(fp, "w", encoding="utf-8") as f:
                     json.dump(week_data, f, ensure_ascii=False, indent=2)
                 try:
-                    import github_sync
+                    try:
+
+                        import github_sync
+
+                    except (ImportError, ModuleNotFoundError):
+
+                        from modules import github_sync
                     github_sync.push_file_to_github(
                         fp,
                         commit_message=f"data: suppression séance {day_label} (Semaine {week_num:02d} — {year})"
@@ -445,7 +463,13 @@ def delete_player_records(player_name: str) -> int:
                 with open(fp, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 try:
-                    import github_sync
+                    try:
+
+                        import github_sync
+
+                    except (ImportError, ModuleNotFoundError):
+
+                        from modules import github_sync
                     github_sync.push_file_to_github(
                         fp,
                         commit_message=f"data: nettoyage données joueur {player_name} (Semaine {w_info.get('week_num', '')})"
@@ -867,7 +891,13 @@ def sauvegarder_objectifs_config(cfg: Dict[str, Dict[str, float]]) -> bool:
             json.dump(cfg_to_save, f, ensure_ascii=False, indent=2)
 
         try:
-            import github_sync
+            try:
+
+                import github_sync
+
+            except (ImportError, ModuleNotFoundError):
+
+                from modules import github_sync
             github_sync.push_file_to_github(
                 TARGETS_CONFIG_FILE,
                 commit_message="config: mise à jour des objectifs de performance par poste"
@@ -971,7 +1001,13 @@ def restaurer_archive_backup(uploaded_file: Any) -> Tuple[bool, str]:
                         restored_paths.append(target_path)
 
             try:
-                import github_sync
+                try:
+
+                    import github_sync
+
+                except (ImportError, ModuleNotFoundError):
+
+                    from modules import github_sync
                 for rp in restored_paths:
                     github_sync.push_file_to_github(
                         rp,
@@ -1013,7 +1049,13 @@ def restaurer_archive_backup(uploaded_file: Any) -> Tuple[bool, str]:
 
                 if restored_path:
                     try:
-                        import github_sync
+                        try:
+
+                            import github_sync
+
+                        except (ImportError, ModuleNotFoundError):
+
+                            from modules import github_sync
                         github_sync.push_file_to_github(
                             restored_path,
                             commit_message=f"backup: restauration {os.path.basename(restored_path)}"

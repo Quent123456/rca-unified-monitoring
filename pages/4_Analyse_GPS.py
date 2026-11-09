@@ -66,6 +66,12 @@ try:
     from modules import rpe_connector
 except ImportError:
     import rpe_connector
+
+try:
+    import github_sync
+except (ImportError, ModuleNotFoundError):
+    from modules import github_sync
+
 import importlib
 
 # Forcer le rechargement de weekly_memory et rpe_connector pour éliminer tout cache stale sous Streamlit Cloud
@@ -350,7 +356,13 @@ def sauvegarder_joueur_personnalise(
         joueurs_data[nom_clean] = poste_clean
 
         try:
-            import github_sync
+            try:
+
+                import github_sync
+
+            except (ImportError, ModuleNotFoundError):
+
+                from modules import github_sync
             github_sync.push_file_to_github(
                 CONFIG_JOUEURS_CUSTOM_FILE,
                 commit_message=f"data: ajout/mise à jour du joueur {nom_clean}"
@@ -387,7 +399,13 @@ def supprimer_joueur_personnalise(nom: str) -> Tuple[bool, str]:
             photo_manager.delete_player_photo(nom)
 
             try:
-                import github_sync
+                try:
+
+                    import github_sync
+
+                except (ImportError, ModuleNotFoundError):
+
+                    from modules import github_sync
                 github_sync.push_file_to_github(
                     CONFIG_JOUEURS_CUSTOM_FILE,
                     commit_message=f"data: suppression du joueur {nom}"
@@ -1280,7 +1298,13 @@ def sauvegarder_mapping_gps_persistant(
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
         try:
-            import github_sync
+            try:
+
+                import github_sync
+
+            except (ImportError, ModuleNotFoundError):
+
+                from modules import github_sync
             github_sync.push_file_to_github(
                 CONFIG_GPS_FILE,
                 commit_message="config: mise à jour mapping boîtiers GPS"
@@ -4587,7 +4611,13 @@ def render_weekly_reports_view() -> None:
     # SAUVEGARDE & RESTAURATION DE SÉCURITÉ (PROTECTION CLOUD ANTI-PERTE)
     # --------------------------------------------------------------------------
     with st.expander("🛡️ Sauvegarde de sécurité & Restauration Cloud", expanded=False):
-        import github_sync
+        try:
+
+            import github_sync
+
+        except (ImportError, ModuleNotFoundError):
+
+            from modules import github_sync
         github_sync.render_github_sync_badge_ui(in_sidebar=False)
         st.divider()
         st.markdown(
@@ -4667,7 +4697,13 @@ def render_weekly_reports_view() -> None:
             if os.path.exists(fp):
                 os.remove(fp)
                 try:
-                    import github_sync
+                    try:
+
+                        import github_sync
+
+                    except (ImportError, ModuleNotFoundError):
+
+                        from modules import github_sync
                     github_sync.delete_file_from_github(
                         fp,
                         commit_message=f"data: suppression complète de la semaine {week_num:02d} — {year}"
@@ -5023,7 +5059,13 @@ def main() -> None:
 
     # Indicateur de synchronisation permanente GitHub dans la barre latérale
     try:
-        import github_sync
+        try:
+
+            import github_sync
+
+        except (ImportError, ModuleNotFoundError):
+
+            from modules import github_sync
         github_sync.render_github_sync_badge_ui(in_sidebar=True)
 
         with st.sidebar.expander("🛡️ Sauvegarde & Restauration Rapide", expanded=False):
@@ -6419,7 +6461,13 @@ def main() -> None:
                     st.success(f"🎉 {msg}")
                     st.toast(msg)
                     try:
-                        import github_sync
+                        try:
+
+                            import github_sync
+
+                        except (ImportError, ModuleNotFoundError):
+
+                            from modules import github_sync
                         if github_sync.is_github_sync_available():
                             st.toast("☁️ Synchronisé avec succès sur GitHub !")
                     except Exception:

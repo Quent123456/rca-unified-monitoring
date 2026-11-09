@@ -312,7 +312,13 @@ def sauvegarder_joueur_personnalise(
         joueurs_data[nom_clean] = poste_clean
 
         try:
-            import github_sync
+            try:
+
+                import github_sync
+
+            except (ImportError, ModuleNotFoundError):
+
+                from modules import github_sync
             github_sync.push_file_to_github(
                 CONFIG_JOUEURS_CUSTOM_FILE,
                 commit_message=f"data: ajout/mise à jour du joueur {nom_clean}"
@@ -349,7 +355,13 @@ def supprimer_joueur_personnalise(nom: str) -> Tuple[bool, str]:
             photo_manager.delete_player_photo(nom)
 
             try:
-                import github_sync
+                try:
+
+                    import github_sync
+
+                except (ImportError, ModuleNotFoundError):
+
+                    from modules import github_sync
                 github_sync.push_file_to_github(
                     CONFIG_JOUEURS_CUSTOM_FILE,
                     commit_message=f"data: suppression du joueur {nom}"
@@ -1242,7 +1254,13 @@ def sauvegarder_mapping_gps_persistant(
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
         try:
-            import github_sync
+            try:
+
+                import github_sync
+
+            except (ImportError, ModuleNotFoundError):
+
+                from modules import github_sync
             github_sync.push_file_to_github(
                 CONFIG_GPS_FILE,
                 commit_message="config: mise à jour mapping boîtiers GPS"
