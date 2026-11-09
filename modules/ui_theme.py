@@ -46,36 +46,34 @@ def inject_rca_css() -> None:
             font-family: 'Segoe UI', Montserrat, -apple-system, BlinkMacSystemFont, Tahoma, sans-serif;
         }
 
-        /* ── Fond d'écran subtil & élégant "Data / Sport Science" RCA ─── */
-        .stApp,
-        [data-testid="stAppViewContainer"],
-        [data-testid="stAppViewBlockContainer"] {
-            background-color: #FAFCFE !important;
-            background-image: 
-                radial-gradient(rgba(22, 43, 76, 0.065) 0.70px, transparent 0.70px), 
-                radial-gradient(rgba(243, 195, 0, 0.075) 0.70px, #FAFCFE 0.70px) !important;
+        /* ── Forçage du fond sur la racine HTML et tous les conteneurs Streamlit ── */
+        html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], .stApp, section.main {
+            background-color: #F4F7FB !important;
+            background-image: radial-gradient(#162B4C 1.1px, transparent 1.1px), radial-gradient(#F3C300 1.1px, #F4F7FB 1.1px) !important;
             background-size: 28px 28px !important;
             background-position: 0 0, 14px 14px !important;
             background-attachment: fixed !important;
         }
 
-        /* Les conteneurs avec bordure et cartes de données restent sur fond blanc plein opaque */
-        [data-testid="stVerticalBlockBorderWrapper"],
+        /* Conserver les cartes et conteneurs avec un fond blanc opaque net */
+        div[data-testid="stVerticalBlockBorderWrapper"],
+        div[data-testid="stForm"],
         .stCard,
         .rca-card-box,
         div[data-testid="stMetric"],
         div.stChatMessage {
             background-color: #FFFFFF !important;
-            box-shadow: 0 2px 8px rgba(22, 43, 76, 0.04) !important;
+            border: 1px solid rgba(22, 43, 76, 0.15) !important;
+            box-shadow: 0 4px 12px rgba(22, 43, 76, 0.05) !important;
+        }
+
+        /* Sidebar blanche contrastée */
+        section[data-testid="stSidebar"] {
+            background-color: #FFFFFF !important;
+            border-right: 1px solid rgba(22, 43, 76, 0.12) !important;
         }
 
         /* ── Habillage Sidebar & Navigation ─────────────────────────── */
-        /* Conteneur principal de la sidebar en Flexbox */
-        [data-testid="stSidebar"] {
-            background-color: #F4F7FB !important;
-            border-right: 1px solid #E2E8F0 !important;
-        }
-
         [data-testid="stSidebarContent"] {
             display: flex !important;
             flex-direction: column !important;

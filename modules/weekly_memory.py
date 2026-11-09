@@ -2799,16 +2799,27 @@ def _render_podium_section_pdf(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_pod, y_card, w_pod, 5.8, style="F")
 
+        # Si le bandeau est Jaune Or (#F3C300) comme pour Haute Intensité, forcer la couleur en Bleu Marine RCA (#162B4C) gras
+        is_gold_banner = (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat_cfg.get("title", "")).upper())
+        if is_gold_banner:
+            title_text_color = (22, 43, 76)
+            sub_text_color = (22, 43, 76)
+            sub_font_style = "B"
+        else:
+            title_text_color = (255, 255, 255)
+            sub_text_color = (226, 232, 240)
+            sub_font_style = "I"
+
         pdf.set_xy(x_pod + 3.5, y_card)
         pdf.set_font("Helvetica", "B", 8.5)
-        pdf.set_text_color(255, 255, 255)
+        pdf.set_text_color(*title_text_color)
         pdf.cell(65, 5.8, safe_latin1(cat_cfg["title"]), align="L")
 
         sub_val = subtitle_map.get(cat_cfg["key"]) if isinstance(subtitle_map, dict) else None
         sub_txt = str(sub_val).strip() if sub_val is not None else cat_cfg["def_sub"]
         pdf.set_xy(x_pod + 65, y_card)
-        pdf.set_font("Helvetica", "I", 7.5)
-        pdf.set_text_color(226, 232, 240)
+        pdf.set_font("Helvetica", sub_font_style, 7.5)
+        pdf.set_text_color(*sub_text_color)
         pdf.cell(w_pod - 69, 5.8, safe_latin1(sub_txt), align="R")
 
         cat_data = podium_data.get(cat_cfg["key"], {}) if isinstance(podium_data, dict) else {}
@@ -2930,20 +2941,33 @@ def _render_podium_page_aere(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-        # Liseré doré décoratif RCA (#F3C300)
-        pdf.set_fill_color(243, 195, 0)
+        # Si le bandeau est Jaune Or (#F3C300) comme pour Haute Intensité, forcer la police en Bleu Marine RCA (#162B4C) gras
+        is_gold_banner = (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
+        if is_gold_banner:
+            title_text_color = (22, 43, 76)
+            sub_text_color = (22, 43, 76)
+            sub_font_style = "B"
+            lisere_color = (22, 43, 76)
+        else:
+            title_text_color = (255, 255, 255)
+            sub_text_color = (226, 232, 240)
+            sub_font_style = "I"
+            lisere_color = (243, 195, 0)
+
+        # Liseré décoratif
+        pdf.set_fill_color(*lisere_color)
         pdf.rect(x_c, y_start + banner_h - 1.0, col_w, 1.0, style="F")
 
         pdf.set_xy(x_c + 2.0, y_start + 1.2)
         pdf.set_font("Helvetica", "B", 11.0)
-        pdf.set_text_color(255, 255, 255)
+        pdf.set_text_color(*title_text_color)
         pdf.cell(col_w - 4.0, 5.5, safe_latin1(cat["title"]), align="C")
 
         sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
         sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
         pdf.set_xy(x_c + 2.0, y_start + 7.2)
-        pdf.set_font("Helvetica", "I", 8.5)
-        pdf.set_text_color(226, 232, 240)
+        pdf.set_font("Helvetica", sub_font_style, 8.5)
+        pdf.set_text_color(*sub_text_color)
         pdf.cell(col_w - 4.0, 4.8, safe_latin1(sub_txt), align="C")
 
         # 2. Les 3 fiches joueurs
@@ -3090,20 +3114,32 @@ def _render_podiums_compact_horizontal(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-        # Liseré doré décoratif RCA (#F3C300)
-        pdf.set_fill_color(243, 195, 0)
+        is_gold_banner = (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
+        if is_gold_banner:
+            title_text_color = (22, 43, 76)
+            sub_text_color = (22, 43, 76)
+            sub_font_style = "B"
+            lisere_color = (22, 43, 76)
+        else:
+            title_text_color = (255, 255, 255)
+            sub_text_color = (241, 245, 249)
+            sub_font_style = "I"
+            lisere_color = (243, 195, 0)
+
+        # Liseré décoratif RCA
+        pdf.set_fill_color(*lisere_color)
         pdf.rect(x_c, y_start + banner_h - 0.5, col_w, 0.5, style="F")
 
         pdf.set_xy(x_c + 2.0, y_start)
         pdf.set_font("Helvetica", "B", title_font)
-        pdf.set_text_color(255, 255, 255)
+        pdf.set_text_color(*title_text_color)
         pdf.cell(col_w * 0.55, banner_h - 0.5, safe_latin1(cat["title"]), align="L")
 
         sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
         sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
         pdf.set_xy(x_c + col_w * 0.55, y_start)
-        pdf.set_font("Helvetica", "I", sub_font)
-        pdf.set_text_color(241, 245, 249)
+        pdf.set_font("Helvetica", sub_font_style, sub_font)
+        pdf.set_text_color(*sub_text_color)
         pdf.cell(col_w * 0.45 - 2.0, banner_h - 0.5, safe_latin1(sub_txt), align="R")
 
         # 2. Les 3 lignes joueurs
