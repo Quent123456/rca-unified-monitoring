@@ -52,90 +52,34 @@ st.markdown(
         border: 1px solid #BFD7EA;
         margin-bottom: 0.8rem;
     }
-    .module-card-title {
-        color: #1F4E79;
-        font-size: 1.18rem;
-        font-weight: 700;
-        margin-bottom: 0.35rem;
-    }
-    .module-card-desc {
-        color: #556270;
-        font-size: 0.92rem;
-        line-height: 1.45;
-        min-height: 58px;
-        margin-bottom: 0.75rem;
-    }
-
-    /* ── Cartes de modules entièrement cliquables avec effet hover ── */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]) {
-        position: relative;
+    .rca-card-box {
+        border: 1.5px solid rgba(49, 51, 63, 0.2);
+        border-radius: 0.65rem;
+        padding: 1.25rem;
+        margin-bottom: 0.8rem;
+        background-color: #FFFFFF;
         transition: all 0.2s ease-in-out;
         cursor: pointer;
-        border-radius: 12px;
-        background-color: #FFFFFF;
-        border: 1.5px solid #E2E8F0;
-    }
-
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover {
-        transform: translateY(-3px);
-        box-shadow: 0 10px 22px rgba(31, 78, 121, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
-        border-color: #1F4E79 !important;
-    }
-
-    /* Étirer le lien a[data-testid="stPageLink-NavLink"] sur l'intégralité du conteneur de la carte */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]) a[data-testid="stPageLink-NavLink"]::after {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 10;
-        border-radius: 12px;
-    }
-
-    /* Bouton d'action harmonisé en bas de chaque carte */
-    div[data-testid="stVerticalBlockBorderWrapper"] a[data-testid="stPageLink-NavLink"] {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        background-color: #F0F4F8;
-        color: #1F4E79 !important;
-        font-weight: 700 !important;
-        font-size: 0.95rem !important;
-        padding: 8px 14px !important;
-        border-radius: 8px !important;
-        text-decoration: none !important;
-        border: 1px solid #D0DFEE;
-        transition: all 0.2s ease;
-        margin-top: auto;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 210px;
+        height: 100%;
+        box-sizing: border-box;
     }
-
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover a[data-testid="stPageLink-NavLink"] {
-        background-color: #1F4E79 !important;
-        color: #FFFFFF !important;
+    .rca-card-box:hover {
+        transform: translateY(-4px);
         border-color: #1F4E79 !important;
+        box-shadow: 0 10px 24px rgba(31, 78, 121, 0.18) !important;
     }
-
     @media (prefers-color-scheme: dark) {
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]) {
-            background-color: #1A202C;
-            border-color: #2D3748;
+        .rca-card-box {
+            background-color: #1A202C !important;
+            border-color: #2D3748 !important;
         }
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover {
-            border-color: #63B3ED !important;
-            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4);
-        }
-        div[data-testid="stVerticalBlockBorderWrapper"] a[data-testid="stPageLink-NavLink"] {
-            background-color: #2D3748;
-            color: #90CDF4 !important;
-            border-color: #4A5568;
-        }
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover a[data-testid="stPageLink-NavLink"] {
-            background-color: #2B6CB0 !important;
-            color: #FFFFFF !important;
-            border-color: #2B6CB0 !important;
+        .rca-card-box p {
+            color: #A0AEC0 !important;
         }
     }
     </style>
@@ -168,100 +112,85 @@ with header_col2:
 
 st.divider()
 
-# ── Grille des 5 modules principaux ───────────────────────────────────────────
+# ── Grille des 5 modules principaux (Cartes HTML 100% cliquables) ──────────────
 st.subheader("🚀 Modules de Performance & Suivi")
-st.caption("Sélectionnez un espace pour accéder aux formulaires, tableaux de bord et outils d'analyse :")
+st.caption("Cliquez directement sur une carte pour ouvrir le module correspondant :")
+
+def render_module_card(title: str, desc: str, url_path: str, btn_text: str) -> str:
+    return f"""
+<a href="{url_path}" target="_self" style="text-decoration: none; color: inherit; display: block; height: 100%;">
+  <div class="rca-card-box"
+       onmouseover="this.style.transform='translateY(-4px)'; this.style.borderColor='#1F4E79'; this.style.boxShadow='0 10px 24px rgba(31,78,121,0.18)';"
+       onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';">
+    <div>
+      <h3 style="margin-top: 0; margin-bottom: 0.45rem; color: #1F4E79; font-size: 1.15rem; font-weight: 700;">{title}</h3>
+      <p style="font-size: 0.91rem; color: #555; margin-bottom: 0.9rem; line-height: 1.45;">{desc}</p>
+    </div>
+    <div style="display: inline-block; background-color: #1F4E79; color: white; padding: 0.4rem 0.85rem; border-radius: 5px; font-size: 0.85rem; font-weight: 600; text-align: center; width: fit-content;">{btn_text} →</div>
+  </div>
+</a>
+"""
 
 row1_col1, row1_col2, row1_col3 = st.columns(3)
 
 with row1_col1:
-    with st.container(border=True):
-        st.markdown('<div class="module-card-title">📝 1. Saisie Quotidienne</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="module-card-desc">'
-            'Formulaire joueur ergonomique (mobile) : RPE Foster (effort × durée), '
-            'questionnaire bien-être Hooper (sommeil, courbatures, fatigue) et mémorisation de groupe.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.page_link(
-            "pages/1_Saisie_Quotidienne.py",
-            label="Accéder à la Saisie",
-            icon="📝",
-            use_container_width=True,
-        )
+    st.markdown(
+        render_module_card(
+            title="📝 1. Saisie Quotidienne",
+            desc="Formulaire mobile RPE Foster (effort × durée) & questionnaire bien-être Hooper (sommeil, fatigue, courbatures).",
+            url_path="/Saisie_Quotidienne",
+            btn_text="Ouvrir la saisie",
+        ),
+        unsafe_allow_html=True,
+    )
 
 with row1_col2:
-    with st.container(border=True):
-        st.markdown('<div class="module-card-title">👤 2. Tableau Individuel</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="module-card-desc">'
-            'Profil athlète détaillé, jauge ACWR dynamique (aiguë vs chronique), '
-            'radar de bien-être, historique de charge et alertes de surmenage.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.page_link(
-            "pages/2_Tableau_Individuel.py",
-            label="Ouvrir le Profil Individuel",
-            icon="👤",
-            use_container_width=True,
-        )
+    st.markdown(
+        render_module_card(
+            title="👤 2. Tableau Individuel",
+            desc="Profil athlète détaillé, jauge ACWR dynamique (charge aiguë vs chronique), radar de bien-être et alertes de surmenage.",
+            url_path="/Tableau_Individuel",
+            btn_text="Ouvrir le profil individuel",
+        ),
+        unsafe_allow_html=True,
+    )
 
 with row1_col3:
-    with st.container(border=True):
-        st.markdown('<div class="module-card-title">👥 3. Tableau Collectif</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="module-card-desc">'
-            'Vue globale de l\'effectif, heatmap d\'entraînement, matrice de risque ACWR, '
-            'comparaisons Avants / Arrières et détection des baisses de forme.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.page_link(
-            "pages/3_Tableau_Collectif.py",
-            label="Consulter la Vue Équipe",
-            icon="👥",
-            use_container_width=True,
-        )
+    st.markdown(
+        render_module_card(
+            title="👥 3. Tableau Collectif",
+            desc="Vue globale de l'effectif, heatmap d'entraînement, matrice de risque ACWR et comparaisons Avants / Arrières.",
+            url_path="/Tableau_Collectif",
+            btn_text="Consulter la vue équipe",
+        ),
+        unsafe_allow_html=True,
+    )
 
 st.write("")
 
 row2_col1, row2_col2 = st.columns(2)
 
 with row2_col1:
-    with st.container(border=True):
-        st.markdown('<div class="module-card-title">🛰️ 4. Analyse GPS & Rapports</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="module-card-desc">'
-            'Processeur Catapult One en 3 étapes : attribution des boîtiers, métriques rugby '
-            '(PlayerLoad, HSR, sprints), injection dans le modèle officiel STAPS et rapports hebdomadaires.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.page_link(
-            "pages/4_Analyse_GPS.py",
-            label="Lancer l'Analyse GPS",
-            icon="🛰️",
-            use_container_width=True,
-        )
+    st.markdown(
+        render_module_card(
+            title="🛰️ 4. Analyse GPS & Rapports",
+            desc="Traitement Catapult One en 3 étapes : boîtiers, métriques rugby (PlayerLoad, HSR, sprints), injection Excel STAPS et rapports hebdo.",
+            url_path="/Analyse_GPS",
+            btn_text="Lancer l'analyse GPS",
+        ),
+        unsafe_allow_html=True,
+    )
 
 with row2_col2:
-    with st.container(border=True):
-        st.markdown('<div class="module-card-title">⚙️ 5. Gestion de l\'Effectif</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="module-card-desc">'
-            'Administration de l\'effectif synchronisée en direct avec Google Sheets : '
-            'ajout de nouveaux joueurs, mise à jour des postes, groupes d\'entraînement et photos.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.page_link(
-            "pages/5_Gestion_Joueurs.py",
-            label="Gérer l'Effectif",
-            icon="⚙️",
-            use_container_width=True,
-        )
+    st.markdown(
+        render_module_card(
+            title="⚙️ 5. Gestion de l'Effectif",
+            desc="Administration de l'effectif synchronisée en direct avec Google Sheets : ajout, modification des postes, groupes et photos.",
+            url_path="/Gestion_Joueurs",
+            btn_text="Gérer l'effectif",
+        ),
+        unsafe_allow_html=True,
+    )
 
 # ── Pied de page sobre ────────────────────────────────────────────────────────
 st.divider()
