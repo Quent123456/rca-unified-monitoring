@@ -5123,7 +5123,8 @@ def main() -> None:
 
     # Charte visuelle officielle RCA et habillage complet de la Sidebar
     try:
-        from modules.ui_theme import setup_sidebar
+        from modules.ui_theme import apply_rca_theme, setup_sidebar
+        apply_rca_theme()
         setup_sidebar()
     except Exception:
         pass

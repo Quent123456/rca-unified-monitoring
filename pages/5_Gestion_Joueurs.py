@@ -12,7 +12,8 @@ st.set_page_config(page_title="Gestion Joueurs", page_icon="⚙️", layout="wid
 
 # ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
 try:
-    from modules.ui_theme import setup_sidebar
+    from modules.ui_theme import apply_rca_theme, setup_sidebar
+    apply_rca_theme()
     setup_sidebar()
 except Exception:
     pass

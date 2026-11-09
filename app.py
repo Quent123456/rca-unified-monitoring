@@ -20,42 +20,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Initialisation de la charte visuelle officielle et de la Sidebar RCA ──────
+# ── Application du thème officiel RCA et initialisation de la Sidebar ─────────
 try:
-    from modules.ui_theme import setup_sidebar
+    from modules.ui_theme import apply_rca_theme, setup_sidebar
+    apply_rca_theme()
     setup_sidebar()
 except Exception:
-    # Fallback si exécution isolée
     pass
-
-# Forçage du fond d'écran tech/data sur la racine HTML et conteneurs Streamlit
-st.markdown("""
-<style>
-/* Forçage du fond sur la racine HTML et tous les conteneurs Streamlit */
-html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], .stApp, section.main {
-    background-color: #F4F7FB !important;
-    background-image: radial-gradient(#162B4C 1.1px, transparent 1.1px), radial-gradient(#F3C300 1.1px, #F4F7FB 1.1px) !important;
-    background-size: 28px 28px !important;
-    background-position: 0 0, 14px 14px !important;
-    background-attachment: fixed !important;
-}
-
-/* Conserver les cartes et conteneurs avec un fond blanc opaque net */
-div[data-testid="stVerticalBlockBorderWrapper"],
-div[data-testid="stForm"],
-.stCard {
-    background-color: #FFFFFF !important;
-    border: 1px solid rgba(22, 43, 76, 0.15) !important;
-    box-shadow: 0 4px 12px rgba(22, 43, 76, 0.05) !important;
-}
-
-/* Sidebar blanche contrastée */
-section[data-testid="stSidebar"] {
-    background-color: #FFFFFF !important;
-    border-right: 1px solid rgba(22, 43, 76, 0.12) !important;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ── En-tête officiel avec Logo RCA ────────────────────────────────────────────
 logo_path = None

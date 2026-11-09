@@ -22,7 +22,8 @@ st.set_page_config(page_title="Tableau Individuel", page_icon="👤", layout="wi
 
 # ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
 try:
-    from modules.ui_theme import setup_sidebar
+    from modules.ui_theme import apply_rca_theme, setup_sidebar
+    apply_rca_theme()
     setup_sidebar()
 except Exception:
     pass

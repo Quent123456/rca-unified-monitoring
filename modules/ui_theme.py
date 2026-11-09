@@ -3,10 +3,11 @@ modules/ui_theme.py
 Module centralisé d'identité visuelle et d'habillage UI pour le Rugby Club Amiénois (RCA).
 
 Fournit :
-1. inject_rca_css() : Styles personnalisés (palette RCA, navigation sidebar, cartes, typographie).
-2. render_sidebar_header() : Logo officiel centré, titre officiel et badge Fédérale 2 au sommet de la sidebar.
-3. render_sidebar_footer() : Boîte d'état Pôle Performance, statuts systèmes, objectif hebdo et signature.
-4. setup_sidebar() : Initialise l'ensemble de l'habillage sidebar et CSS en un seul appel.
+1. apply_rca_theme() : Thème global sobre et moderne (dégradé mesh subtil, cartes blanches, boutons RCA).
+2. inject_rca_css() : Styles complets (navigation sidebar, typographie, cartes, interactions).
+3. render_sidebar_header() : Logo officiel centré, titre officiel et badge Fédérale 2 au sommet de la sidebar.
+4. render_sidebar_footer() : Boîte d'état Pôle Performance, statuts systèmes, objectif hebdo et signature.
+5. setup_sidebar() : Initialise l'ensemble de l'habillage sidebar et CSS en un seul appel.
 """
 
 import base64
@@ -36,41 +37,62 @@ def get_rca_logo_base64() -> str:
     return ""
 
 
+def apply_rca_theme() -> None:
+    """Applique le thème officiel sobre RCA (dégradé mesh subtil, cartes blanches, boutons or/marine)."""
+    import streamlit as st
+    st.markdown("""
+    <style>
+    /* 1. Fond global sobre, épuré et moderne (Dégradé doux mesh RCA, AUCUN pointillé) */
+    html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], .stApp, section.main {
+        background-color: #F8FAFC !important;
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(22, 43, 76, 0.04) 0px, transparent 50%),
+            radial-gradient(at 100% 0%, rgba(243, 195, 0, 0.05) 0px, transparent 50%),
+            radial-gradient(at 50% 100%, rgba(22, 43, 76, 0.03) 0px, transparent 60%) !important;
+        background-attachment: fixed !important;
+    }
+
+    /* 2. Cartes blanches pleines bien détachées et nettes */
+    div[data-testid="stVerticalBlockBorderWrapper"],
+    div[data-testid="stForm"],
+    .stCard,
+    div[style*="border: 1px solid"] {
+        background-color: #FFFFFF !important;
+        border-radius: 10px !important;
+        border: 1px solid rgba(22, 43, 76, 0.12) !important;
+        box-shadow: 0 4px 14px rgba(22, 43, 76, 0.04) !important;
+    }
+
+    /* 3. Barre latérale blanche nette avec bordure bleu club */
+    section[data-testid="stSidebar"] {
+        background-color: #FFFFFF !important;
+        border-right: 1px solid rgba(22, 43, 76, 0.10) !important;
+    }
+
+    /* 4. Boutons primaires aux couleurs du RCA */
+    button[kind="primary"] {
+        background-color: #F3C300 !important;
+        color: #162B4C !important;
+        font-weight: 700 !important;
+        border: none !important;
+    }
+    button[kind="primary"]:hover {
+        background-color: #DEB200 !important;
+        color: #162B4C !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def inject_rca_css() -> None:
     """Injecte la feuille de styles CSS officielle RCA dans le document Streamlit."""
+    apply_rca_theme()
     st.markdown(
         """
         <style>
         /* ── Typographie globale ─────────────────────────────────────── */
         html, body, [class*="css"] {
             font-family: 'Segoe UI', Montserrat, -apple-system, BlinkMacSystemFont, Tahoma, sans-serif;
-        }
-
-        /* ── Forçage du fond sur la racine HTML et tous les conteneurs Streamlit ── */
-        html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], .stApp, section.main {
-            background-color: #F4F7FB !important;
-            background-image: radial-gradient(#162B4C 1.1px, transparent 1.1px), radial-gradient(#F3C300 1.1px, #F4F7FB 1.1px) !important;
-            background-size: 28px 28px !important;
-            background-position: 0 0, 14px 14px !important;
-            background-attachment: fixed !important;
-        }
-
-        /* Conserver les cartes et conteneurs avec un fond blanc opaque net */
-        div[data-testid="stVerticalBlockBorderWrapper"],
-        div[data-testid="stForm"],
-        .stCard,
-        .rca-card-box,
-        div[data-testid="stMetric"],
-        div.stChatMessage {
-            background-color: #FFFFFF !important;
-            border: 1px solid rgba(22, 43, 76, 0.15) !important;
-            box-shadow: 0 4px 12px rgba(22, 43, 76, 0.05) !important;
-        }
-
-        /* Sidebar blanche contrastée */
-        section[data-testid="stSidebar"] {
-            background-color: #FFFFFF !important;
-            border-right: 1px solid rgba(22, 43, 76, 0.12) !important;
         }
 
         /* ── Habillage Sidebar & Navigation ─────────────────────────── */
