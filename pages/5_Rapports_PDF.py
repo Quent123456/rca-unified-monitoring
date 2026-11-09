@@ -25,24 +25,38 @@ if players_df.empty:
 
 col_select, col_period = st.columns([2, 1])
 
+def format_full_name(row):
+    p = str(row.get('prenom', '')).strip().capitalize()
+    n = str(row.get('nom', '')).strip().upper()
+    return f"{n} {p}".strip()
+
 with col_select:
-    player_names = [f"{row['prenom']} {row['nom']}" for _, row in players_df.iterrows()]
+    player_names = [format_full_name(row) for _, row in players_df.iterrows()]
     selected_player_name = st.selectbox("Sélectionner un joueur pour le rapport", player_names)
-    player_row = players_df[
-        (players_df["prenom"] + " " + players_df["nom"]) == selected_player_name
-    ].iloc[0]
+    selected_idx = player_names.index(selected_player_name)
+    player_row = players_df.iloc[selected_idx]
 
 with col_period:
     period_days = st.selectbox("Période d'analyse", [7, 14, 30], index=0, format_func=lambda x: f"Derniers {x} jours")
 
 cutoff_date = (datetime.date.today() - datetime.timedelta(days=period_days)).isoformat()
 
-# Données filtrées joueur
+# Normalisation et filtrage des données joueur
+if "Charge_sRPE" not in wellness_df.columns and "Charge_Foster" in wellness_df.columns:
+    wellness_df["Charge_sRPE"] = wellness_df["Charge_Foster"]
+
+player_nom = str(player_row.get("nom", "")).strip().upper()
+player_prenom = str(player_row.get("prenom", "")).strip().upper()
+
+def matches_player(val):
+    v = str(val).strip().upper()
+    return player_nom in v or player_prenom in v
+
 p_wellness = wellness_df[
-    (wellness_df["Nom"] == selected_player_name) & (wellness_df["Date"] >= cutoff_date)
+    wellness_df["Nom"].apply(matches_player) & (wellness_df["Date"] >= cutoff_date)
 ]
 p_gps = gps_df[
-    (gps_df["player_name"] == selected_player_name) & (gps_df["date"] >= cutoff_date)
+    gps_df["player_name"].apply(matches_player) & (gps_df["date"] >= cutoff_date)
 ]
 
 # Calcul des synthèses
