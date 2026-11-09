@@ -2230,16 +2230,16 @@ def generer_graphique_comparatif_historique_matplotlib(
     hsr_av = [it["metrics"]["HSR (> 20 km/h) (m)"]["Avants"] for it in items_comparatif]
     hsr_ar = [it["metrics"]["HSR (> 20 km/h) (m)"]["Arrières"] for it in items_comparatif]
 
-    colors_pl = ["#D4AF37" if it.get("is_current") else "#1F4E79" for it in items_comparatif]
-    colors_hsr = ["#D4AF37" if it.get("is_current") else "#A30000" for it in items_comparatif]
+    colors_pl = ["#F3C300" if it.get("is_current") else "#162B4C" for it in items_comparatif]
+    colors_hsr = ["#F3C300" if it.get("is_current") else "#2B6CB0" for it in items_comparatif]
 
     # --- AX1 : Player Load ---
     ax1.set_facecolor("#F8FAFC")
     bars1 = ax1.bar(x, pl_tot, width=0.42, color=colors_pl, edgecolor="#0F2B48", linewidth=0.8, zorder=3)
-    ax1.plot(x, pl_av, color="#A30000", linestyle="--", marker="o", markersize=4, label="Avants (Pack)", zorder=5)
-    ax1.plot(x, pl_ar, color="#2E5A88", linestyle=":", marker="s", markersize=4, label="Arrières (3/4)", zorder=5)
+    ax1.plot(x, pl_av, color="#E67E22", linestyle="--", marker="o", markersize=4, label="Avants (Pack)", zorder=5)
+    ax1.plot(x, pl_ar, color="#162B4C", linestyle=":", marker="s", markersize=4, label="Arrières (3/4)", zorder=5)
 
-    ax1.set_title(f"Évolution Player Load ({type_label}s)", fontsize=9.2, fontweight="bold", color="#1F4E79", pad=6)
+    ax1.set_title(f"Évolution Player Load ({type_label}s)", fontsize=9.2, fontweight="bold", color="#162B4C", pad=6)
     ax1.set_xticks(x)
     ax1.set_xticklabels(labels, fontsize=8.2, fontweight="bold", color="#334155")
     max_pl = max(1.0, max(pl_tot or [1.0]), max(pl_av or [1.0]), max(pl_ar or [1.0]))
@@ -2262,9 +2262,9 @@ def generer_graphique_comparatif_historique_matplotlib(
     ax2.set_facecolor("#F8FAFC")
     bars2 = ax2.bar(x, hsr_tot, width=0.42, color=colors_hsr, edgecolor="#7A0000", linewidth=0.8, zorder=3)
     ax2.plot(x, hsr_av, color="#A30000", linestyle="--", marker="o", markersize=4, label="Avants (Pack)", zorder=5)
-    ax2.plot(x, hsr_ar, color="#2E5A88", linestyle=":", marker="s", markersize=4, label="Arrières (3/4)", zorder=5)
+    ax2.plot(x, hsr_ar, color="#162B4C", linestyle=":", marker="s", markersize=4, label="Arrières (3/4)", zorder=5)
 
-    ax2.set_title(f"Évolution HSR (> 20 km/h) ({type_label}s)", fontsize=9.2, fontweight="bold", color="#1F4E79", pad=6)
+    ax2.set_title(f"Évolution HSR (> 20 km/h) ({type_label}s)", fontsize=9.2, fontweight="bold", color="#162B4C", pad=6)
     ax2.set_xticks(x)
     ax2.set_xticklabels(labels, fontsize=8.2, fontweight="bold", color="#334155")
     max_hsr = max(10.0, max(hsr_tot or [1.0]), max(hsr_av or [1.0]), max(hsr_ar or [1.0]))
@@ -2279,7 +2279,7 @@ def generer_graphique_comparatif_historique_matplotlib(
             lbl += " ★"
         ax2.annotate(lbl, xy=(rect.get_x() + rect.get_width() / 2, h),
                      xytext=(0, 2), textcoords="offset points", ha="center", va="bottom",
-                     fontsize=7.2, fontweight="bold", color="#D97706" if it.get("is_current") else "#A30000")
+                     fontsize=7.2, fontweight="bold", color="#D97706" if it.get("is_current") else "#2B6CB0")
 
     ax2.legend(loc="upper right", frameon=False, fontsize=6.5)
 
@@ -2295,9 +2295,9 @@ def generer_graphique_comparatif_historique_matplotlib(
     if has_any_rpe:
         # Tracé des courbes des 3 groupes de postes
         for line_data, col, marker, lbl in [
-            (rpe_5dev, "#C0392B", "o", "5 de devant"),
-            (rpe_3eme, "#D97706", "s", "3ème Ligne"),
-            (rpe_3quarts, "#2980B9", "^", "Trois-quarts"),
+            (rpe_5dev, "#E67E22", "o", "5 de devant"),
+            (rpe_3eme, "#F3C300", "s", "3ème Ligne"),
+            (rpe_3quarts, "#2B6CB0", "^", "Trois-quarts"),
         ]:
             valid_x = [i for i, v in enumerate(line_data) if v is not None and v > 0]
             valid_y = [line_data[i] for i in valid_x]
@@ -2311,18 +2311,18 @@ def generer_graphique_comparatif_historique_matplotlib(
         valid_eq_x = [i for i, v in enumerate(rpe_equipe) if v is not None and v > 0]
         valid_eq_y = [rpe_equipe[i] for i in valid_eq_x]
         if valid_eq_y:
-            ax3.plot(valid_eq_x, valid_eq_y, color="#1E293B", linestyle="--", linewidth=2.0, marker="D", markersize=4.0, label="Équipe", zorder=5)
+            ax3.plot(valid_eq_x, valid_eq_y, color="#162B4C", linestyle="--", linewidth=2.0, marker="D", markersize=4.0, label="Équipe", zorder=5)
 
         ax3.legend(loc="upper right", frameon=False, fontsize=6.2)
     else:
         ax3.text(0.5, 0.5, "Aucune saisie RPE disponible", ha="center", va="center", transform=ax3.transAxes,
                  fontsize=8.5, color="#94A3B8", fontstyle="italic")
 
-    ax3.set_title(f"Évolution RPE Moyen par Groupe ({type_label}s)", fontsize=9.2, fontweight="bold", color="#1F4E79", pad=6)
+    ax3.set_title(f"Évolution RPE Moyen par Groupe ({type_label}s)", fontsize=9.2, fontweight="bold", color="#162B4C", pad=6)
     ax3.set_xticks(x)
     ax3.set_xticklabels(labels, fontsize=8.2, fontweight="bold", color="#334155")
     ax3.set_ylim(0, 10.5)
-    ax3.set_ylabel("RPE (1-10)", fontsize=7.8, fontweight="bold", color="#1F4E79")
+    ax3.set_ylabel("RPE (1-10)", fontsize=7.8, fontweight="bold", color="#162B4C")
     ax3.grid(axis="y", linestyle="--", alpha=0.35, color="#94A3B8", zorder=1)
 
     fig.tight_layout()
@@ -2747,9 +2747,9 @@ def _render_podium_section_pdf(
     subtitle_map: Optional[Dict[str, str]] = None,
 ) -> None:
     """Rend un bloc podium élégant de 3 catégories (Top Speed, % Marche, Haute Intensité)."""
-    pdf.set_fill_color(31, 78, 121)
+    pdf.set_fill_color(22, 43, 76)
     pdf.rect(x_pod, y_pod, w_pod, 6.0, style="F")
-    pdf.set_fill_color(212, 175, 55)  # Liseré doré #D4AF37
+    pdf.set_fill_color(243, 195, 0)  # Liseré doré officiel RCA #F3C300
     pdf.rect(x_pod, y_pod + 5.5, w_pod, 0.5, style="F")
 
     pdf.set_xy(x_pod, y_pod)
@@ -2762,24 +2762,24 @@ def _render_podium_section_pdf(
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
-            "color": (31, 78, 121),
+            "color": (22, 43, 76),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
-            "color": (46, 90, 136),
+            "color": (43, 108, 176),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3 + Z4 + Z5 > 14.4 km/h",
-            "color": (163, 0, 0),
+            "color": (243, 195, 0),
         },
     ]
 
     rank_badges = {
-        1: {"label": "1er", "bg": (217, 119, 6), "fg": (255, 255, 255)},
+        1: {"label": "1er", "bg": (243, 195, 0), "fg": (22, 43, 76)},
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
@@ -2898,18 +2898,18 @@ def _render_podium_page_aere(
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
-            "color": (46, 90, 136),
+            "color": (43, 108, 176),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3 + Z4 + Z5 > 14.4 km/h",
-            "color": (163, 0, 0),
+            "color": (243, 195, 0),
         },
     ]
 
     rank_badges = {
-        1: {"label": "1er", "bg": (217, 119, 6), "fg": (255, 255, 255)},
+        1: {"label": "1er", "bg": (243, 195, 0), "fg": (22, 43, 76)},
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
@@ -2930,8 +2930,8 @@ def _render_podium_page_aere(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-        # Liseré doré décoratif
-        pdf.set_fill_color(212, 175, 55)
+        # Liseré doré décoratif RCA (#F3C300)
+        pdf.set_fill_color(243, 195, 0)
         pdf.rect(x_c, y_start + banner_h - 1.0, col_w, 1.0, style="F")
 
         pdf.set_xy(x_c + 2.0, y_start + 1.2)
@@ -3090,8 +3090,8 @@ def _render_podiums_compact_horizontal(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-        # Liseré doré décoratif
-        pdf.set_fill_color(212, 175, 55)
+        # Liseré doré décoratif RCA (#F3C300)
+        pdf.set_fill_color(243, 195, 0)
         pdf.rect(x_c, y_start + banner_h - 0.5, col_w, 0.5, style="F")
 
         pdf.set_xy(x_c + 2.0, y_start)
@@ -3228,23 +3228,34 @@ class RCAWeeklyPDFReport(FPDF):
         self.alias_nb_pages()
 
     def header(self):
-        # 1. Bandeau officiel RCA (#1F4E79 Bleu nuit officiel)
-        self.set_fill_color(31, 78, 121)
+        # 1. Bandeau officiel RCA (#162B4C Bleu marine officiel)
+        self.set_fill_color(22, 43, 76)
         self.rect(0, 0, 297, 16.5, "F")
 
-        # 2. Liseré doré officiel (#D4AF37)
-        self.set_fill_color(212, 175, 55)
-        self.rect(0, 16.5, 297, 1.2, "F")
+        # 2. Liseré doré officiel (#F3C300) de 3 à 4 pt (~1.3 mm)
+        self.set_fill_color(243, 195, 0)
+        self.rect(0, 16.5, 297, 1.3, "F")
 
-        # 3. Logo officiel du RCA
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_rca.png")
-        if not os.path.exists(logo_path):
-            logo_path = "logo_rca.png"
+        # 3. Logo officiel du RCA avec respect strict de l'aspect ratio (w=0, h=13.0)
+        candidates = [
+            os.path.join(PROJECT_ROOT, "assets", "logo_rca.png"),
+            os.path.join(PROJECT_ROOT, "logo_rca.png"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo_rca.png"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_rca.png"),
+            "assets/logo_rca.png",
+            "logo_rca.png",
+        ]
+        logo_path = None
+        for c in candidates:
+            if os.path.exists(c):
+                logo_path = c
+                break
+
         x_title = 12
-        if os.path.exists(logo_path):
+        if logo_path and os.path.exists(logo_path):
             try:
-                self.image(logo_path, x=12, y=2.2, w=12, h=12)
-                x_title = 27
+                self.image(logo_path, x=12, y=1.75, w=0, h=13.0)
+                x_title = 26
             except Exception:
                 pass
 
@@ -3257,7 +3268,7 @@ class RCAWeeklyPDFReport(FPDF):
 
             self.set_xy(x_title, 8.2)
             self.set_font("Helvetica", "B", 9.0)
-            self.set_text_color(212, 175, 55)
+            self.set_text_color(243, 195, 0)
             self.cell(150, 6, safe_latin1(self.current_subtitle), align="L")
         else:
             self.set_xy(x_title, 3.2)
@@ -3267,17 +3278,21 @@ class RCAWeeklyPDFReport(FPDF):
 
         # 5. Semaine et dates
         self.set_font("Helvetica", "B", 9.5)
-        self.set_text_color(212, 175, 55)
+        self.set_text_color(243, 195, 0)
         self.set_xy(175, 3.2)
         dates_disp = f" - {self.dates_label}" if self.dates_label else ""
         self.cell(110, 10, safe_latin1(f"{self.week_label.upper()}{dates_disp}"), align="R")
 
     def footer(self):
-        self.set_y(-9)
+        # Liseré discret jaune or
+        self.set_fill_color(243, 195, 0)
+        self.rect(12, 199.5, 273, 0.4, "F")
+
+        self.set_y(-9.5)
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(100, 116, 139)
-        self.cell(140, 6, safe_latin1("Cellule Performance & Préparation Physique RCA Amiens - Confidentiel Staff"), align="L")
-        self.cell(133, 6, safe_latin1(f"Page {self.page_no()}/{self.total_pages}"), align="R")
+        self.cell(160, 6, safe_latin1("Document Staff Technique RCA — Pôle Préparation Physique"), align="L")
+        self.cell(113, 6, safe_latin1(f"Page {self.page_no()}/{self.total_pages}"), align="R")
 
 
 def generate_weekly_pdf_report(

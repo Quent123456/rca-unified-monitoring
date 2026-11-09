@@ -25,13 +25,45 @@ import pandas as pd
 import streamlit as st
 
 try:
-    from modules import photo_manager, weekly_memory, rpe_connector
+    from modules import photo_manager, weekly_memory, rpe_connector, gps_processing
 except ImportError:
     import photo_manager
     import weekly_memory
     import rpe_connector
+    import gps_processing
+
+generer_podium_dynamique = getattr(gps_processing, "generer_podium_dynamique", None)
+get_active_objectifs_config = getattr(gps_processing, "get_active_objectifs_config", None)
+OBJECTIFS_CONFIG = getattr(gps_processing, "OBJECTIFS_CONFIG", {})
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# ── Palette graphique officielle Rugby Club Amiénois (RCA) ───────────────────
+RCA_NAVY_RGB = (22, 43, 76)      # #162B4C Bleu marine foncé officiel
+RCA_NAVY_HEX = "#162B4C"
+RCA_GOLD_RGB = (243, 195, 0)     # #F3C300 Jaune or officiel
+RCA_GOLD_HEX = "#F3C300"
+RCA_AZUR_HEX = "#2B6CB0"         # Bleu azur secondaire
+RCA_RPE_ORANGE_HEX = "#E67E22"   # Orange sportif pour le RPE
+RCA_GOLD_DARK_HEX = "#B45309"    # Ambre foncé pour texte sur fond blanc
+
+
+def get_pdf_logo_path() -> Optional[str]:
+    """Retourne le chemin absolu vers le logo officiel RCA (assets/logo_rca.png)."""
+    candidates = [
+        os.path.join(PROJECT_ROOT, "assets", "logo_rca.png"),
+        os.path.join(PROJECT_ROOT, "logo_rca.png"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo_rca.png"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_rca.png"),
+        "assets/logo_rca.png",
+        "logo_rca.png",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+
 # ==============================================================================
 # 7b. GÉNÉRATION DU RAPPORT PDF POUR LES COACHS (FPDF & MATPLOTLIB)
 # ==============================================================================
@@ -124,14 +156,14 @@ def generer_graphique_groupes_matplotlib(
     width = 0.35
     ax2 = ax1.twinx()
 
-    rects1 = ax1.bar(x - width/2, dist_vals, width, label="Distance Moyenne (m)", color="#1F4E79", edgecolor="none")
-    rects2 = ax2.bar(x + width/2, hsr_vals, width, label="HSR Z3 Moyen (m)", color="#A30000", edgecolor="none")
+    rects1 = ax1.bar(x - width/2, dist_vals, width, label="Distance Moyenne (m)", color=RCA_NAVY_HEX, edgecolor="none")
+    rects2 = ax2.bar(x + width/2, hsr_vals, width, label="HSR Z3 Moyen (m)", color=RCA_GOLD_HEX, edgecolor="#D4A100")
 
-    ax1.set_ylabel("Distance Moyenne (m)", color="#1F4E79", fontweight="bold", fontsize=9)
-    ax2.set_ylabel("HSR Z3 Moyen (m)", color="#A30000", fontweight="bold", fontsize=9)
+    ax1.set_ylabel("Distance Moyenne (m)", color=RCA_NAVY_HEX, fontweight="bold", fontsize=9)
+    ax2.set_ylabel("HSR Z3 Moyen (m)", color=RCA_GOLD_DARK_HEX, fontweight="bold", fontsize=9)
     ax1.set_xticks(x)
     ax1.set_xticklabels(groupes, fontweight="bold", fontsize=9)
-    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color="#1F4E79", fontsize=10.5, pad=12)
+    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color=RCA_NAVY_HEX, fontsize=10.5, pad=12)
 
     # Valeurs écrites directement sur chaque barre
     for rect in rects1:
@@ -140,7 +172,7 @@ def generer_graphique_groupes_matplotlib(
             ax1.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=8, fontweight="bold", color="#1F4E79")
+                         ha="center", va="bottom", fontsize=8, fontweight="bold", color=RCA_NAVY_HEX)
 
     for rect in rects2:
         h = rect.get_height()
@@ -148,15 +180,15 @@ def generer_graphique_groupes_matplotlib(
             ax2.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=8, fontweight="bold", color="#A30000")
+                         ha="center", va="bottom", fontsize=8, fontweight="bold", color=RCA_GOLD_DARK_HEX)
 
     max_dist = max(dist_vals) if dist_vals and max(dist_vals) > 0 else 1000.0
     max_hsr = max(hsr_vals) if hsr_vals and max(hsr_vals) > 0 else 100.0
     ax1.set_ylim(0, max_dist * 1.25)
     ax2.set_ylim(0, max_hsr * 1.25)
     ax1.grid(axis="y", linestyle="--", alpha=0.3)
-    ax1.tick_params(axis="y", labelcolor="#1F4E79")
-    ax2.tick_params(axis="y", labelcolor="#A30000")
+    ax1.tick_params(axis="y", labelcolor=RCA_NAVY_HEX)
+    ax2.tick_params(axis="y", labelcolor=RCA_GOLD_DARK_HEX)
 
     # Légende épurée
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -196,12 +228,12 @@ def generer_graphique_postes_matplotlib(df_indiv: pd.DataFrame) -> io.BytesIO:
 
     fig, ax = plt.subplots(figsize=(6.0, 4.5), dpi=160)
     y_pos = np.arange(len(grp_vmax))
-    rects = ax.barh(y_pos, grp_vmax.values, color="#2E5A88", height=0.55, edgecolor="none")
+    rects = ax.barh(y_pos, grp_vmax.values, color=RCA_NAVY_HEX, height=0.55, edgecolor="none")
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(grp_vmax.index, fontweight="bold", fontsize=8, color="#334155")
-    ax.set_xlabel("Vitesse Max (km/h)", fontweight="bold", fontsize=8.5, color="#1F4E79")
-    ax.set_title("Vitesse Max Moyenne par Poste (km/h)", fontweight="bold", color="#1F4E79", fontsize=10.5, pad=12)
+    ax.set_xlabel("Vitesse Max (km/h)", fontweight="bold", fontsize=8.5, color=RCA_NAVY_HEX)
+    ax.set_title("Vitesse Max Moyenne par Poste (km/h)", fontweight="bold", color=RCA_NAVY_HEX, fontsize=10.5, pad=12)
 
     # Valeurs écrites directement sur les barres
     for rect in rects:
@@ -210,7 +242,7 @@ def generer_graphique_postes_matplotlib(df_indiv: pd.DataFrame) -> io.BytesIO:
             ax.annotate(f"{w:.1f} km/h",
                         xy=(w, rect.get_y() + rect.get_height() / 2),
                         xytext=(4, 0), textcoords="offset points",
-                        ha="left", va="center", fontsize=8, fontweight="bold", color="#1F4E79")
+                        ha="left", va="center", fontsize=8, fontweight="bold", color=RCA_NAVY_HEX)
 
     max_v = grp_vmax.max() if not grp_vmax.empty and grp_vmax.max() > 0 else 30.0
     ax.set_xlim(0, max_v * 1.25)
@@ -266,12 +298,12 @@ def generer_graphique_jauges_groupe_matplotlib(
             x,
             [val_obj, val_real],
             width=width,
-            color=["#1F4E79", "#A30000"],
+            color=[RCA_NAVY_HEX, RCA_GOLD_HEX],
             edgecolor="none",
             zorder=3,
         )
 
-        ax.set_title(title, fontsize=10.5, fontweight="bold", color="#1F4E79", pad=10)
+        ax.set_title(title, fontsize=10.5, fontweight="bold", color=RCA_NAVY_HEX, pad=10)
         ax.set_xticks(x)
         ax.set_xticklabels(["Objectif", "Réalisé"], fontsize=9.5, fontweight="bold", color="#334155")
 
@@ -292,23 +324,23 @@ def generer_graphique_jauges_groupe_matplotlib(
             0, val_obj + (max_v * 0.04),
             _fmt(val_obj, unit),
             ha="center", va="bottom",
-            fontsize=9.2, fontweight="bold", color="#1F4E79"
+            fontsize=9.2, fontweight="bold", color=RCA_NAVY_HEX
         )
 
         ax.text(
             1, val_real + (max_v * 0.04),
             _fmt(val_real, unit),
             ha="center", va="bottom",
-            fontsize=9.2, fontweight="bold", color="#A30000"
+            fontsize=9.2, fontweight="bold", color=RCA_GOLD_DARK_HEX
         )
 
-        # Affichage du % à l'intérieur de la barre rouge ou au-dessus si la barre est très petite
+        # Affichage du % à l'intérieur de la barre dorée ou au-dessus si la barre est très petite
         if val_real >= max_v * 0.18:
             ax.text(
                 1, val_real * 0.48,
                 f"{pct:.0f}%",
                 ha="center", va="center",
-                fontsize=12.5, fontweight="bold", color="#FFFFFF",
+                fontsize=12.5, fontweight="bold", color=RCA_NAVY_HEX,
                 zorder=4
             )
         else:
@@ -316,7 +348,7 @@ def generer_graphique_jauges_groupe_matplotlib(
                 1, val_real + (max_v * 0.14),
                 f"({pct:.0f}%)",
                 ha="center", va="bottom",
-                fontsize=9.2, fontweight="bold", color="#A30000",
+                fontsize=9.2, fontweight="bold", color=RCA_GOLD_DARK_HEX,
                 zorder=4
             )
 
@@ -529,23 +561,21 @@ def generer_rapport_pdf_coachs(
             self.total_pages = total_pages
 
         def header(self):
-            # 1. Bandeau supérieur Bleu nuit RCA (#1F4E79)
-            self.set_fill_color(31, 78, 121)
+            # 1. Bandeau supérieur Bleu Marine RCA (#162B4C)
+            self.set_fill_color(22, 43, 76)
             self.rect(0, 0, 297, 16.5, style="F")
 
-            # 2. Liseré doré officiel (#D4AF37)
-            self.set_fill_color(212, 175, 55)
-            self.rect(0, 16.5, 297, 1.2, style="F")
+            # 2. Liseré inférieur décoratif : Jaune Or officiel (#F3C300) de 3 à 4 pt (~1.3 mm)
+            self.set_fill_color(243, 195, 0)
+            self.rect(0, 16.5, 297, 1.3, style="F")
 
-            # 3. Logo officiel du RCA
-            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_rca.png")
-            if not os.path.exists(logo_path):
-                logo_path = "logo_rca.png"
+            # 3. Logo officiel du RCA avec respect strict du ratio d'aspect (w=0, h=13.0)
+            logo_path = get_pdf_logo_path()
             x_title = 12
-            if os.path.exists(logo_path):
+            if logo_path and os.path.exists(logo_path):
                 try:
-                    self.image(logo_path, x=12, y=2.2, w=12, h=12)
-                    x_title = 27
+                    self.image(logo_path, x=12, y=1.75, w=0, h=13.0)
+                    x_title = 26
                 except Exception:
                     pass
 
@@ -554,32 +584,38 @@ def generer_rapport_pdf_coachs(
                 self.set_xy(x_title, 2.2)
                 self.set_font("Helvetica", "B", 10.0)
                 self.set_text_color(255, 255, 255)
-                self.cell(145, 6, safe_latin1("RUGBY CLUB AMIENOIS | Rapport de Séance GPS"), align="L")
+                self.cell(145, 6, safe_latin1("RUGBY CLUB AMIÉNOIS | Rapport de Séance GPS"), align="L")
 
                 self.set_xy(x_title, 8.2)
                 self.set_font("Helvetica", "B", 9.0)
-                self.set_text_color(212, 175, 55)  # Doré RCA (#D4AF37)
+                self.set_text_color(243, 195, 0)  # Jaune Or officiel RCA (#F3C300)
                 self.cell(145, 6, safe_latin1(self.current_subtitle), align="L")
             else:
                 self.set_xy(x_title, 3.2)
-                self.set_font("Helvetica", "B", 12.5)
+                self.set_font("Helvetica", "B", 12.0)
                 self.set_text_color(255, 255, 255)
-                self.cell(145, 10, safe_latin1("RUGBY CLUB AMIENOIS | Rapport de Séance GPS - RCA"), align="L")
+                self.cell(145, 10, safe_latin1("RUGBY CLUB AMIÉNOIS | Rapport de Séance GPS"), align="L")
 
             # 5. Date & semaine à droite
             self.set_xy(170, 3.2)
-            self.set_font("Helvetica", "", 9.5)
-            self.set_text_color(241, 245, 249)
+            self.set_font("Helvetica", "B", 9.5)
+            self.set_text_color(243, 195, 0)  # Jaune Or officiel RCA (#F3C300)
             self.cell(115, 10, self.date_texte, align="R")
 
             self.set_text_color(30, 41, 59)
             self.set_y(20)
 
         def footer(self):
-            self.set_y(-10)
+            # Liseré discret jaune or
+            self.set_fill_color(243, 195, 0)
+            self.rect(12, 199.5, 273, 0.4, style="F")
+
+            # Mention officielle
+            self.set_y(-9.5)
             self.set_font("Helvetica", "I", 8)
-            self.set_text_color(148, 163, 184)
-            self.cell(0, 8, f"Document Staff Technique RCA - Page {self.page_no()}/{self.total_pages}", align="C")
+            self.set_text_color(100, 116, 139)
+            self.cell(160, 6, safe_latin1("Document Staff Technique RCA — Pôle Préparation Physique"), align="L")
+            self.cell(113, 6, safe_latin1(f"Page {self.page_no()}/{self.total_pages}"), align="R")
 
     pdf = RCACoachPDF(orientation="L", unit="mm", format="A4", total_pages=total_pages)
     pdf.set_auto_page_break(auto=False)
@@ -660,7 +696,7 @@ def generer_rapport_pdf_coachs(
 
         pdf.set_xy(x_curr, y_curr + 5.2)
         pdf.set_font("Helvetica", "B", 10.5)
-        pdf.set_text_color(31, 78, 121)   # #1F4E79
+        pdf.set_text_color(*RCA_NAVY_RGB)
         pdf.cell(card_w, 5.5, safe_latin1(val), align="C")
 
         pdf.set_xy(x_curr + card_w + 2.5, y_curr)
@@ -677,24 +713,26 @@ def generer_rapport_pdf_coachs(
     pdf.set_draw_color(203, 213, 225)  # #CBD5E1
     pdf.rect(12, y_note, w_note, h_note, style="FD")
 
-    # Bordure gauche accentuée Bleu RCA (#1F4E79)
-    pdf.set_fill_color(31, 78, 121)
+    # Bordure gauche accentuée Bleu Marine RCA (#162B4C) et liseré doré RCA (#F3C300)
+    pdf.set_fill_color(*RCA_NAVY_RGB)
     pdf.rect(12, y_note, 3.5, h_note, style="F")
+    pdf.set_fill_color(*RCA_GOLD_RGB)
+    pdf.rect(15.5, y_note, 0.8, h_note, style="F")
 
     # Titre du bloc narratif
     pdf.set_xy(18, y_note + 1.2)
     pdf.set_font("Helvetica", "B", 7.5)
-    pdf.set_text_color(31, 78, 121)
+    pdf.set_text_color(*RCA_NAVY_RGB)
     pdf.cell(140, 3.5, safe_latin1("NOTE DU PRÉPARATEUR PHYSIQUE | SYNTHÈSE ATHLÉTIQUE"), align="L")
 
     # Badge discret Charge Interne (RPE) vs Charge Externe (Intensité m/min)
     dpm_moy = float(df_indiv["Distance Per Min (m/min)"].mean()) if "Distance Per Min (m/min)" in df_indiv.columns else (float(df_indiv["Distance/min (m/min)"].mean()) if "Distance/min (m/min)" in df_indiv.columns else 0.0)
     badge_txt = f"CHARGE INT. / EXT. : RPE {rpe_val_str}  |  {dpm_moy:.1f} m/min"
     pdf.set_xy(160, y_note + 1.0)
-    pdf.set_fill_color(241, 245, 249)
-    pdf.set_draw_color(59, 130, 246)
+    pdf.set_fill_color(244, 247, 251)
+    pdf.set_draw_color(*RCA_GOLD_RGB)
     pdf.set_font("Helvetica", "B", 7.0)
-    pdf.set_text_color(31, 78, 121)
+    pdf.set_text_color(*RCA_NAVY_RGB)
     pdf.cell(120, 3.8, safe_latin1(badge_txt), border=1, align="R", fill=True)
 
     # Corps du texte nettoyé pour compatibilité Latin-1
@@ -778,8 +816,8 @@ def generer_rapport_pdf_coachs(
 
         # Ligne d'en-tête
         pdf.set_xy(table_x, table_y)
-        pdf.set_fill_color(31, 78, 121)
-        pdf.set_draw_color(31, 78, 121)
+        pdf.set_fill_color(*RCA_NAVY_RGB)
+        pdf.set_draw_color(*RCA_NAVY_RGB)
         pdf.set_font("Helvetica", "B", 8.0)
         pdf.set_text_color(255, 255, 255)
 
@@ -797,20 +835,20 @@ def generer_rapport_pdf_coachs(
 
         # Ligne 1 : Objectif
         pdf.set_xy(table_x, table_y + 6.5)
-        pdf.set_fill_color(241, 245, 249)
+        pdf.set_fill_color(244, 247, 251)
         pdf.set_draw_color(203, 213, 225)
         pdf.set_text_color(71, 85, 105)
         pdf.set_font("Helvetica", "B", 8.0)
         pdf.cell(col_w_grp, 6.0, "  Objectif", border=1, align="L", fill=True)
 
         pdf.set_font("Helvetica", "", 8.0)
-        pdf.set_text_color(31, 78, 121)
+        pdf.set_text_color(*RCA_NAVY_RGB)
         pdf.cell(col_w_num, 6.0, f"{int(round(obj_dist)):,d} m".replace(",", " "), border=1, align="C", fill=True)
         pdf.cell(col_w_num, 6.0, f"{int(round(obj_hsr)):,d} m".replace(",", " "), border=1, align="C", fill=True)
         pdf.cell(col_w_num, 6.0, f"{int(round(obj_vhsr)):,d} m".replace(",", " "), border=1, align="C", fill=True)
         pdf.set_text_color(148, 163, 184)
         pdf.cell(col_w_num, 6.0, "/", border=1, align="C", fill=True)
-        pdf.set_text_color(31, 78, 121)
+        pdf.set_text_color(*RCA_NAVY_RGB)
         pdf.cell(col_w_num, 6.0, f"{int(round(obj_acc)):,d}".replace(",", " "), border=1, align="C", fill=True)
         pdf.set_text_color(148, 163, 184)
         pdf.cell(col_w_num, 6.0, "/", border=1, align="C", fill=True)
@@ -819,7 +857,7 @@ def generer_rapport_pdf_coachs(
         pdf.set_xy(table_x, table_y + 12.5)
         pdf.set_fill_color(255, 255, 255)
         pdf.set_draw_color(203, 213, 225)
-        pdf.set_text_color(163, 0, 0)
+        pdf.set_text_color(180, 83, 9)
         pdf.set_font("Helvetica", "B", 8.0)
         pdf.cell(col_w_grp, 6.8, "  Realisee", border=1, align="L", fill=True)
 
@@ -966,30 +1004,102 @@ def generate_player_pdf_report(
 ) -> bytes:
     """Génère un rapport individuel en PDF sous forme de flux binaire (bytes)."""
     if not HAS_REPORTLAB:
-        # Fallback élégant avec FPDF si reportlab n'est pas installé
+        # Fallback élégant avec FPDF aux couleurs officielles RCA
         pdf = FPDF(orientation="P", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=False)
         pdf.add_page()
-        pdf.set_font("Helvetica", "B", 16)
-        pdf.set_text_color(31, 78, 121)
-        pdf.cell(0, 10, "RCA - RAPPORT DE PERFORMANCE INDIVIDUEL", ln=True, align="C")
+
+        # 1. Bandeau supérieur Bleu Marine RCA (#162B4C)
+        pdf.set_fill_color(*RCA_NAVY_RGB)
+        pdf.rect(0, 0, 210, 22.0, style="F")
+
+        # 2. Liseré doré officiel (#F3C300)
+        pdf.set_fill_color(*RCA_GOLD_RGB)
+        pdf.rect(0, 22.0, 210, 1.4, style="F")
+
+        # 3. Logo officiel du RCA
+        logo_path = get_pdf_logo_path()
+        x_title = 14
+        if logo_path and os.path.exists(logo_path):
+            try:
+                pdf.image(logo_path, x=14, y=2.5, w=0, h=17.0)
+                x_title = 32
+            except Exception:
+                pass
+
+        pdf.set_xy(x_title, 4.0)
+        pdf.set_font("Helvetica", "B", 13.0)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(160, 6, safe_latin1("RUGBY CLUB AMIÉNOIS | Rapport Individuel Athlète"), ln=True)
+
+        pdf.set_xy(x_title, 11.5)
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.set_text_color(*RCA_GOLD_RGB)
+        pdf.cell(160, 6, safe_latin1(f"Période : {period_str} | Date : {pd.Timestamp.now().strftime('%d/%m/%Y')}"), ln=True)
+
+        # 4. Encart Profil Joueur
+        pdf.set_y(30.0)
+        pdf.set_fill_color(244, 247, 251)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.rect(14, 30.0, 182, 16.0, style="FD")
+        pdf.set_fill_color(*RCA_NAVY_RGB)
+        pdf.rect(14, 30.0, 3.0, 16.0, style="F")
+
+        pdf.set_xy(20, 32.0)
+        pdf.set_font("Helvetica", "B", 10.0)
+        pdf.set_text_color(*RCA_NAVY_RGB)
+        pdf.cell(85, 5, safe_latin1(f"Athlète : {player_name}"), ln=False)
+        pdf.set_font("Helvetica", "", 9.0)
+        pdf.set_text_color(71, 85, 105)
+        pdf.cell(85, 5, safe_latin1(f"ID : {player_info.get('id', 'N/A')}"), ln=True)
+
+        pdf.set_xy(20, 38.5)
+        pdf.set_font("Helvetica", "", 9.0)
+        pdf.cell(85, 5, safe_latin1(f"Poste : {player_info.get('poste', 'Non spécifié')}"), ln=False)
+        pdf.cell(85, 5, safe_latin1(f"Groupe : {player_info.get('groupe', 'Non spécifié')}"), ln=True)
+
+        # 5. État de Forme & Wellness
+        pdf.set_y(52.0)
+        pdf.set_font("Helvetica", "B", 11.0)
+        pdf.set_text_color(*RCA_NAVY_RGB)
+        pdf.cell(0, 7, safe_latin1("1. État de Forme & Wellness (Indice de Hooper)"), ln=True)
+
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(51, 65, 85)
+        pdf.cell(0, 6, safe_latin1(f"• Score Hooper Moyen : {wellness_summary.get('score_hooper_moy', 'N/A')} / 28"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Qualité du Sommeil : {wellness_summary.get('sommeil_moy', 'N/A')} / 7"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Niveau de Fatigue : {wellness_summary.get('fatigue_moy', 'N/A')} / 7"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Courbatures Musculaires : {wellness_summary.get('courbatures_moy', 'N/A')} / 7"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Niveau de Stress : {wellness_summary.get('stress_moy', 'N/A')} / 7"), ln=True)
+
+        pdf.set_font("Helvetica", "B", 9.5)
+        pdf.set_text_color(230, 126, 34)  # Orange sportif pour le RPE
+        pdf.cell(0, 6, safe_latin1(f"• Charge Interne sRPE Totale : {wellness_summary.get('srpe_total', 'N/A')} UA"), ln=True)
+
+        # 6. Données GPS & Charge Externe
         pdf.ln(5)
-        pdf.set_font("Helvetica", "", 11)
-        pdf.set_text_color(50, 50, 50)
-        pdf.cell(0, 8, f"Athlète : {player_name} ({player_info.get('poste', '')})", ln=True)
-        pdf.cell(0, 8, f"Période : {period_str}", ln=True)
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, "État de Forme & Wellness :", ln=True)
-        pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 6, f"- Score Hooper Moyen : {wellness_summary.get('score_hooper_moy', 'N/A')} / 28", ln=True)
-        pdf.cell(0, 6, f"- Charge sRPE Totale : {wellness_summary.get('srpe_total', 'N/A')} UA", ln=True)
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, "Données GPS & Charge Externe :", ln=True)
-        pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 6, f"- Distance Totale : {gps_summary.get('total_distance_m', 'N/A')} m", ln=True)
-        pdf.cell(0, 6, f"- Vitesse Max : {gps_summary.get('vmax_kmh', 'N/A')} km/h", ln=True)
-        pdf.cell(0, 6, f"- Ratio ACWR : {gps_summary.get('acwr', 'N/A')}", ln=True)
+        pdf.set_font("Helvetica", "B", 11.0)
+        pdf.set_text_color(*RCA_NAVY_RGB)
+        pdf.cell(0, 7, safe_latin1("2. Données GPS & Charge Externe"), ln=True)
+
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(51, 65, 85)
+        pdf.cell(0, 6, safe_latin1(f"• Distance Totale : {gps_summary.get('total_distance_m', 'N/A')} m"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Course Haute Intensité HSR : {gps_summary.get('hsr_distance_m', 'N/A')} m"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Distance Sprint : {gps_summary.get('sprint_distance_m', 'N/A')} m"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Vitesse Max atteinte : {gps_summary.get('vmax_kmh', 'N/A')} km/h"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Intensité Moyenne : {gps_summary.get('intensity_m_min', 'N/A')} m/min"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• PlayerLoad Total : {gps_summary.get('player_load_total', 'N/A')}"), ln=True)
+        pdf.cell(0, 6, safe_latin1(f"• Ratio ACWR : {gps_summary.get('acwr', 'N/A')} (Zone optimale : 0.8 - 1.3)"), ln=True)
+
+        # 7. Pied de page officiel
+        pdf.set_fill_color(*RCA_GOLD_RGB)
+        pdf.rect(14, 280.0, 182, 0.4, style="F")
+        pdf.set_y(-12)
+        pdf.set_font("Helvetica", "I", 8.0)
+        pdf.set_text_color(100, 116, 139)
+        pdf.cell(0, 6, safe_latin1("Document Staff Technique RCA — Pôle Préparation Physique"), align="C")
+
         return bytes(pdf.output())
 
     buffer = io.BytesIO()
@@ -1010,7 +1120,7 @@ def generate_player_pdf_report(
         fontName="Helvetica-Bold",
         fontSize=20,
         leading=24,
-        textColor=colors.HexColor("#1F4E79"),
+        textColor=colors.HexColor(RCA_NAVY_HEX),
         alignment=0
     )
 
@@ -1029,7 +1139,7 @@ def generate_player_pdf_report(
         fontName="Helvetica-Bold",
         fontSize=13,
         leading=16,
-        textColor=colors.HexColor("#1E293B"),
+        textColor=colors.HexColor(RCA_NAVY_HEX),
         spaceBefore=10,
         spaceAfter=6
     )
@@ -1048,7 +1158,8 @@ def generate_player_pdf_report(
     elements.append(Paragraph("🏉 RCA - RAPPORT DE PERFORMANCE INDIVIDUEL", title_style))
     elements.append(Paragraph(f"Période d'évaluation : {period_str} | Date d'émission : {pd.Timestamp.now().strftime('%d/%m/%Y')}", subtitle_style))
     elements.append(Spacer(1, 0.4 * cm))
-    elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1F4E79"), spaceAfter=12))
+    elements.append(HRFlowable(width="100%", thickness=2.0, color=colors.HexColor(RCA_NAVY_HEX), spaceAfter=2))
+    elements.append(HRFlowable(width="100%", thickness=1.0, color=colors.HexColor(RCA_GOLD_HEX), spaceAfter=12))
 
     poste = player_info.get("poste", "Non spécifié")
     groupe = player_info.get("groupe", "Non spécifié")
@@ -1096,7 +1207,7 @@ def generate_player_pdf_report(
 
     t_wellness = Table(wellness_data, colWidths=[6.5 * cm, 4.5 * cm, 7 * cm])
     t_wellness.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RCA_NAVY_HEX)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 9),
@@ -1131,7 +1242,7 @@ def generate_player_pdf_report(
 
     t_gps = Table(gps_table_data, colWidths=[6.5 * cm, 4.5 * cm, 7 * cm])
     t_gps.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D9488")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RCA_NAVY_HEX)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 9),
@@ -1149,6 +1260,19 @@ def generate_player_pdf_report(
         "et la qualité du sommeil post-match. Adapter les séances de vitesse si le ratio ACWR dépasse 1.4."
     )
     elements.append(Paragraph(f"<i>{reco_text}</i>", body_style))
+
+    elements.append(Spacer(1, 0.4 * cm))
+    elements.append(HRFlowable(width="100%", thickness=0.8, color=colors.HexColor(RCA_GOLD_HEX), spaceAfter=6))
+    footer_style = ParagraphStyle(
+        "DocFooter",
+        parent=styles["Normal"],
+        fontName="Helvetica-Oblique",
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#64748B"),
+        alignment=1,
+    )
+    elements.append(Paragraph("Document Staff Technique RCA — Pôle Préparation Physique", footer_style))
 
     doc.build(elements)
     buffer.seek(0)
