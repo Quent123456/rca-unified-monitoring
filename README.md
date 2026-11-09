@@ -67,9 +67,8 @@ rca-unified-monitoring/
 │   ├── 1_Saisie_Quotidienne.py    # Formulaire mobile avec mémorisation et bouton sticky
 │   ├── 2_Tableau_Individuel.py    # Bilan individuel, jauge ACWR et radar de bien-être
 │   ├── 3_Tableau_Collectif.py     # Dashboard d'équipe, heatmap ACWR et alertes
-│   ├── 4_Analyse_GPS.py           # Analyse des métriques GPS et charges externes
-│   ├── 5_Rapports_PDF.py          # Export des bilans athlètes imprimables A4
-│   └── 6_Gestion_Joueurs.py       # Administration de l'effectif synchronisée Google Sheets
+│   ├── 4_Analyse_GPS.py           # Analyse Catapult, attribution boîtiers, export Excel & rapports
+│   └── 5_Gestion_Joueurs.py       # Administration de l'effectif synchronisée Google Sheets
 │
 └── scripts/                       # Utilitaires de test et d'initialisation
     ├── init_gsheets.py

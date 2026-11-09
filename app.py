@@ -94,24 +94,21 @@ st.markdown("---")
 st.subheader("🚀 Modules disponibles")
 nav1, nav2, nav3 = st.columns(3)
 with nav1:
-    st.markdown("### 📝 Saisie Quotidienne")
+    st.markdown("### 📝 1. Saisie Quotidienne")
     st.write("Saisie rapide mobile avec mémoire, recherche dynamique et calcul de la Charge de Foster.")
 with nav2:
-    st.markdown("### 👤 Tableau Individuel")
+    st.markdown("### 👤 2. Tableau Individuel")
     st.write("Profil athlète, jauge ACWR dynamique, radar de bien-être et historique des charges.")
 with nav3:
-    st.markdown("### 👥 Tableau Collectif")
+    st.markdown("### 👥 3. Tableau Collectif")
     st.write("Heatmap d'équipe, matrice de risque ACWR, alertes fatigue et perception d'effort.")
 
-nav4, nav5, nav6 = st.columns(3)
+nav4, nav5 = st.columns(2)
 with nav4:
-    st.markdown("### 🛰️ Analyse GPS")
-    st.write("Import multi-constructeurs, volume, vitesse max, HSR (>20 km/h) et charge externe.")
+    st.markdown("### 🛰️ 4. Analyse GPS & Rapports")
+    st.write("Traitement Catapult One, boîtiers, métriques rugby, exports Excel STAPS et rapports hebdomadaires.")
 with nav5:
-    st.markdown("### 📄 Rapports PDF")
-    st.write("Rapports Coachs 4 à 8 pages paysage, bilans hebdomadaires et fiches individuelles.")
-with nav6:
-    st.markdown("### ⚙️ Gestion de l'Effectif")
+    st.markdown("### ⚙️ 5. Gestion de l'Effectif")
     st.write("Ajout, modification et suppression synchronisés en direct sur Google Sheets.")
 
 st.markdown("---")

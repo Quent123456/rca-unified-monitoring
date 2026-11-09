@@ -6428,5 +6428,4 @@ def main() -> None:
                     st.error(f"❌ {msg}")
 
 
-if __name__ == "__main__":
-    main()
+main()
