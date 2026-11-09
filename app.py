@@ -65,6 +65,79 @@ st.markdown(
         min-height: 58px;
         margin-bottom: 0.75rem;
     }
+
+    /* ── Cartes de modules entièrement cliquables avec effet hover ── */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]) {
+        position: relative;
+        transition: all 0.2s ease-in-out;
+        cursor: pointer;
+        border-radius: 12px;
+        background-color: #FFFFFF;
+        border: 1.5px solid #E2E8F0;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 22px rgba(31, 78, 121, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+        border-color: #1F4E79 !important;
+    }
+
+    /* Étirer le lien a[data-testid="stPageLink-NavLink"] sur l'intégralité du conteneur de la carte */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]) a[data-testid="stPageLink-NavLink"]::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 10;
+        border-radius: 12px;
+    }
+
+    /* Bouton d'action harmonisé en bas de chaque carte */
+    div[data-testid="stVerticalBlockBorderWrapper"] a[data-testid="stPageLink-NavLink"] {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        background-color: #F0F4F8;
+        color: #1F4E79 !important;
+        font-weight: 700 !important;
+        font-size: 0.95rem !important;
+        padding: 8px 14px !important;
+        border-radius: 8px !important;
+        text-decoration: none !important;
+        border: 1px solid #D0DFEE;
+        transition: all 0.2s ease;
+        margin-top: auto;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover a[data-testid="stPageLink-NavLink"] {
+        background-color: #1F4E79 !important;
+        color: #FFFFFF !important;
+        border-color: #1F4E79 !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]) {
+            background-color: #1A202C;
+            border-color: #2D3748;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover {
+            border-color: #63B3ED !important;
+            box-shadow: 0 10px 22px rgba(0, 0, 0, 0.4);
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"] a[data-testid="stPageLink-NavLink"] {
+            background-color: #2D3748;
+            color: #90CDF4 !important;
+            border-color: #4A5568;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(a[data-testid="stPageLink-NavLink"]):hover a[data-testid="stPageLink-NavLink"] {
+            background-color: #2B6CB0 !important;
+            color: #FFFFFF !important;
+            border-color: #2B6CB0 !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,

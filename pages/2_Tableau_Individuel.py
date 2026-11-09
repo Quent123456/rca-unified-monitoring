@@ -25,12 +25,12 @@ st.title("👤 Tableau de bord individuel")
 # ── Connexion à Google Sheets ──────────────────────────────────────────────────
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # Lecture de l'onglet Effectif
-    players_df = conn.read(worksheet="Effectif", ttl=0)
+    # Lecture de l'onglet Effectif avec mise en cache (5 min) pour préserver les quotas API
+    players_df = conn.read(worksheet="Effectif", ttl=300)
     players_df = players_df.dropna(how="all")
     
-    # Lecture de l'onglet Saisies
-    sessions_df = conn.read(worksheet="Saisies", ttl=0)
+    # Lecture de l'onglet Saisies avec mise en cache (5 min)
+    sessions_df = conn.read(worksheet="Saisies", ttl=300)
     sessions_df = sessions_df.dropna(how="all")
     gsheets_ok = True
 except Exception as e:

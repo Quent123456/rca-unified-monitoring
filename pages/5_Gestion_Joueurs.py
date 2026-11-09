@@ -1,5 +1,5 @@
 """
-pages/4_Gestion_Joueurs.py
+pages/5_Gestion_Joueurs.py
 Gestion de l'effectif : ajout, modification et suppression (en cascade) de joueurs sur Google Sheets.
 """
 
