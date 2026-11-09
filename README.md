@@ -54,11 +54,14 @@ rca-unified-monitoring/
 │   ├── alerts.py                  # Seuils et alertes ACWR, monotonie et contrainte
 │   ├── calculations.py            # Calculs de charge Foster, moyennes glissantes, ACWR
 │   ├── database.py                # Base de données locale de secours
-│   ├── gps_processing.py          # Normalisation des fichiers GPS et calcul ACWR GPS
+│   ├── gps_processing.py          # Traitement Catapult, splits, PlayerLoad, injection Excel
 │   ├── gsheets.py                 # Multi-onglets Google Sheets (Saisies, RPE INDV, Lignes)
 │   ├── gsheet_sync.py             # Authentification gspread polyvalente & cache
-│   ├── pdf_reports.py             # Moteur de génération des rapports PDF (ReportLab)
-│   └── visualizations.py          # Composants graphiques Plotly (Heatmaps, jauges, radars)
+│   ├── pdf_reports.py             # Moteur PDF officiel Coachs (FPDF paysage) & Fiche A4 (ReportLab)
+│   ├── photo_manager.py           # Extraction trombinoscope, matching et encodage base64
+│   ├── rpe_connector.py           # Jointure ultra-robuste GPS + RPE (Nom, Date, 'NR', skipna=True)
+│   ├── visualizations.py          # Composants graphiques Plotly (Heatmaps, jauges, radars)
+│   └── weekly_memory.py           # Mémoire sélective & rapports hebdomadaires multi-séances
 │
 ├── pages/
 │   ├── 1_Saisie_Quotidienne.py    # Formulaire mobile avec mémorisation et bouton sticky

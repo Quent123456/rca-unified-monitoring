@@ -109,7 +109,7 @@ with nav4:
     st.write("Import multi-constructeurs, volume, vitesse max, HSR (>20 km/h) et charge externe.")
 with nav5:
     st.markdown("### 📄 Rapports PDF")
-    st.write("Génération en un clic de rapports de performance A4 prêts pour l'impression.")
+    st.write("Rapports Coachs 4 à 8 pages paysage, bilans hebdomadaires et fiches individuelles.")
 with nav6:
     st.markdown("### ⚙️ Gestion de l'Effectif")
     st.write("Ajout, modification et suppression synchronisés en direct sur Google Sheets.")
