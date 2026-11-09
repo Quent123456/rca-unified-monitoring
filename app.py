@@ -1,128 +1,199 @@
-import streamlit as st
-import pandas as pd
+"""
+Application Streamlit - Portail d'Accueil Unifié
+Club : Rugby Club Amiénois (RCA)
+Description :
+    Portail centralisé de monitoring athlétique intégrant :
+    1. Saisie Quotidienne RPE & Wellness (Foster & Hooper)
+    2. Tableau de Bord Individuel & ACWR
+    3. Tableau de Bord Collectif & Matrice de Risque
+    4. Traitement & Analyse GPS Catapult One, Modèle STAPS et Rapports PDF
+    5. Gestion et Administration de l'Effectif
+"""
 
-from modules.gsheet_sync import (
-    get_gsheet_client,
-    get_worksheet_data,
-    is_gsheet_configured,
-    get_players,
-    get_wellness_data
-)
+import os
+import streamlit as st
 
 st.set_page_config(
-    page_title="RCA Monitoring",
+    page_title="RCA Unified Monitoring",
     page_icon="🏉",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("🏉 RCA Unified Monitoring")
-st.subheader("Plateforme de suivi de la performance, du wellness et des charges GPS")
+# ── Styles CSS personnalisés pour l'identité visuelle RCA ─────────────────────
+st.markdown(
+    """
+    <style>
+    .stApp {
+        font-family: 'Segoe UI', Montserrat, Tahoma, sans-serif;
+    }
+    .main-title {
+        color: #1F4E79;
+        font-size: 2.3rem;
+        font-weight: 800;
+        margin-bottom: 0.15rem;
+        letter-spacing: -0.5px;
+        line-height: 1.15;
+    }
+    .sub-title {
+        color: #4A5568;
+        font-size: 1.1rem;
+        margin-bottom: 0.4rem;
+        font-weight: 400;
+    }
+    .badge-club {
+        display: inline-block;
+        background-color: #EBF3FA;
+        color: #1F4E79;
+        font-weight: 700;
+        font-size: 0.85rem;
+        padding: 4px 12px;
+        border-radius: 20px;
+        border: 1px solid #BFD7EA;
+        margin-bottom: 0.8rem;
+    }
+    .module-card-title {
+        color: #1F4E79;
+        font-size: 1.18rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+    .module-card-desc {
+        color: #556270;
+        font-size: 0.92rem;
+        line-height: 1.45;
+        min-height: 58px;
+        margin-bottom: 0.75rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-st.markdown("---")
+# ── En-tête officiel avec Logo RCA ────────────────────────────────────────────
+logo_path = None
+for candidate in ["assets/logo_rca.png", "logo_rca.png"]:
+    if os.path.exists(candidate):
+        logo_path = candidate
+        break
 
-# Section 1 : Diagnostic & Test de Connexion Google Sheets
-st.subheader("🔌 Statut de la Connexion Google Sheets")
+header_col1, header_col2 = st.columns([1, 8])
 
-col_status, col_actions = st.columns([2, 1])
-
-with col_status:
-    configured = is_gsheet_configured()
-    if configured:
-        client = get_gsheet_client()
-        if client:
-            st.success("✅ **Connexion Google Sheets établie avec succès !** Le client `gspread` est authentifié.")
-            
-            target_sheet = st.secrets.get("spreadsheet_url") or st.secrets.get("spreadsheet_name")
-            if target_sheet:
-                st.write(f"Feuille de calcul ciblée : `{target_sheet}`")
-                try:
-                    if target_sheet.startswith("http"):
-                        sh = client.open_by_url(target_sheet)
-                    else:
-                        sh = client.open(target_sheet)
-                    
-                    worksheets = [ws.title for ws in sh.worksheets()]
-                    st.write(f"📋 **Onglets détectés** : {', '.join([f'`{w}`' for w in worksheets])}")
-                    
-                    # Test rapide de lecture sur l'un des onglets
-                    first_ws = worksheets[0]
-                    test_df = get_worksheet_data(target_sheet, first_ws)
-                    st.caption(f"Test de cache (@st.cache_data ttl=600) sur l'onglet `{first_ws}` : **{len(test_df)} ligne(s)** chargées.")
-                except Exception as err:
-                    st.warning(f"Client authentifié, mais impossible d'ouvrir la feuille : {err}")
-            else:
-                st.info("Aucun `spreadsheet_url` ou `spreadsheet_name` spécifié dans `st.secrets`.")
-        else:
-            st.error("❌ Échec lors de l'authentification avec les identifiants fournis dans `st.secrets`.")
+with header_col1:
+    if logo_path:
+        st.image(logo_path, width=105)
     else:
-        st.warning("⚠️ **Mode Démo Actif** : Aucune clé de compte de service n'est configurée dans `.streamlit/secrets.toml`.")
-        with st.expander("ℹ️ Comment configurer vos secrets Google Sheets ?"):
-            st.markdown("""
-            Créez ou modifiez le fichier `.streamlit/secrets.toml` avec l'un des deux formats ci-dessous :
+        st.markdown("<div style='font-size: 4rem; text-align: center;'>🏉</div>", unsafe_allow_html=True)
 
-            **Option A - Compte de service GCP (`gcp_service_account`) :**
-            ```toml
-            spreadsheet_url = "https://docs.google.com/spreadsheets/d/VOTRE_ID_FEUILLE/edit"
+with header_col2:
+    st.markdown('<div class="badge-club">🏉 Rugby Club Amiénois • Fédérale 2</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">RCA Unified Monitoring</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sub-title">Plateforme centralisée de suivi athlétique — RPE, Wellness & Métriques GPS Catapult</div>',
+        unsafe_allow_html=True,
+    )
 
-            [gcp_service_account]
-            type = "service_account"
-            project_id = "votre-projet"
-            private_key_id = "..."
-            private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-            client_email = "service-account@votre-projet.iam.gserviceaccount.com"
-            client_id = "..."
-            ```
+st.divider()
 
-            **Option B - Streamlit Connections GSheets :**
-            ```toml
-            spreadsheet_url = "https://docs.google.com/spreadsheets/d/VOTRE_ID_FEUILLE/edit"
+# ── Grille des 5 modules principaux ───────────────────────────────────────────
+st.subheader("🚀 Modules de Performance & Suivi")
+st.caption("Sélectionnez un espace pour accéder aux formulaires, tableaux de bord et outils d'analyse :")
 
-            [connections.gsheets]
-            spreadsheet = "https://docs.google.com/spreadsheets/d/VOTRE_ID_FEUILLE/edit"
-            service_account = '''{ ...votre json complet... }'''
-            ```
-            """)
+row1_col1, row1_col2, row1_col3 = st.columns(3)
 
-with col_actions:
-    if st.button("🔄 Rafraîchir le cache Google Sheets", use_container_width=True):
-        get_worksheet_data.clear()
-        st.toast("Cache vidé avec succès !", icon="✅")
+with row1_col1:
+    with st.container(border=True):
+        st.markdown('<div class="module-card-title">📝 1. Saisie Quotidienne</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="module-card-desc">'
+            'Formulaire joueur ergonomique (mobile) : RPE Foster (effort × durée), '
+            'questionnaire bien-être Hooper (sommeil, courbatures, fatigue) et mémorisation de groupe.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.page_link(
+            "pages/1_Saisie_Quotidienne.py",
+            label="Accéder à la Saisie",
+            icon="📝",
+            use_container_width=True,
+        )
 
-st.markdown("---")
+with row1_col2:
+    with st.container(border=True):
+        st.markdown('<div class="module-card-title">👤 2. Tableau Individuel</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="module-card-desc">'
+            'Profil athlète détaillé, jauge ACWR dynamique (aiguë vs chronique), '
+            'radar de bien-être, historique de charge et alertes de surmenage.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.page_link(
+            "pages/2_Tableau_Individuel.py",
+            label="Ouvrir le Profil Individuel",
+            icon="👤",
+            use_container_width=True,
+        )
 
-# Section 2 : Navigation Rapide
-st.subheader("🚀 Modules disponibles")
-nav1, nav2, nav3 = st.columns(3)
-with nav1:
-    st.markdown("### 📝 1. Saisie Quotidienne")
-    st.write("Saisie rapide mobile avec mémoire, recherche dynamique et calcul de la Charge de Foster.")
-with nav2:
-    st.markdown("### 👤 2. Tableau Individuel")
-    st.write("Profil athlète, jauge ACWR dynamique, radar de bien-être et historique des charges.")
-with nav3:
-    st.markdown("### 👥 3. Tableau Collectif")
-    st.write("Heatmap d'équipe, matrice de risque ACWR, alertes fatigue et perception d'effort.")
+with row1_col3:
+    with st.container(border=True):
+        st.markdown('<div class="module-card-title">👥 3. Tableau Collectif</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="module-card-desc">'
+            'Vue globale de l\'effectif, heatmap d\'entraînement, matrice de risque ACWR, '
+            'comparaisons Avants / Arrières et détection des baisses de forme.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.page_link(
+            "pages/3_Tableau_Collectif.py",
+            label="Consulter la Vue Équipe",
+            icon="👥",
+            use_container_width=True,
+        )
 
-nav4, nav5 = st.columns(2)
-with nav4:
-    st.markdown("### 🛰️ 4. Analyse GPS & Rapports")
-    st.write("Traitement Catapult One, boîtiers, métriques rugby, exports Excel STAPS et rapports hebdomadaires.")
-with nav5:
-    st.markdown("### ⚙️ 5. Gestion de l'Effectif")
-    st.write("Ajout, modification et suppression synchronisés en direct sur Google Sheets.")
+st.write("")
 
-st.markdown("---")
+row2_col1, row2_col2 = st.columns(2)
 
-# Section 3 : Aperçu Effectif
-players_df = get_players()
-wellness_df = get_wellness_data()
+with row2_col1:
+    with st.container(border=True):
+        st.markdown('<div class="module-card-title">🛰️ 4. Analyse GPS & Rapports</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="module-card-desc">'
+            'Processeur Catapult One en 3 étapes : attribution des boîtiers, métriques rugby '
+            '(PlayerLoad, HSR, sprints), injection dans le modèle officiel STAPS et rapports hebdomadaires.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.page_link(
+            "pages/4_Analyse_GPS.py",
+            label="Lancer l'Analyse GPS",
+            icon="🛰️",
+            use_container_width=True,
+        )
 
-kpi_p1, kpi_p2, kpi_p3 = st.columns(3)
-with kpi_p1:
-    st.metric("Joueurs actifs dans l'effectif", len(players_df))
-with kpi_p2:
-    nb_avants = (players_df["groupe"] == "Avants").sum() if "groupe" in players_df else 0
-    st.metric("Avants", nb_avants)
-with kpi_p3:
-    nb_arrieres = (players_df["groupe"] == "Arrières").sum() if "groupe" in players_df else 0
-    st.metric("Arrières", nb_arrieres)
+with row2_col2:
+    with st.container(border=True):
+        st.markdown('<div class="module-card-title">⚙️ 5. Gestion de l\'Effectif</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="module-card-desc">'
+            'Administration de l\'effectif synchronisée en direct avec Google Sheets : '
+            'ajout de nouveaux joueurs, mise à jour des postes, groupes d\'entraînement et photos.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.page_link(
+            "pages/5_Gestion_Joueurs.py",
+            label="Gérer l'Effectif",
+            icon="⚙️",
+            use_container_width=True,
+        )
+
+# ── Pied de page sobre ────────────────────────────────────────────────────────
+st.divider()
+footer_c1, footer_c2 = st.columns([3, 1])
+with footer_c1:
+    st.caption("🏉 **Rugby Club Amiénois** — Pôle Préparation Physique & Performance Sportive")
+with footer_c2:
+    st.caption("Version 2.0 • Architecture Unifiée")

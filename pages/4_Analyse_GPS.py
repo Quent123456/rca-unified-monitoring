@@ -2319,6 +2319,8 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
                 st.warning("⚠️ Veuillez attribuer au moins un boîtier GPS avant de valider.")
             else:
                 st.session_state["step2_validated"] = True
+                st.session_state["gps_data_loaded"] = True
+                st.session_state["gps_step"] = 3
                 st.session_state["gps_mapping"] = mapping
                 st.session_state["mapping_gps_joueurs"] = mapping
                 if df_matrix_validated is not None:
@@ -5083,6 +5085,34 @@ def render_weekly_reports_view() -> None:
 # 8. APPLICATION STREAMLIT (INTERFACE UTILISATEUR COMPLÈTE)
 # ==============================================================================
 
+def reinitialiser_session_gps() -> None:
+    """Vide toutes les données de la séance GPS en cours dans st.session_state et recharge."""
+    cles_a_vider = [
+        "df_raw",
+        "df_indiv",
+        "df_indiv_enriched",
+        "df_splits_valides",
+        "uploaded_file_sig",
+        "uploaded_file_name",
+        "step2_validated",
+        "gps_data_loaded",
+        "gps_step",
+        "active_gps_session",
+        "splits_matrix_validated",
+        "main_file_uploader",
+        "main_file_uploader_expander",
+        "chk_mode_demo",
+    ]
+    for k in cles_a_vider:
+        if k in st.session_state:
+            del st.session_state[k]
+    for k in list(st.session_state.keys()):
+        if k.startswith("gps_sel_boitier_"):
+            del st.session_state[k]
+    st.toast("Séance réinitialisée. Vous pouvez importer un nouveau fichier.")
+    st.rerun()
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Dashboard & Suivi des Charges GPS | Rugby Club Amiénois",
@@ -5090,6 +5120,15 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="auto",
     )
+
+    # Bouton de réinitialisation GPS dans la barre latérale si une séance est active
+    if st.session_state.get("gps_data_loaded") or st.session_state.get("df_raw") is not None:
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🛰️ Séance GPS active")
+        nom_f = st.session_state.get("uploaded_file_name", "Séance en cours")
+        st.sidebar.caption(f"Fichier : **{nom_f}**")
+        if st.sidebar.button("🔄 Traiter une nouvelle séance / Réinitialiser", key="sb_btn_reset_gps_main", use_container_width=True, type="primary"):
+            reinitialiser_session_gps()
 
     # Indicateur de synchronisation permanente GitHub dans la barre latérale
     try:
@@ -5512,166 +5551,238 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # ==========================================================================
-    # ÉTAPE 1 : IMPORTATION DU FICHIER BRUT CATAPULT (.XLSX)
-    # ==========================================================================
-    st.markdown('<div class="section-header">📥 Étape 1 : Importation du Fichier Brut Catapult</div>', unsafe_allow_html=True)
+    # Si l'Étape 3 est déjà active et consolidée dans la session, afficher le bandeau de session active et l'expander de repli
+    if is_step3_active:
+        col_banner_info, col_banner_btn = st.columns([4, 1.5])
+        with col_banner_info:
+            nom_f = st.session_state.get("uploaded_file_name", "Séance active Catapult")
+            st.success(f"📂 **Séance active :** `{nom_f}` — L'Étape 3 avec l'ensemble des analyses et rapports est prête.")
+        with col_banner_btn:
+            if st.button("🔄 Traiter une nouvelle séance / Réinitialiser", key="btn_reset_banner_top", use_container_width=True, type="primary"):
+                reinitialiser_session_gps()
 
-    uploaded_file = st.file_uploader(
-        "Déposer l'export Excel brut Catapult One (.xlsx) :",
-        type=["xlsx", "xls", "csv"],
-        help="Prend en charge les exports Catapult One, PlayerTek et OpenField au format Excel (.xlsx) ou CSV avec détection automatique du tableau.",
-        key="main_file_uploader",
-    )
-
-    if uploaded_file is None:
-        col_msg, col_demo = st.columns([3.8, 1.2])
-        with col_msg:
-            st.info(
-                "👋 **Bienvenue sur le portail d'analyse GPS du Rugby Club Amiénois (RCA).**\n\n"
-                "👉 **Étape 1 obligatoire :** Veuillez importer l'export Excel brut Catapult (`.xlsx`) "
-                "de la séance du jour ci-dessus pour initialiser le traitement."
+        with st.expander("⚙️ Revoir le fichier importé ou modifier l'attribution des boîtiers GPS (Étapes 1 & 2)", expanded=False):
+            st.markdown("##### 📥 Remplacer le fichier de séance")
+            new_file_act = st.file_uploader(
+                "Déposer un autre export Excel brut Catapult One (.xlsx) :",
+                type=["xlsx", "xls", "csv"],
+                key="file_uploader_expander_active",
             )
-        with col_demo:
-            use_demo = st.checkbox("🧪 Mode Démo", value=False, help="Active des données de démonstration avec l'effectif réel RCA.", key="chk_mode_demo")
-            if st.button("➕ Créer un joueur", help="Ajouter un joueur à l'effectif RCA", key="btn_create_player_home", use_container_width=True):
-                dialog_creer_nouveau_joueur()
+            if new_file_act is not None:
+                new_sig = f"{new_file_act.name}_{new_file_act.size}"
+                if st.session_state.get("uploaded_file_sig") != new_sig:
+                    st.session_state["uploaded_file_sig"] = new_sig
+                    st.session_state["uploaded_file_name"] = new_file_act.name
+                    st.session_state["gps_data_loaded"] = True
+                    st.session_state["step2_validated"] = False
+                    st.session_state["gps_step"] = 2
+                    try:
+                        st.session_state["df_raw"] = load_catapult_file(new_file_act)
+                        st.toast(f"✅ Nouveau fichier '{new_file_act.name}' importé avec succès.")
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"❌ Erreur lors du chargement : {err}")
 
-        if use_demo:
-            demo_rows = []
-            for d in MOCK_DEMO_DATA:
-                demo_rows.append({
-                    "Date": "08/09/2026",
-                    "Player Name": d["Player Name"],
-                    "Position": d["Position"],
-                    "Distance (km)": d["Distance (km)"],
-                    "Distance in Speed Zone 4 (km)": d["Zone 4 (km)"],
-                    "Distance in Speed Zone 5 (km)": d["Zone 5 (km)"],
-                    "Top Speed (km/h)": d["Top Speed"],
-                    "Duration": d["Duration"],
-                    "Distance in Speed Zone 1 (km)": d["Z1 (km)"],
-                    "Distance in Speed Zone 2 (km)": d["Z2 (km)"],
-                    "Distance in Speed Zone 3 (km)": d["Z3 (km)"],
-                    "Accelerations Zone Count: 3 - 4 m/s/s": d["Acc34"],
-                    "Accelerations Zone Count: > 4 m/s/s": d["Acc4"],
-                    "Deceleration Zone Count: 3 - 4 m/s/s": d["Dec34"],
-                    "Deceleration Zone Count: > 4 m/s/s": d["Dec4"],
-                })
-            st.session_state["df_raw"] = pd.DataFrame(demo_rows)
-            st.session_state["uploaded_file_sig"] = "demo_data_rca"
-            st.session_state["step2_validated"] = False
-            for k in list(st.session_state.keys()):
-                if k.startswith("gps_sel_boitier_"):
-                    del st.session_state[k]
-            st.toast("Mode démonstration actif avec les données de simulation RCA.")
-        else:
-            st.session_state["df_raw"] = None
-            st.session_state["uploaded_file_sig"] = None
-            st.session_state["step2_validated"] = False
-            # BLOQUE STRICTEMENT L'EXÉCUTION TANT QU'AUCUN FICHIER N'EST CHARGÉ
-            return
-
-    else:
-        file_sig = f"{uploaded_file.name}_{uploaded_file.size}"
-        persisted_sig = None
-        if os.path.exists(CONFIG_GPS_FILE):
-            try:
-                with open(CONFIG_GPS_FILE, "r", encoding="utf-8") as f:
-                    d_cfg = json.load(f)
-                    if isinstance(d_cfg, dict):
-                        persisted_sig = d_cfg.get("last_validated_file_sig")
-                        if "splits_participation" in d_cfg and isinstance(d_cfg["splits_participation"], dict):
-                            sp_c = st.session_state.setdefault("splits_participation_cache", {})
-                            for k_sp, v_sp in d_cfg["splits_participation"].items():
-                                if ":::" in k_sp:
-                                    p_sp, s_sp = k_sp.split(":::", 1)
-                                    sp_c[(p_sp, s_sp)] = bool(v_sp)
-            except Exception:
-                pass
-
-        if st.session_state.get("uploaded_file_sig") != file_sig:
-            st.session_state["uploaded_file_sig"] = file_sig
-            # Si le fichier a déjà été validé précédemment, restaurer automatiquement la validation au rafraîchissement
-            if persisted_sig and persisted_sig == file_sig:
-                st.session_state["step2_validated"] = True
-            else:
+            st.markdown("---")
+            st.markdown("##### 📡 Association des boîtiers GPS validée")
+            if st.button("🔄 Modifier l'attribution GPS / Effectif", key="btn_reopen_step2_from_exp", use_container_width=True):
                 st.session_state["step2_validated"] = False
-                for k in list(st.session_state.keys()):
-                    if k.startswith("gps_sel_boitier_"):
-                        del st.session_state[k]
-            with st.spinner("Lecture et analyse de l'export Catapult One..."):
-                try:
-                    st.session_state["df_raw"] = load_catapult_file(uploaded_file)
-                    st.toast(f"✅ Fichier '{uploaded_file.name}' importé avec succès.")
-                except Exception as e:
-                    st.error(f"❌ Erreur lors du chargement du fichier Catapult : {str(e)}")
-                    with st.expander("Détails techniques de l'erreur"):
-                        st.exception(e)
-                    return
-
-    df_raw = st.session_state.get("df_raw")
-    if df_raw is None or df_raw.empty:
-        st.warning("⚠️ Les données brutes sont vides ou non reconnues.")
-        return
-
-    # ==========================================================================
-    # ÉTAPE 2 : ASSOCIATION DES BOÎTIERS GPS AUX JOUEURS ET AUX POSTES
-    # ==========================================================================
-    st.markdown('<div class="section-header">📡 Étape 2 : Association des Boîtiers GPS aux Joueurs et aux Postes</div>', unsafe_allow_html=True)
-
-    if not st.session_state.get("step2_validated", False):
-        st.info(
-            "📋 **Consignes de l'Étape 2 :**\n\n"
-            "1. Associez chaque numéro de boîtier GPS détecté au joueur correspondant.\n"
-            "2. Le poste détaillé et sa conversion automatique vers l'un des **3 grands groupes officiels du RCA** "
-            "(`5 de devant`, `3ème Ligne`, `Trois-quarts`) sont appliqués en direct.\n"
-            "3. **Créer un nouveau joueur :** Utilisez le bouton « ➕ Nouveau joueur » en haut du tableau ou sélectionnez l'option « ➕ [Créer un nouveau joueur...] » directement dans le menu déroulant d'un boîtier.\n"
-            "4. **Sécurité anti-doublon :** Il est strictement interdit d'attribuer un même joueur à plusieurs boîtiers sur la séance.\n"
-            "5. Cliquez sur **« ✅ Valider l'effectif et l'association GPS »** pour débloquer l'Étape 3."
-        )
-
-        ui_attribution_gps(df_raw=df_raw)
-
-        st.markdown(
-            """
-            <div style="background-color: #F8FAFC; border: 1.5px dashed #94A3B8; border-radius: 10px; padding: 16px; text-align: center; color: #475569; margin-top: 14px;">
-                🔒 <strong>Étape 3 en attente :</strong> Aucun graphique, aucun podium et aucun rapport officiel (PDF/Excel) ne s'affichera tant que l'effectif n'a pas été validé sans doublon.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # RÈGLE ABSOLUE : BLOQUE STRICTEMENT L'EXÉCUTION TANT QUE L'ÉTAPE 2 N'EST PAS VALIDÉE
-        return
-
-    # Si l'Étape 2 est validée, afficher le récapitulatif avec possibilité de modification
-    mapping_gps = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
-    with st.container():
-        c_val1, c_val2 = st.columns([4, 1.5])
-        with c_val1:
-            st.success(
-                f"✅ **Étape 2 validée :** Effectif officiel verrouillé avec {len(set(mapping_gps.values()))} joueur(s) unique(s) associé(s) sans aucun doublon."
-            )
-        with c_val2:
-            if st.button("🔄 Modifier l'attribution GPS / Effectif", key="btn_reopen_step2", use_container_width=True):
-                st.session_state["step2_validated"] = False
+                st.session_state["gps_step"] = 2
                 st.rerun()
 
-    with st.expander("👀 Voir le détail de l'association GPS validée", expanded=False):
-        c_exp1, c_exp2 = st.columns(2)
-        unique_keys = sorted(list({int(k) for k in mapping_gps if str(k).isdigit()}))
-        half = (len(unique_keys) + 1) // 2
-        for i_idx, k in enumerate(unique_keys):
-            col_target = c_exp1 if i_idx < half else c_exp2
-            nom_j = mapping_gps.get(k) or mapping_gps.get(str(k))
-            poste_j = joueurs_data.get(nom_j, "")
-            grp_j = mapper_poste_vers_groupe_rca(poste_j, nom_j)
-            col_target.markdown(f"• **Boîtier {k}** : {nom_j} (*{poste_j}* ➔ `{grp_j}`)")
+            mapping_gps_curr = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
+            c_exp1, c_exp2 = st.columns(2)
+            unique_keys = sorted(list({int(k) for k in mapping_gps_curr if str(k).isdigit()}))
+            half = (len(unique_keys) + 1) // 2
+            for i_idx, k in enumerate(unique_keys):
+                col_target = c_exp1 if i_idx < half else c_exp2
+                nom_j = mapping_gps_curr.get(k) or mapping_gps_curr.get(str(k))
+                poste_j = joueurs_data.get(nom_j, "")
+                grp_j = mapper_poste_vers_groupe_rca(poste_j, nom_j)
+                col_target.markdown(f"• **Boîtier {k}** : {nom_j} (*{poste_j}* ➔ `{grp_j}`)")
+
+        df_raw = st.session_state.get("df_raw")
+        mapping_gps = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
+
+    else:
+        # ==========================================================================
+        # ÉTAPE 1 : IMPORTATION DU FICHIER BRUT CATAPULT (.XLSX)
+        # ==========================================================================
+        st.markdown('<div class="section-header">📥 Étape 1 : Importation du Fichier Brut Catapult</div>', unsafe_allow_html=True)
+
+        uploaded_file = st.file_uploader(
+            "Déposer l'export Excel brut Catapult One (.xlsx) :",
+            type=["xlsx", "xls", "csv"],
+            help="Prend en charge les exports Catapult One, PlayerTek et OpenField au format Excel (.xlsx) ou CSV avec détection automatique du tableau.",
+            key="main_file_uploader",
+        )
+
+        if uploaded_file is None:
+            if st.session_state.get("df_raw") is not None and st.session_state.get("gps_data_loaded"):
+                pass
+            else:
+                col_msg, col_demo = st.columns([3.8, 1.2])
+                with col_msg:
+                    st.info(
+                        "👋 **Bienvenue sur le portail d'analyse GPS du Rugby Club Amiénois (RCA).**\n\n"
+                        "👉 **Étape 1 obligatoire :** Veuillez importer l'export Excel brut Catapult (`.xlsx`) "
+                        "de la séance du jour ci-dessus pour initialiser le traitement."
+                    )
+                with col_demo:
+                    use_demo = st.checkbox("🧪 Mode Démo", value=False, help="Active des données de démonstration avec l'effectif réel RCA.", key="chk_mode_demo")
+                    if st.button("➕ Créer un joueur", help="Ajouter un joueur à l'effectif RCA", key="btn_create_player_home", use_container_width=True):
+                        dialog_creer_nouveau_joueur()
+
+                if use_demo:
+                    demo_rows = []
+                    for d in MOCK_DEMO_DATA:
+                        demo_rows.append({
+                            "Date": "08/09/2026",
+                            "Player Name": d["Player Name"],
+                            "Position": d["Position"],
+                            "Distance (km)": d["Distance (km)"],
+                            "Distance in Speed Zone 4 (km)": d["Zone 4 (km)"],
+                            "Distance in Speed Zone 5 (km)": d["Zone 5 (km)"],
+                            "Top Speed (km/h)": d["Top Speed"],
+                            "Duration": d["Duration"],
+                            "Distance in Speed Zone 1 (km)": d["Z1 (km)"],
+                            "Distance in Speed Zone 2 (km)": d["Z2 (km)"],
+                            "Distance in Speed Zone 3 (km)": d["Z3 (km)"],
+                            "Accelerations Zone Count: 3 - 4 m/s/s": d["Acc34"],
+                            "Accelerations Zone Count: > 4 m/s/s": d["Acc4"],
+                            "Deceleration Zone Count: 3 - 4 m/s/s": d["Dec34"],
+                            "Deceleration Zone Count: > 4 m/s/s": d["Dec4"],
+                        })
+                    st.session_state["df_raw"] = pd.DataFrame(demo_rows)
+                    st.session_state["uploaded_file_sig"] = "demo_data_rca"
+                    st.session_state["uploaded_file_name"] = "Données_Simulation_RCA_Demo.xlsx"
+                    st.session_state["gps_data_loaded"] = True
+                    st.session_state["gps_step"] = 2
+                    st.session_state["step2_validated"] = False
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("gps_sel_boitier_"):
+                            del st.session_state[k]
+                    st.toast("Mode démonstration actif avec les données de simulation RCA.")
+                    st.rerun()
+                else:
+                    st.session_state["df_raw"] = None
+                    st.session_state["uploaded_file_sig"] = None
+                    st.session_state["gps_data_loaded"] = False
+                    st.session_state["step2_validated"] = False
+                    # BLOQUE STRICTEMENT L'EXÉCUTION TANT QU'AUCUN FICHIER N'EST CHARGÉ
+                    return
+
+        else:
+            file_sig = f"{uploaded_file.name}_{uploaded_file.size}"
+            persisted_sig = None
+            if os.path.exists(CONFIG_GPS_FILE):
+                try:
+                    with open(CONFIG_GPS_FILE, "r", encoding="utf-8") as f:
+                        d_cfg = json.load(f)
+                        if isinstance(d_cfg, dict):
+                            persisted_sig = d_cfg.get("last_validated_file_sig")
+                            if "splits_participation" in d_cfg and isinstance(d_cfg["splits_participation"], dict):
+                                sp_c = st.session_state.setdefault("splits_participation_cache", {})
+                                for k_sp, v_sp in d_cfg["splits_participation"].items():
+                                    if ":::" in k_sp:
+                                        p_sp, s_sp = k_sp.split(":::", 1)
+                                        sp_c[(p_sp, s_sp)] = bool(v_sp)
+                except Exception:
+                    pass
+
+            if st.session_state.get("uploaded_file_sig") != file_sig:
+                st.session_state["uploaded_file_sig"] = file_sig
+                st.session_state["uploaded_file_name"] = uploaded_file.name
+                st.session_state["gps_data_loaded"] = True
+                st.session_state["gps_step"] = 2
+                # Si le fichier a déjà été validé précédemment, restaurer automatiquement la validation au rafraîchissement
+                if persisted_sig and persisted_sig == file_sig:
+                    st.session_state["step2_validated"] = True
+                    st.session_state["gps_step"] = 3
+                else:
+                    st.session_state["step2_validated"] = False
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("gps_sel_boitier_"):
+                            del st.session_state[k]
+                with st.spinner("Lecture et analyse de l'export Catapult One..."):
+                    try:
+                        st.session_state["df_raw"] = load_catapult_file(uploaded_file)
+                        st.toast(f"✅ Fichier '{uploaded_file.name}' importé avec succès.")
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors du chargement du fichier Catapult : {str(e)}")
+                        with st.expander("Détails techniques de l'erreur"):
+                            st.exception(e)
+                        return
+
+        df_raw = st.session_state.get("df_raw")
+        if df_raw is None or df_raw.empty:
+            st.warning("⚠️ Les données brutes sont vides ou non reconnues.")
+            return
+
+        # ==========================================================================
+        # ÉTAPE 2 : ASSOCIATION DES BOÎTIERS GPS AUX JOUEURS ET AUX POSTES
+        # ==========================================================================
+        st.markdown('<div class="section-header">📡 Étape 2 : Association des Boîtiers GPS aux Joueurs et aux Postes</div>', unsafe_allow_html=True)
+
+        if not st.session_state.get("step2_validated", False):
+            st.info(
+                "📋 **Consignes de l'Étape 2 :**\n\n"
+                "1. Associez chaque numéro de boîtier GPS détecté au joueur correspondant.\n"
+                "2. Le poste détaillé et sa conversion automatique vers l'un des **3 grands groupes officiels du RCA** "
+                "(`5 de devant`, `3ème Ligne`, `Trois-quarts`) sont appliqués en direct.\n"
+                "3. **Créer un nouveau joueur :** Utilisez le bouton « ➕ Nouveau joueur » en haut du tableau ou sélectionnez l'option « ➕ [Créer un nouveau joueur...] » directement dans le menu déroulant d'un boîtier.\n"
+                "4. **Sécurité anti-doublon :** Il est strictement interdit d'attribuer un même joueur à plusieurs boîtiers sur la séance.\n"
+                "5. Cliquez sur **« ✅ Valider l'effectif et l'association GPS »** pour débloquer l'Étape 3."
+            )
+
+            ui_attribution_gps(df_raw=df_raw)
+
+            st.markdown(
+                """
+                <div style="background-color: #F8FAFC; border: 1.5px dashed #94A3B8; border-radius: 10px; padding: 16px; text-align: center; color: #475569; margin-top: 14px;">
+                    🔒 <strong>Étape 3 en attente :</strong> Aucun graphique, aucun podium et aucun rapport officiel (PDF/Excel) ne s'affichera tant que l'effectif n'a pas été validé sans doublon.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # RÈGLE ABSOLUE : BLOQUE STRICTEMENT L'EXÉCUTION TANT QUE L'ÉTAPE 2 N'EST PAS VALIDÉE
+            return
+
+        # Si l'Étape 2 est validée, afficher le récapitulatif avec possibilité de modification
+        mapping_gps = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
+        with st.container():
+            c_val1, c_val2 = st.columns([4, 1.5])
+            with c_val1:
+                st.success(
+                    f"✅ **Étape 2 validée :** Effectif officiel verrouillé avec {len(set(mapping_gps.values()))} joueur(s) unique(s) associé(s) sans aucun doublon."
+                )
+            with c_val2:
+                if st.button("🔄 Modifier l'attribution GPS / Effectif", key="btn_reopen_step2", use_container_width=True):
+                    st.session_state["step2_validated"] = False
+                    st.session_state["gps_step"] = 2
+                    st.rerun()
+
+        with st.expander("👀 Voir le détail de l'association GPS validée", expanded=False):
+            c_exp1, c_exp2 = st.columns(2)
+            unique_keys = sorted(list({int(k) for k in mapping_gps if str(k).isdigit()}))
+            half = (len(unique_keys) + 1) // 2
+            for i_idx, k in enumerate(unique_keys):
+                col_target = c_exp1 if i_idx < half else c_exp2
+                nom_j = mapping_gps.get(k) or mapping_gps.get(str(k))
+                poste_j = joueurs_data.get(nom_j, "")
+                grp_j = mapper_poste_vers_groupe_rca(poste_j, nom_j)
+                col_target.markdown(f"• **Boîtier {k}** : {nom_j} (*{poste_j}* ➔ `{grp_j}`)")
 
     # ==========================================================================
     # ÉTAPE 3 : GÉNÉRATION DES TABLEAUX, GRAPHIQUES, PODIUMS ET RAPPORTS OFFICIELS
     # ==========================================================================
-    st.markdown('<div class="section-header">📊 Étape 3 : Tableaux, Graphiques, Podiums et Rapports Officiels</div>', unsafe_allow_html=True)
+    c_step3_header, c_step3_reset = st.columns([4, 1.5])
+    with c_step3_header:
+        st.markdown('<div class="section-header">📊 Étape 3 : Tableaux, Graphiques, Podiums et Rapports Officiels</div>', unsafe_allow_html=True)
+    with c_step3_reset:
+        if st.button("🔄 Traiter une nouvelle séance / Réinitialiser", key="btn_reset_step3_top", use_container_width=True, type="primary"):
+            reinitialiser_session_gps()
     st.markdown(
         '<div class="section-desc">'
         'Analyses athlétiques de la séance calculées sur la base de l\'effectif validé, '
@@ -5833,6 +5944,10 @@ def main() -> None:
 
         # Réassignation explicite dans la session pour l'affichage et les exports
         st.session_state["df_indiv"] = df_indiv
+        st.session_state["df_indiv_enriched"] = df_indiv
+        st.session_state["active_gps_session"] = detected_date_raw or str(selected_date)
+        st.session_state["gps_data_loaded"] = True
+        st.session_state["gps_step"] = 3
 
         moyennes_groupes = calculer_moyennes_groupes_rca(
             df_splits_valides,
@@ -6188,6 +6303,7 @@ def main() -> None:
 
         # Réassignation explicite dans st.session_state['df_indiv']
         st.session_state["df_indiv"] = df_indiv
+        st.session_state["df_indiv_enriched"] = df_indiv
         if groupe_selectionne != "Tous les groupes":
             df_groupe_actif = df_indiv[df_indiv["Groupe"] == groupe_selectionne].copy()
         else:
@@ -6372,6 +6488,7 @@ def main() -> None:
             )
         # Sauvegarde explicite du DataFrame enrichi dans l'état de session
         st.session_state["df_indiv"] = df_indiv
+        st.session_state["df_indiv_enriched"] = df_indiv
         rpe_metrics_seance = rpe_connector.calculate_rpe_group_metrics(st.session_state["df_indiv"])
 
         pdf_bytes = generer_rapport_pdf_coachs(
