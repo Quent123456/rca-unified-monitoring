@@ -1,19 +1,29 @@
-"""Module de synchronisation avec Google Sheets (avec mode démo / données simulées).
+"""Module de synchronisation et de gestion du cache Google Sheets pour RCA Monitoring.
 
 Ce module gère :
-1. L'authentification via les secrets Streamlit (`st.secrets["gcp_service_account"]`).
-2. La lecture et l'écriture des données (Effectif, Wellness, Séances GPS).
-3. Un fallback automatique vers des données simulées (mock data) si aucun compte de service n'est configuré.
+1. L'authentification via `st.secrets` (support de "gcp_service_account" et "connections.gsheets").
+2. La récupération optimisée des données avec cache (@st.cache_data(ttl=600)) pour respecter les quotas de requêtes.
+3. Le stockage et la mise à jour des saisies (Wellness & GPS).
+4. Un fallback automatique vers des données de démonstration en local.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 from typing import Any, Dict, List, Optional
+import gspread
+from google.oauth2.service_account import Credentials
 import pandas as pd
 import streamlit as st
 
-# Liste standard des postes Rugby pour l'effectif RCA
+# Scopes nécessaires pour Google Drive & Google Sheets
+GSHEET_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# Postes standard Rugby
 RUGBY_POSITIONS = [
     "Pilier gauche", "Talonneur", "Pilier droit",
     "Deuxième ligne", "Troisième ligne aile", "Troisième ligne centre",
@@ -36,44 +46,110 @@ MOCK_PLAYERS = [
 ]
 
 
-def is_gsheet_configured() -> bool:
-    """Vérifie si les identifiants Google Sheets sont configurés dans st.secrets."""
-    return "gcp_service_account" in st.secrets and "spreadsheet_url" in st.secrets
+def get_gsheet_client() -> Optional[gspread.Client]:
+    """Récupère les credentials depuis st.secrets et initialise le client gspread.
 
+    Prend en charge :
+    - st.secrets["gcp_service_account"]
+    - st.secrets["connections"]["gsheets"]
+    """
+    creds_dict: Optional[Dict[str, Any]] = None
 
-def get_connection():
-    """Initialise et retourne le client gspread si configuré, sinon None."""
-    if not is_gsheet_configured():
+    # Format 1 : st.secrets["gcp_service_account"]
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+        except Exception as e:
+            st.error(f"Erreur de lecture de 'gcp_service_account' dans st.secrets : {e}")
+
+    # Format 2 : st.secrets["connections"]["gsheets"]
+    elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        conn_conf = st.secrets["connections"]["gsheets"]
+        try:
+            if isinstance(conn_conf, dict):
+                if "project_id" in conn_conf and "private_key" in conn_conf:
+                    creds_dict = dict(conn_conf)
+                elif "service_account" in conn_conf:
+                    sa = conn_conf["service_account"]
+                    creds_dict = dict(sa) if isinstance(sa, dict) else json.loads(sa)
+        except Exception as e:
+            st.error(f"Erreur de lecture de 'connections.gsheets' dans st.secrets : {e}")
+
+    if not creds_dict:
         return None
+
     try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"], scopes=scopes
-        )
-        return gspread.authorize(creds)
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=GSHEET_SCOPES)
+        return gspread.authorize(credentials)
     except Exception as e:
-        st.warning(f"Erreur de connexion Google Sheets: {e}. Mode démo activé.")
+        st.error(f"Échec de l'authentification Google Sheets : {e}")
         return None
+
+
+def is_gsheet_configured() -> bool:
+    """Vérifie si un compte de service est configuré dans st.secrets."""
+    return ("gcp_service_account" in st.secrets) or (
+        "connections" in st.secrets and "gsheets" in st.secrets["connections"]
+    )
+
+
+def get_connection() -> Optional[gspread.Client]:
+    """Alias pour get_gsheet_client()."""
+    return get_gsheet_client()
+
+
+@st.cache_data(ttl=600)
+def get_worksheet_data(spreadsheet_name: str, worksheet_name: str) -> pd.DataFrame:
+    """Récupère les données d'un onglet Google Sheets sous forme de DataFrame pandas.
+
+    Utilise le cache st.cache_data(ttl=600) pour respecter les quotas de requêtes Google (429 Rate Limit).
+    L'argument spreadsheet_name peut être le titre, l'URL complète ou l'ID de la feuille de calcul.
+    """
+    client = get_gsheet_client()
+    if not client:
+        return pd.DataFrame()
+
+    try:
+        if spreadsheet_name.startswith("http"):
+            sh = client.open_by_url(spreadsheet_name)
+        elif len(spreadsheet_name) > 30 and "/" not in spreadsheet_name and " " not in spreadsheet_name:
+            try:
+                sh = client.open_by_key(spreadsheet_name)
+            except Exception:
+                sh = client.open(spreadsheet_name)
+        else:
+            sh = client.open(spreadsheet_name)
+
+        worksheet = sh.worksheet(worksheet_name)
+        records = worksheet.get_all_records()
+        return pd.DataFrame(records)
+    except Exception as e:
+        st.warning(f"Impossible de lire l'onglet '{worksheet_name}' de '{spreadsheet_name}' : {e}")
+        return pd.DataFrame()
 
 
 def get_players() -> pd.DataFrame:
     """Retourne la liste des joueurs (effectif)."""
+    # Si Google Sheets est configuré, tenter de lire l'onglet 'Effectif'
+    target_sheet = st.secrets.get("spreadsheet_url") or st.secrets.get("spreadsheet_name")
+    if target_sheet and is_gsheet_configured():
+        df_sheet = get_worksheet_data(target_sheet, "Effectif")
+        if not df_sheet.empty:
+            return df_sheet
+
     if "mock_players" not in st.session_state:
         st.session_state["mock_players"] = pd.DataFrame(MOCK_PLAYERS)
     return st.session_state["mock_players"]
 
 
 def get_wellness_data(days_back: int = 30) -> pd.DataFrame:
-    """Récupère les données d'évaluation quotidienne (Wellness Hooper).
+    """Récupère les données de Wellness (Hooper + sRPE)."""
+    target_sheet = st.secrets.get("spreadsheet_url") or st.secrets.get("spreadsheet_name")
+    if target_sheet and is_gsheet_configured():
+        df_sheet = get_worksheet_data(target_sheet, "Wellness")
+        if not df_sheet.empty:
+            return df_sheet
 
-    Colonnes : Date, Joueur_ID, Nom, Sommeil, Fatigue, Courbatures, Stress, RPE, Duree_min, sRPE.
-    """
     if "mock_wellness" not in st.session_state:
         today = datetime.date.today()
         records = []
@@ -120,10 +196,17 @@ def get_wellness_data(days_back: int = 30) -> pd.DataFrame:
 
 def save_wellness_entry(entry: Dict[str, Any]) -> bool:
     """Enregistre une nouvelle saisie quotidienne (Google Sheets ou Session State)."""
-    client = get_connection()
-    if client and "spreadsheet_url" in st.secrets:
+    client = get_gsheet_client()
+    target_sheet = st.secrets.get("spreadsheet_url") or st.secrets.get("spreadsheet_name")
+
+    if client and target_sheet:
         try:
-            sheet = client.open_by_url(st.secrets["spreadsheet_url"]).worksheet("Wellness")
+            if target_sheet.startswith("http"):
+                sh = client.open_by_url(target_sheet)
+            else:
+                sh = client.open(target_sheet)
+
+            sheet = sh.worksheet("Wellness")
             row = [
                 str(entry.get("Date", datetime.date.today().isoformat())),
                 str(entry.get("Joueur_ID", "")),
@@ -142,6 +225,8 @@ def save_wellness_entry(entry: Dict[str, Any]) -> bool:
                 str(entry.get("Commentaires", ""))
             ]
             sheet.append_row(row)
+            # Invalider le cache de lecture pour recharger les données fraîches
+            get_worksheet_data.clear()
             return True
         except Exception as e:
             st.error(f"Échec de l'enregistrement Google Sheets : {e}")
