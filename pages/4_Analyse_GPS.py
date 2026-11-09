@@ -46,7 +46,10 @@ with st.sidebar:
     dates_dispo = sorted(gps_df["date"].unique(), reverse=True)
     selected_date = st.selectbox("Sélectionner une séance / match", ["Toutes les séances"] + list(dates_dispo))
 
-    groupe_choice = st.radio("Groupe", ["Tous", "Avants", "Arrières"], horizontal=True)
+    gps_groups = sorted([str(g) for g in gps_df["groupe"].dropna().unique() if str(g).strip()])
+    if not gps_groups:
+        gps_groups = ["Avants", "Arrières"]
+    groupe_choice = st.radio("Groupe", ["Tous"] + gps_groups, horizontal=True)
 
 df_view = gps_df.copy()
 if selected_date != "Toutes les séances":
@@ -107,7 +110,6 @@ with tab_volume:
             x="player_name",
             y="total_distance",
             color="groupe",
-            color_discrete_map={"Avants": "#1E3A8A", "Arrières": "#0D9488"},
             labels={"total_distance": "Distance Totale (m)", "player_name": "Joueur"},
             title="Distance Totale (m)"
         )

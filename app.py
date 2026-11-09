@@ -92,23 +92,27 @@ st.markdown("---")
 
 # Section 2 : Navigation Rapide
 st.subheader("🚀 Modules disponibles")
-nav1, nav2, nav3, nav4 = st.columns(4)
-
+nav1, nav2, nav3 = st.columns(3)
 with nav1:
     st.markdown("### 📝 Saisie Quotidienne")
-    st.write("Évaluation de l'état de forme (Indice de Hooper) et saisie de la charge de séance (sRPE).")
-
+    st.write("Saisie rapide mobile avec mémoire, recherche dynamique et calcul de la Charge de Foster.")
 with nav2:
-    st.markdown("### 📊 Suivi Collectif")
-    st.write("Tableau de bord de l'effectif, suivi des alertes fatigue et évolution temporelle des charges.")
-
+    st.markdown("### 👤 Tableau Individuel")
+    st.write("Profil athlète, jauge ACWR dynamique, radar de bien-être et historique des charges.")
 with nav3:
-    st.markdown("### 🛰️ Analyse GPS")
-    st.write("Import des fichiers GPS, analyse du volume, des sprints (>25 km/h) et calcul du ratio ACWR.")
+    st.markdown("### 👥 Tableau Collectif")
+    st.write("Heatmap d'équipe, matrice de risque ACWR, alertes fatigue et perception d'effort.")
 
+nav4, nav5, nav6 = st.columns(3)
 with nav4:
+    st.markdown("### 🛰️ Analyse GPS")
+    st.write("Import multi-constructeurs, volume, vitesse max, HSR (>20 km/h) et charge externe.")
+with nav5:
     st.markdown("### 📄 Rapports PDF")
-    st.write("Génération en un clic de rapports individuels imprimables aux couleurs du club.")
+    st.write("Génération en un clic de rapports de performance A4 prêts pour l'impression.")
+with nav6:
+    st.markdown("### ⚙️ Gestion de l'Effectif")
+    st.write("Ajout, modification et suppression synchronisés en direct sur Google Sheets.")
 
 st.markdown("---")
 

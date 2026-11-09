@@ -6,4 +6,4 @@ gspread
 google-auth
 reportlab
 plotly
-
+st-gsheets-connection

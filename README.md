@@ -51,15 +51,27 @@ rca-unified-monitoring/
 │
 ├── modules/
 │   ├── __init__.py
-│   ├── gsheet_sync.py             # Authentification gspread, cache et requêtes
-│   ├── gps_processing.py          # Normalisation des fichiers GPS et calcul ACWR
-│   └── pdf_reports.py             # Moteur de génération des rapports PDF (ReportLab)
+│   ├── alerts.py                  # Seuils et alertes ACWR, monotonie et contrainte
+│   ├── calculations.py            # Calculs de charge Foster, moyennes glissantes, ACWR
+│   ├── database.py                # Base de données locale de secours
+│   ├── gps_processing.py          # Normalisation des fichiers GPS et calcul ACWR GPS
+│   ├── gsheets.py                 # Multi-onglets Google Sheets (Saisies, RPE INDV, Lignes)
+│   ├── gsheet_sync.py             # Authentification gspread polyvalente & cache
+│   ├── pdf_reports.py             # Moteur de génération des rapports PDF (ReportLab)
+│   └── visualizations.py          # Composants graphiques Plotly (Heatmaps, jauges, radars)
 │
-└── pages/
-    ├── 1_Saisie_Quotidienne.py    # Formulaire Hooper & RPE de séance
-    ├── 2_Suivi_Collectif.py       # Tableau de bord équipe & analyse des charges
-    ├── 3_Analyse_GPS.py           # Analyse des métriques de vitesse et volume
-    └── 4_Rapports_PDF.py          # Export des bilans athlètes imprimables
+├── pages/
+│   ├── 1_Saisie_Quotidienne.py    # Formulaire mobile avec mémorisation et bouton sticky
+│   ├── 2_Tableau_Individuel.py    # Bilan individuel, jauge ACWR et radar de bien-être
+│   ├── 3_Tableau_Collectif.py     # Dashboard d'équipe, heatmap ACWR et alertes
+│   ├── 4_Analyse_GPS.py           # Analyse des métriques GPS et charges externes
+│   ├── 5_Rapports_PDF.py          # Export des bilans athlètes imprimables A4
+│   └── 6_Gestion_Joueurs.py       # Administration de l'effectif synchronisée Google Sheets
+│
+└── scripts/                       # Utilitaires de test et d'initialisation
+    ├── init_gsheets.py
+    ├── test_gsheets_connection.py
+    └── test_write_saisies.py
 ```
 
 ---
@@ -123,3 +135,4 @@ client_id = "..."
 | **HSR** | Course à Haute Intensité | Distance parcourue $> 20\text{ km/h}$ ($> 5.5\text{ m/s}$) |
 | **Distance Sprint** | Vitesse maximale pure | Distance parcourue $> 25\text{ km/h}$ ($> 7.0\text{ m/s}$) |
 | **ACWR** | Ratio Charge Aiguë (7 jours) / Charge Chronique (28 jours) | $0.8 - 1.3$ : *Sweet Spot* \| $> 1.5$ : Risque de blessure accru |
+
