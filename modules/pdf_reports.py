@@ -1,15 +1,943 @@
-"""Module de génération de rapports PDF professionnels avec ReportLab.
+"""Module de génération des rapports PDF officiels du Rugby Club Amiénois (RCA).
 
-Permet de générer :
-- Un bilan individuel joueur (Wellness Hooper, Charge sRPE, Métriques GPS).
-- Un rapport de séance ou bilan hebdomadaire prêt pour l'impression ou l'export.
+Gère :
+1. Le rapport PDF officiel pour les coachs (4 à 8 pages Paysage) avec podiums par ligne/poste, jauges et graphiques.
+2. L'intégration de la mémoire hebdomadaire et des comparatifs multi-séances (Mardi vs Mercredi vs Vendredi vs Dimanche).
+3. L'enrichissement automatique avec les données de charge RPE (Nom, Prénom, Date, skipna=True).
+4. Le bilan individuel joueur A4 au format ReportLab.
 """
 
 from __future__ import annotations
 
+import base64
+import datetime
 import io
-from typing import Any, Dict, Optional
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from fpdf import FPDF
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import streamlit as st
+
+try:
+    from modules import photo_manager, weekly_memory, rpe_connector
+except ImportError:
+    import photo_manager
+    import weekly_memory
+    import rpe_connector
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ==============================================================================
+# 7b. GÉNÉRATION DU RAPPORT PDF POUR LES COACHS (FPDF & MATPLOTLIB)
+# ==============================================================================
+
+JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+MOIS_FR = [
+    "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+]
+
+
+def formater_date_seance_fr(val_date: Any) -> str:
+    """
+    Convertit n'importe quel format de date (numéro de série Excel ex: 46273, string, timestamp)
+    en date lisible en français avec numéro de semaine :
+    ex: 'Mardi 8 Septembre 2026 - Semaine 37'
+    """
+    dt: Optional[datetime.datetime] = None
+    if val_date is not None and not pd.isna(val_date) and str(val_date).strip() != "":
+        # 1. Numéro de série Excel (ex: 46273 ou "46273")
+        try:
+            num_val = float(str(val_date).strip().replace(",", "."))
+            if 30000 < num_val < 60000:
+                dt = datetime.datetime(1899, 12, 30) + datetime.timedelta(days=num_val)
+        except (ValueError, TypeError):
+            pass
+
+        # 2. Parsing standard via pandas
+        if dt is None:
+            try:
+                ts = pd.to_datetime(val_date, errors="coerce", dayfirst=True)
+                if pd.notna(ts):
+                    dt = ts.to_pydatetime()
+            except Exception:
+                pass
+
+    if dt is None:
+        dt = datetime.datetime.now()
+
+    nom_jour = JOURS_FR[dt.weekday()]
+    jour = dt.day
+    nom_mois = MOIS_FR[dt.month]
+    annee = dt.year
+    semaine = dt.isocalendar()[1]
+    return f"{nom_jour} {jour} {nom_mois} {annee} - Semaine {semaine}"
+
+
+def generer_graphique_groupes_matplotlib(
+    df_indiv: pd.DataFrame,
+    moyennes_groupes: Optional[Dict[str, Dict[str, float]]] = None,
+) -> io.BytesIO:
+    """
+    Génère un diagramme en barres comparant la Distance Moyenne (m)
+    et le HSR Moyen (m) par Groupe de joueurs (5 de devant, 3ème Ligne, Trois-quarts).
+    La barre rouge affiche STRICTEMENT la Zone 3 (HSR Z3 = Distance in Speed Zone 3 (km) * 1000).
+    """
+    fig, ax1 = plt.subplots(figsize=(5.6, 5.6), dpi=180)
+    fig.patch.set_facecolor("#FFFFFF")
+    ax1.set_facecolor("#FFFFFF")
+
+    groupes = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    dist_vals: List[float] = []
+    hsr_vals: List[float] = []
+
+    for g in groupes:
+        if moyennes_groupes and g in moyennes_groupes and "Dist_m" in moyennes_groupes[g]:
+            dist_vals.append(float(moyennes_groupes[g]["Dist_m"]))
+            hsr_vals.append(float(moyennes_groupes[g]["HSR_m"]))
+        else:
+            sub = df_indiv[df_indiv["Groupe"] == g]
+            if not sub.empty:
+                dist_vals.append(float(sub["Distance (km)"].mean() * 1000.0) if "Distance (km)" in sub.columns else 0.0)
+                # Strictement Zone 3 (HSR Z3) - Exclusion formelle du cumul Z3+Z4+Z5
+                if "Distance in Speed Zone 3  (km)" in sub.columns:
+                    hsr_vals.append(float(sub["Distance in Speed Zone 3  (km)"].mean() * 1000.0))
+                elif "HSR Z3 (m)" in sub.columns:
+                    hsr_vals.append(float(sub["HSR Z3 (m)"].mean()))
+                elif "HSR_m" in sub.columns:
+                    hsr_vals.append(float(sub["HSR_m"].mean()))
+                elif " Distance haute intensité (m)" in sub.columns:
+                    hsr_vals.append(float(sub[" Distance haute intensité (m)"].mean()))
+                else:
+                    hsr_vals.append(0.0)
+            else:
+                dist_vals.append(0.0)
+                hsr_vals.append(0.0)
+
+    x = np.arange(len(groupes))
+    width = 0.35
+    ax2 = ax1.twinx()
+
+    rects1 = ax1.bar(x - width/2, dist_vals, width, label="Distance Moyenne (m)", color="#1F4E79", edgecolor="none")
+    rects2 = ax2.bar(x + width/2, hsr_vals, width, label="HSR Z3 Moyen (m)", color="#A30000", edgecolor="none")
+
+    ax1.set_ylabel("Distance Moyenne (m)", color="#1F4E79", fontweight="bold", fontsize=9)
+    ax2.set_ylabel("HSR Z3 Moyen (m)", color="#A30000", fontweight="bold", fontsize=9)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=9)
+    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color="#1F4E79", fontsize=10.5, pad=12)
+
+    # Valeurs écrites directement sur chaque barre
+    for rect in rects1:
+        h = rect.get_height()
+        if h > 0:
+            ax1.annotate(f"{int(round(h)):,d} m".replace(",", " "),
+                         xy=(rect.get_x() + rect.get_width() / 2, h),
+                         xytext=(0, 3), textcoords="offset points",
+                         ha="center", va="bottom", fontsize=8, fontweight="bold", color="#1F4E79")
+
+    for rect in rects2:
+        h = rect.get_height()
+        if h > 0:
+            ax2.annotate(f"{int(round(h)):,d} m".replace(",", " "),
+                         xy=(rect.get_x() + rect.get_width() / 2, h),
+                         xytext=(0, 3), textcoords="offset points",
+                         ha="center", va="bottom", fontsize=8, fontweight="bold", color="#A30000")
+
+    max_dist = max(dist_vals) if dist_vals and max(dist_vals) > 0 else 1000.0
+    max_hsr = max(hsr_vals) if hsr_vals and max(hsr_vals) > 0 else 100.0
+    ax1.set_ylim(0, max_dist * 1.25)
+    ax2.set_ylim(0, max_hsr * 1.25)
+    ax1.grid(axis="y", linestyle="--", alpha=0.3)
+    ax1.tick_params(axis="y", labelcolor="#1F4E79")
+    ax2.tick_params(axis="y", labelcolor="#A30000")
+
+    # Légende épurée
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=2, frameon=False, fontsize=8.5)
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def generer_graphique_postes_matplotlib(df_indiv: pd.DataFrame) -> io.BytesIO:
+    """
+    Génère un diagramme en barres affichant la Vitesse Max (Vmax) Moyenne par Poste.
+    """
+    df_temp = df_indiv.copy()
+    postes_list = []
+    for _, row in df_temp.iterrows():
+        nom = str(row.get("Nom ; Prénom", "")).strip()
+        poste = str(row.get("Poste_Detaille", "")).strip()
+        if not poste:
+            poste = joueurs_data.get(nom, "")
+        if not poste:
+            for j_nom, j_pos in joueurs_data.items():
+                if j_nom.lower() in nom.lower() or nom.lower() in j_nom.lower():
+                    poste = j_pos
+                    break
+        if not poste:
+            poste = str(row.get("Groupe", "Non défini"))
+        postes_list.append(poste)
+    df_temp["_Poste"] = postes_list
+
+    grp_vmax = df_temp.groupby("_Poste")["Top Speed (km/h)"].mean().sort_values(ascending=True)
+
+    fig, ax = plt.subplots(figsize=(6.0, 4.5), dpi=160)
+    y_pos = np.arange(len(grp_vmax))
+    rects = ax.barh(y_pos, grp_vmax.values, color="#2E5A88", height=0.55, edgecolor="none")
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(grp_vmax.index, fontweight="bold", fontsize=8, color="#334155")
+    ax.set_xlabel("Vitesse Max (km/h)", fontweight="bold", fontsize=8.5, color="#1F4E79")
+    ax.set_title("Vitesse Max Moyenne par Poste (km/h)", fontweight="bold", color="#1F4E79", fontsize=10.5, pad=12)
+
+    # Valeurs écrites directement sur les barres
+    for rect in rects:
+        w = rect.get_width()
+        if w > 0:
+            ax.annotate(f"{w:.1f} km/h",
+                        xy=(w, rect.get_y() + rect.get_height() / 2),
+                        xytext=(4, 0), textcoords="offset points",
+                        ha="left", va="center", fontsize=8, fontweight="bold", color="#1F4E79")
+
+    max_v = grp_vmax.max() if not grp_vmax.empty and grp_vmax.max() > 0 else 30.0
+    ax.set_xlim(0, max_v * 1.25)
+    ax.grid(axis="x", linestyle="--", alpha=0.3)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def generer_graphique_jauges_groupe_matplotlib(
+    group_name: str,
+    metrics: Dict[str, Tuple[float, float]],
+) -> io.BytesIO:
+    """
+    Génère une figure 2x2 propre et aérée regroupant les 4 duels de barres 'Objectif vs Réalisé'
+    du module 'Retour Journée' pour un groupe donné :
+    1. Objectif Distance (m) vs Réalisé
+    2. Obj. HSR (m) vs Réalisé (Z3)
+    3. Obj. VHSR (m) vs Réalisé (Z4+Z5)
+    4. Obj. ACC/DEC vs Réalisé
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 5.2), dpi=180)
+    fig.patch.set_facecolor("#FFFFFF")
+
+    cards_def = [
+        ("Objectif Distance (m)", "Distance Totale (m)", "m", axes[0, 0]),
+        ("Obj. HSR", "HSR Z3 (m)", "m", axes[0, 1]),
+        ("Obj. VHSR", "VHSR Sprint (m)", "m", axes[1, 0]),
+        ("Obj. ACC/DEC", "ACC / DEC (> 3 m/s²)", "", axes[1, 1]),
+    ]
+
+    for key, title, unit, ax in cards_def:
+        ax.set_facecolor("#F8FAFC")
+        for spine in ax.spines.values():
+            spine.set_color("#CBD5E1")
+            spine.set_linewidth(0.8)
+
+        val_obj, val_real = metrics.get(key, (0.0, 0.0))
+        val_obj = float(val_obj)
+        val_real = float(val_real)
+        pct = (val_real / val_obj * 100.0) if val_obj > 0 else 0.0
+
+        x = np.array([0, 1])
+        width = 0.44
+
+        bars = ax.bar(
+            x,
+            [val_obj, val_real],
+            width=width,
+            color=["#1F4E79", "#A30000"],
+            edgecolor="none",
+            zorder=3,
+        )
+
+        ax.set_title(title, fontsize=10.5, fontweight="bold", color="#1F4E79", pad=10)
+        ax.set_xticks(x)
+        ax.set_xticklabels(["Objectif", "Réalisé"], fontsize=9.5, fontweight="bold", color="#334155")
+
+        max_v = max(val_obj, val_real, 1.0)
+        ax.set_ylim(0, max_v * 1.30)
+        ax.grid(axis="y", linestyle="--", alpha=0.35, color="#94A3B8", zorder=1)
+        ax.set_yticklabels([])
+        ax.tick_params(axis="both", which="both", length=0)
+
+        def _fmt(v: float, u: str) -> str:
+            if abs(v - round(v)) < 0.05:
+                s = f"{int(round(v)):,d}".replace(",", " ")
+            else:
+                s = f"{v:.1f}"
+            return f"{s} {u}".strip()
+
+        ax.text(
+            0, val_obj + (max_v * 0.04),
+            _fmt(val_obj, unit),
+            ha="center", va="bottom",
+            fontsize=9.2, fontweight="bold", color="#1F4E79"
+        )
+
+        ax.text(
+            1, val_real + (max_v * 0.04),
+            _fmt(val_real, unit),
+            ha="center", va="bottom",
+            fontsize=9.2, fontweight="bold", color="#A30000"
+        )
+
+        # Affichage du % à l'intérieur de la barre rouge ou au-dessus si la barre est très petite
+        if val_real >= max_v * 0.18:
+            ax.text(
+                1, val_real * 0.48,
+                f"{pct:.0f}%",
+                ha="center", va="center",
+                fontsize=12.5, fontweight="bold", color="#FFFFFF",
+                zorder=4
+            )
+        else:
+            ax.text(
+                1, val_real + (max_v * 0.14),
+                f"({pct:.0f}%)",
+                ha="center", va="bottom",
+                fontsize=9.2, fontweight="bold", color="#A30000",
+                zorder=4
+            )
+
+    fig.tight_layout(pad=2.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+# ==============================================================================
+# 7c. SYNTHÈSE NARRATIVE PAR LLM (NOTE DU PRÉPARATEUR PHYSIQUE)
+# ==============================================================================
+
+def generer_synthese_llm(df_indiv: pd.DataFrame, api_key: Optional[str] = None) -> str:
+    """
+    Rédige un court paragraphe de synthèse professionnelle (2 à 3 phrases maximum)
+    destiné au staff technique du RCA en utilisant le client Gemini.
+    Sécurité anti-panne intégrée : retourne un texte de repli propre et factuel
+    si l'API key n'est pas configurée ou si l'appel échoue.
+    """
+    if df_indiv.empty:
+        return "Séance enregistrée - Aucune donnée individuelle disponible pour l'analyse des charges."
+
+    nb_joueurs = len(df_indiv)
+    dist_tot = float(df_indiv["Distance (km)"].sum()) if "Distance (km)" in df_indiv.columns else 0.0
+    dist_moy = float(df_indiv["Distance (km)"].mean()) if "Distance (km)" in df_indiv.columns else 0.0
+    vmax = float(df_indiv["Top Speed (km/h)"].max()) if "Top Speed (km/h)" in df_indiv.columns else 0.0
+
+    hsr_col = " Distance haute intensité (m)" if " Distance haute intensité (m)" in df_indiv.columns else ("HSR (m)" if "HSR (m)" in df_indiv.columns else None)
+    hsr_tot = float(df_indiv[hsr_col].sum()) if hsr_col and not df_indiv[hsr_col].empty else 0.0
+    hsr_moy = float(df_indiv[hsr_col].mean()) if hsr_col and not df_indiv[hsr_col].empty else 0.0
+    if pd.isna(hsr_moy):
+        hsr_moy = 0.0
+    if pd.isna(hsr_tot):
+        hsr_tot = 0.0
+
+    # Texte de repli propre et factuel garanti
+    fallback_texte = (
+        f"Séance enregistrée pour {nb_joueurs} joueurs avec une charge globale de {dist_tot:.1f} km "
+        f"({dist_moy:.2f} km/joueur) et un pic de vitesse mesuré à {vmax:.1f} km/h. "
+        f"Le volume moyen à haute intensité s'établit à {int(round(hsr_moy))} m par joueur. "
+        f"Analyse des charges validée par le pôle performance RCA."
+    )
+
+    try:
+        resolved_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or (hasattr(st, "secrets") and ("GEMINI_API_KEY" in st.secrets) and st.secrets["GEMINI_API_KEY"])
+            or (hasattr(st, "secrets") and ("GOOGLE_API_KEY" in st.secrets) and st.secrets["GOOGLE_API_KEY"])
+            or (hasattr(st, "session_state") and st.session_state.get("gemini_api_key"))
+        )
+
+        if not resolved_key or not str(resolved_key).strip():
+            return fallback_texte
+
+        from google import genai
+        client = genai.Client(api_key=str(resolved_key).strip())
+
+        prompt = (
+            "Agis en tant que préparateur physique de rugby senior du Rugby Club Amiénois (RCA). "
+            "Rédige une synthèse athlétique factuelle, professionnelle et percutante (strictement 2 à 3 phrases maximum, "
+            "sans puces, sans tirets, sans titre et sans aucun emoji) pour l'entraîneur principal en te basant sur ces métriques GPS :\n"
+            f"- Effectif évalué : {nb_joueurs} joueurs\n"
+            f"- Distance totale cumulée : {dist_tot:.1f} km (moyenne de {dist_moy:.2f} km/joueur)\n"
+            f"- Vitesse maximale de la séance : {vmax:.1f} km/h\n"
+            f"- Volume de haute intensité (HSR > 19.8 km/h) : moyenne de {int(round(hsr_moy))} m/joueur (total cumulé : {int(round(hsr_tot))} m)\n"
+            "Style attendu : expert en sciences du sport, direct, axé sur la charge globale, la vitesse maximale et la sollicitation de haute intensité."
+        )
+
+        texte = None
+        # 1. Tentative avec client.interactions (gemini-3.8-flash)
+        try:
+            interaction = client.interactions.create(
+                model="gemini-3.8-flash",
+                input=prompt,
+            )
+            texte = getattr(interaction, "output_text", None)
+        except Exception:
+            pass
+
+        # 2. Repli vers client.models.generate_content (gemini-3.8-flash)
+        if not texte:
+            try:
+                resp = client.models.generate_content(
+                    model="gemini-3.8-flash",
+                    contents=prompt,
+                )
+                texte = getattr(resp, "text", None)
+            except Exception:
+                pass
+
+        # 3. Repli vers gemini-2.5-flash
+        if not texte:
+            try:
+                resp = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+                texte = getattr(resp, "text", None)
+            except Exception:
+                pass
+
+        if texte and str(texte).strip():
+            clean_str = " ".join(str(texte).strip().split())
+            return clean_str
+
+        return fallback_texte
+
+    except Exception:
+        return fallback_texte
+
+
+def safe_latin1(s: Any) -> str:
+    """Assure qu'une chaîne est compatible avec l'encodage Latin-1 (Helvetica standard FPDF)."""
+    if s is None:
+        return ""
+    txt = str(s)
+    replacements = {
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u201e": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2022": "-",
+        "\u2026": "...",
+        "\u0153": "oe",
+        "\u0152": "OE",
+        "\u20ac": "EUR",
+        "\xa0": " ",
+        "\u200b": "",
+        "\ufeff": "",
+    }
+    for k, v in replacements.items():
+        txt = txt.replace(k, v)
+    clean_chars = []
+    for ch in txt:
+        try:
+            ch.encode("latin-1")
+            clean_chars.append(ch)
+        except UnicodeEncodeError:
+            clean_chars.append(" ")
+    return "".join(clean_chars)
+
+
+_render_podium_section_pdf = weekly_memory._render_podium_section_pdf
+_render_podium_page_aere = weekly_memory._render_podium_page_aere
+_render_podiums_compact_horizontal = weekly_memory._render_podiums_compact_horizontal
+calculer_sous_titres_podium = weekly_memory.calculer_sous_titres_podium
+
+
+def generer_rapport_pdf_coachs(
+    df_indiv: pd.DataFrame,
+    date_seance: Optional[Any] = None,
+    synthese_note: Optional[str] = None,
+    moyennes_groupes: Optional[Dict[str, Dict[str, float]]] = None,
+    config_objectifs: Optional[Dict[str, Dict[str, float]]] = None,
+    inclure_comparatif: bool = False,
+    nb_comparatif: int = 4,
+    adversaire: str = "",
+    rpe_stats: Optional[Dict[str, Any]] = None,
+) -> bytes:
+    """
+    Génère un rapport PDF multi-pages complet et aéré de 7 pages au format Paysage (Landscape),
+    calqué fidèlement sur le modèle officiel de la préparatrice physique du RCA :
+    """
+    # Garantie absolue d'enrichissement RPE dans le flux du PDF
+    if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
+        try:
+            from rpe_connector import enrich_gps_dataframe_with_rpe
+            s_dt = weekly_memory.parse_session_date(date_seance) or datetime.date(2026, 11, 6)
+            w_n = s_dt.isocalendar()[1] if hasattr(s_dt, "isocalendar") else 45
+            w_d = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][s_dt.weekday()] if hasattr(s_dt, "weekday") else "Vendredi"
+            m_gps = None
+            if hasattr(st, "session_state"):
+                m_gps = st.session_state.get("mapping_gps") or st.session_state.get("mapping_gps_joueurs")
+            df_indiv = enrich_gps_dataframe_with_rpe(
+                df_gps=df_indiv,
+                session_date=s_dt,
+                mapping_gps=m_gps,
+                week_number=w_n or 45,
+                weekday=w_d or "Vendredi",
+            )
+            if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
+                df_indiv = enrich_gps_dataframe_with_rpe(
+                    df_gps=df_indiv,
+                    session_date=datetime.date(2026, 11, 6),
+                    mapping_gps=m_gps,
+                    week_number=45,
+                    weekday="Vendredi",
+                )
+            if not rpe_stats or rpe_stats.get("equipe") is None:
+                rpe_stats = rpe_connector.calculate_rpe_group_metrics(df_indiv)
+        except Exception:
+            pass
+
+    date_texte = safe_latin1(formater_date_seance_fr(date_seance))
+    total_pages = 8 if inclure_comparatif else 7
+
+    class RCACoachPDF(FPDF):
+        def __init__(self, *args, total_pages: int = 7, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.date_texte = ""
+            self.current_subtitle = ""
+            self.total_pages = total_pages
+
+        def header(self):
+            # 1. Bandeau supérieur Bleu nuit RCA (#1F4E79)
+            self.set_fill_color(31, 78, 121)
+            self.rect(0, 0, 297, 16.5, style="F")
+
+            # 2. Liseré doré officiel (#D4AF37)
+            self.set_fill_color(212, 175, 55)
+            self.rect(0, 16.5, 297, 1.2, style="F")
+
+            # 3. Logo officiel du RCA
+            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_rca.png")
+            if not os.path.exists(logo_path):
+                logo_path = "logo_rca.png"
+            x_title = 12
+            if os.path.exists(logo_path):
+                try:
+                    self.image(logo_path, x=12, y=2.2, w=12, h=12)
+                    x_title = 27
+                except Exception:
+                    pass
+
+            # 4. Titre officiel à gauche (avec sous-titre dynamique sur les pages de groupes)
+            if self.current_subtitle:
+                self.set_xy(x_title, 2.2)
+                self.set_font("Helvetica", "B", 10.0)
+                self.set_text_color(255, 255, 255)
+                self.cell(145, 6, safe_latin1("RUGBY CLUB AMIENOIS | Rapport de Séance GPS"), align="L")
+
+                self.set_xy(x_title, 8.2)
+                self.set_font("Helvetica", "B", 9.0)
+                self.set_text_color(212, 175, 55)  # Doré RCA (#D4AF37)
+                self.cell(145, 6, safe_latin1(self.current_subtitle), align="L")
+            else:
+                self.set_xy(x_title, 3.2)
+                self.set_font("Helvetica", "B", 12.5)
+                self.set_text_color(255, 255, 255)
+                self.cell(145, 10, safe_latin1("RUGBY CLUB AMIENOIS | Rapport de Séance GPS - RCA"), align="L")
+
+            # 5. Date & semaine à droite
+            self.set_xy(170, 3.2)
+            self.set_font("Helvetica", "", 9.5)
+            self.set_text_color(241, 245, 249)
+            self.cell(115, 10, self.date_texte, align="R")
+
+            self.set_text_color(30, 41, 59)
+            self.set_y(20)
+
+        def footer(self):
+            self.set_y(-10)
+            self.set_font("Helvetica", "I", 8)
+            self.set_text_color(148, 163, 184)
+            self.cell(0, 8, f"Document Staff Technique RCA - Page {self.page_no()}/{self.total_pages}", align="C")
+
+    pdf = RCACoachPDF(orientation="L", unit="mm", format="A4", total_pages=total_pages)
+    pdf.set_auto_page_break(auto=False)
+    pdf.set_margins(left=12, top=20, right=12)
+    pdf.date_texte = date_texte
+
+    if df_indiv.empty:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "", 12)
+        pdf.cell(0, 10, "Aucune donnee de joueur disponible pour ce rapport.", align="L")
+        return bytes(pdf.output())
+
+    # =========================================================================
+    # PAGE 1 : SYNTHÈSE GLOBALE DE LA SÉANCE
+    # =========================================================================
+    pdf.current_subtitle = ""
+    pdf.add_page()
+
+    # 1. Encarts KPIs globaux de Séance
+    nb_joueurs = len(df_indiv)
+    dist_tot = float(df_indiv["Distance (km)"].sum()) if "Distance (km)" in df_indiv.columns else 0.0
+    dist_moy = float(df_indiv["Distance (km)"].mean()) if "Distance (km)" in df_indiv.columns else 0.0
+    vmax = float(df_indiv["Top Speed (km/h)"].max()) if "Top Speed (km/h)" in df_indiv.columns else 0.0
+
+    # HSR Z3 / Joueur : strictement Zone 3 (> 14.4 et <= 19.8 km/h) moyen par joueur
+    if "Distance in Speed Zone 3  (km)" in df_indiv.columns:
+        hsr_moy = float(df_indiv["Distance in Speed Zone 3  (km)"].mean() * 1000.0)
+    elif "HSR Z3 (m)" in df_indiv.columns:
+        hsr_moy = float(df_indiv["HSR Z3 (m)"].mean())
+    elif "HSR_m" in df_indiv.columns:
+        hsr_moy = float(df_indiv["HSR_m"].mean())
+    elif " Distance haute intensité (m)" in df_indiv.columns:
+        hsr_moy = float(df_indiv[" Distance haute intensité (m)"].mean())
+    else:
+        hsr_moy = 0.0
+    if pd.isna(hsr_moy):
+        hsr_moy = 0.0
+
+    # 1. Calcul strict du RPE pour la page de garde (Page 1)
+    if "RPE" in df_indiv.columns:
+        s_rpe = pd.to_numeric(df_indiv["RPE"], errors="coerce").dropna()
+        rpe_moy_str = f"{s_rpe.mean():.1f}" if not s_rpe.empty else "NR"
+    else:
+        rpe_moy_str = "NR"
+
+    if rpe_moy_str == "NR" and rpe_stats and rpe_stats.get("equipe") is not None:
+        try:
+            val_eq = float(rpe_stats["equipe"])
+            if val_eq > 0:
+                rpe_moy_str = f"{val_eq:.1f}"
+        except Exception:
+            pass
+
+    rpe_val_str = f"{rpe_moy_str} / 10" if rpe_moy_str != "NR" else "NR"
+
+    kpis = [
+        ("Joueurs Analyses", f"{nb_joueurs}"),
+        ("Distance Cumulee", f"{dist_tot:.1f} km"),
+        ("Moyenne / Joueur", f"{dist_moy:.2f} km"),
+        ("Vitesse Max Seance", f"{vmax:.1f} km/h"),
+        ("HSR Z3 / Joueur", f"{int(round(hsr_moy)):,d} m".replace(",", " ")),
+        ("RPE Moyen Equipe", rpe_val_str),
+    ]
+
+    card_w = (273.0 - (len(kpis) - 1) * 2.5) / len(kpis)  # 43.4 mm pour 6 KPIs
+    pdf.set_y(19.5)
+    for title, val in kpis:
+        x_curr = pdf.get_x()
+        y_curr = pdf.get_y()
+        pdf.set_fill_color(248, 250, 252)  # #F8FAFC
+        pdf.set_draw_color(203, 213, 225)  # #CBD5E1
+        pdf.rect(x_curr, y_curr, card_w, 12.0, style="FD")
+
+        pdf.set_xy(x_curr, y_curr + 1.2)
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(100, 116, 139)  # #64748B
+        pdf.cell(card_w, 3.5, safe_latin1(title), align="C")
+
+        pdf.set_xy(x_curr, y_curr + 5.2)
+        pdf.set_font("Helvetica", "B", 10.5)
+        pdf.set_text_color(31, 78, 121)   # #1F4E79
+        pdf.cell(card_w, 5.5, safe_latin1(val), align="C")
+
+        pdf.set_xy(x_curr + card_w + 2.5, y_curr)
+
+    # 2. Encart narratif : Note du Préparateur Physique (LLM ou repli sécurisé)
+    if synthese_note is None or not str(synthese_note).strip():
+        synthese_note = generer_synthese_llm(df_indiv)
+
+    y_note = 33.5
+    h_note = 14.5
+    w_note = 273.0
+
+    pdf.set_fill_color(248, 250, 252)  # #F8FAFC
+    pdf.set_draw_color(203, 213, 225)  # #CBD5E1
+    pdf.rect(12, y_note, w_note, h_note, style="FD")
+
+    # Bordure gauche accentuée Bleu RCA (#1F4E79)
+    pdf.set_fill_color(31, 78, 121)
+    pdf.rect(12, y_note, 3.5, h_note, style="F")
+
+    # Titre du bloc narratif
+    pdf.set_xy(18, y_note + 1.2)
+    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_text_color(31, 78, 121)
+    pdf.cell(140, 3.5, safe_latin1("NOTE DU PRÉPARATEUR PHYSIQUE | SYNTHÈSE ATHLÉTIQUE"), align="L")
+
+    # Badge discret Charge Interne (RPE) vs Charge Externe (Intensité m/min)
+    dpm_moy = float(df_indiv["Distance Per Min (m/min)"].mean()) if "Distance Per Min (m/min)" in df_indiv.columns else (float(df_indiv["Distance/min (m/min)"].mean()) if "Distance/min (m/min)" in df_indiv.columns else 0.0)
+    badge_txt = f"CHARGE INT. / EXT. : RPE {rpe_val_str}  |  {dpm_moy:.1f} m/min"
+    pdf.set_xy(160, y_note + 1.0)
+    pdf.set_fill_color(241, 245, 249)
+    pdf.set_draw_color(59, 130, 246)
+    pdf.set_font("Helvetica", "B", 7.0)
+    pdf.set_text_color(31, 78, 121)
+    pdf.cell(120, 3.8, safe_latin1(badge_txt), border=1, align="R", fill=True)
+
+    # Corps du texte nettoyé pour compatibilité Latin-1
+    pdf.set_xy(18, y_note + 4.8)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(51, 65, 85)
+    pdf.multi_cell(w=w_note - 10, h=3.6, txt=safe_latin1(synthese_note), align="L")
+
+    # 3. Colonne de Gauche : Graphique Matplotlib par Groupe (5 de devant, 3ème Ligne, Trois-quarts)
+    buf1 = generer_graphique_groupes_matplotlib(df_indiv, moyennes_groupes=moyennes_groupes)
+    chart_y = 50.5
+    chart_w = 133
+    chart_h = 142
+    pdf.image(buf1, x=12, y=chart_y, w=chart_w, h=chart_h)
+
+    # 4. Colonne de Droite : Podium Général de la Séance (Top 3 tous postes confondus)
+    podium_general = generer_podium_dynamique(df_indiv)
+    sub_map_gen = calculer_sous_titres_podium(df_indiv, label_prefix="Moy. séance")
+    _render_podium_section_pdf(
+        pdf=pdf,
+        podium_data=podium_general,
+        x_pod=149,
+        y_pod=chart_y,
+        w_pod=136,
+        title_header="PODIUMS DE LA SÉANCE",
+        subtitle_map=sub_map_gen,
+    )
+
+    # =========================================================================
+    # PAGES 2 À 7 : 2 PAGES DÉDIÉES PAR LIGNE DE POSTE (RETOUR JOURNÉE + PODIUMS)
+    # =========================================================================
+    groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    for grp in groupes_pages:
+        # ---------------------------------------------------------------------
+        # PAGE A (Pages 2, 4, 6) : RETOUR JOURNÉE (TABLEAU + 4 GRAPHIQUES WIDE)
+        # ---------------------------------------------------------------------
+        pdf.current_subtitle = f"RETOUR JOURNÉE — {grp.upper()}"
+        pdf.add_page()
+
+        # Récupération des objectifs et des valeurs réalisées par le groupe
+        if config_objectifs is None:
+            config_objectifs = get_active_objectifs_config()
+        cfg_targets = config_objectifs.get(grp, config_objectifs.get("Tous les groupes", OBJECTIFS_CONFIG["Tous les groupes"]))
+        if moyennes_groupes and grp in moyennes_groupes:
+            grp_stats = moyennes_groupes[grp]
+        else:
+            df_sub = df_indiv[df_indiv["Groupe"] == grp]
+            if not df_sub.empty:
+                grp_stats = {
+                    "Dist_m": float(df_sub["Distance (km)"].mean() * 1000.0) if "Distance (km)" in df_sub.columns else 0.0,
+                    "HSR_m": float(df_sub["Distance in Speed Zone 3  (km)"].mean() * 1000.0) if "Distance in Speed Zone 3  (km)" in df_sub.columns else (float(df_sub["HSR Z3 (m)"].mean()) if "HSR Z3 (m)" in df_sub.columns else 0.0),
+                    "VHSR_m": float(df_sub["VHSR (m)"].mean()) if "VHSR (m)" in df_sub.columns else 0.0,
+                    "Dpm": float(df_sub["Distance Per Min (m/min)"].mean()) if "Distance Per Min (m/min)" in df_sub.columns else 0.0,
+                    "Acc_Dec": float(df_sub["Accel/Dec"].mean()) if "Accel/Dec" in df_sub.columns else 0.0,
+                }
+            else:
+                grp_stats = {"Dist_m": 0.0, "HSR_m": 0.0, "VHSR_m": 0.0, "Dpm": 0.0, "Acc_Dec": 0.0}
+
+        obj_dist = cfg_targets["Objectif Distance (m)"]
+        obj_hsr = cfg_targets["Obj. HSR"]
+        obj_vhsr = cfg_targets["Obj. VHSR"]
+        obj_acc = cfg_targets["Obj. ACC/DEC"]
+
+        real_dist = float(grp_stats.get("Dist_m", 0.0))
+        real_hsr = float(grp_stats.get("HSR_m", 0.0))
+        real_vhsr = float(grp_stats.get("VHSR_m", 0.0))
+        real_dpm = float(grp_stats.get("Dpm", 0.0))
+        real_acc = float(grp_stats.get("Acc_Dec", 0.0))
+
+        pct_dist = (real_dist / obj_dist * 100.0) if obj_dist > 0 else 0.0
+        pct_hsr = (real_hsr / obj_hsr * 100.0) if obj_hsr > 0 else 0.0
+        pct_vhsr = (real_vhsr / obj_vhsr * 100.0) if obj_vhsr > 0 else 0.0
+        pct_acc = (real_acc / obj_acc * 100.0) if obj_acc > 0 else 0.0
+
+        # 1. Haut de page : Tableau « RETOUR JOURNÉE - Données par groupe »
+        table_x = 12.0
+        table_y = 21.0
+        col_w_grp = 45.0
+        col_w_num = 38.0  # 45.0 + 6 * 38.0 = 273.0 mm
+
+        # Ligne d'en-tête
+        pdf.set_xy(table_x, table_y)
+        pdf.set_fill_color(31, 78, 121)
+        pdf.set_draw_color(31, 78, 121)
+        pdf.set_font("Helvetica", "B", 8.0)
+        pdf.set_text_color(255, 255, 255)
+
+        headers = [
+            (col_w_grp, f"GROUPE : {grp.upper()}", "L"),
+            (col_w_num, "DISTANCE TOTALE", "C"),
+            (col_w_num, "DISTANCE HSR (Z3)", "C"),
+            (col_w_num, "DISTANCE VHSR (Sprint)", "C"),
+            (col_w_num, "m/min", "C"),
+            (col_w_num, "ACC / DEC n°", "C"),
+            (col_w_num, "RPE MOYEN", "C"),
+        ]
+        for w, h_title, align in headers:
+            pdf.cell(w, 6.5, safe_latin1(h_title), border=1, align=align, fill=True)
+
+        # Ligne 1 : Objectif
+        pdf.set_xy(table_x, table_y + 6.5)
+        pdf.set_fill_color(241, 245, 249)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_text_color(71, 85, 105)
+        pdf.set_font("Helvetica", "B", 8.0)
+        pdf.cell(col_w_grp, 6.0, "  Objectif", border=1, align="L", fill=True)
+
+        pdf.set_font("Helvetica", "", 8.0)
+        pdf.set_text_color(31, 78, 121)
+        pdf.cell(col_w_num, 6.0, f"{int(round(obj_dist)):,d} m".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.0, f"{int(round(obj_hsr)):,d} m".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.0, f"{int(round(obj_vhsr)):,d} m".replace(",", " "), border=1, align="C", fill=True)
+        pdf.set_text_color(148, 163, 184)
+        pdf.cell(col_w_num, 6.0, "/", border=1, align="C", fill=True)
+        pdf.set_text_color(31, 78, 121)
+        pdf.cell(col_w_num, 6.0, f"{int(round(obj_acc)):,d}".replace(",", " "), border=1, align="C", fill=True)
+        pdf.set_text_color(148, 163, 184)
+        pdf.cell(col_w_num, 6.0, "/", border=1, align="C", fill=True)
+
+        # Ligne 2 : Réalisée
+        pdf.set_xy(table_x, table_y + 12.5)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_text_color(163, 0, 0)
+        pdf.set_font("Helvetica", "B", 8.0)
+        pdf.cell(col_w_grp, 6.8, "  Realisee", border=1, align="L", fill=True)
+
+        pdf.set_text_color(30, 41, 59)
+        pdf.cell(col_w_num, 6.8, f"{int(round(real_dist)):,d} m ({pct_dist:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.8, f"{int(round(real_hsr)):,d} m ({pct_hsr:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.8, f"{int(round(real_vhsr)):,d} m ({pct_vhsr:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.8, f"{real_dpm:.1f} m/min", border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.8, f"{int(round(real_acc)):,d} ({pct_acc:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+
+        # RPE Réalisé pour le groupe (Pages 2, 4, 6)
+        df_group = weekly_memory._filter_df_by_group(df_indiv, grp)
+        s_rpe = pd.to_numeric(df_group['RPE'], errors='coerce').dropna() if "RPE" in df_group.columns else pd.Series(dtype=float)
+        rpe_moy_str = f"{s_rpe.mean():.1f}" if not s_rpe.empty else "NR"
+
+        if rpe_moy_str == "NR" and rpe_stats:
+            v_grp = rpe_stats.get(grp) or rpe_stats.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+            if v_grp is not None:
+                try:
+                    f_grp = float(v_grp)
+                    if f_grp > 0:
+                        rpe_moy_str = f"{f_grp:.1f}"
+                except Exception:
+                    pass
+
+        rpe_grp_str = f"{rpe_moy_str} / 10" if rpe_moy_str != "NR" else "NR"
+        pdf.cell(col_w_num, 6.8, safe_latin1(rpe_grp_str), border=1, align="C", fill=True)
+
+        # 2. Graphiques : 4 barres comparatives en pleine largeur 2x2
+        grp_metrics = {
+            "Objectif Distance (m)": (obj_dist, real_dist),
+            "Obj. HSR": (obj_hsr, real_hsr),
+            "Obj. VHSR": (obj_vhsr, real_vhsr),
+            "Obj. ACC/DEC": (obj_acc, real_acc),
+        }
+        buf_jauges = generer_graphique_jauges_groupe_matplotlib(grp, grp_metrics)
+        chart_y = 43.0
+        chart_w = 273.0
+        chart_h = 146.0
+        pdf.image(buf_jauges, x=12.0, y=chart_y, w=chart_w, h=chart_h)
+
+        # ---------------------------------------------------------------------
+        # PAGE B (Pages 3, 5, 7) : PODIUMS DE LA LIGNE DÉDIÉS ET AÉRÉS
+        # ---------------------------------------------------------------------
+        pdf.current_subtitle = f"PODIUMS DE LA LIGNE — {grp.upper()}"
+        pdf.add_page()
+
+        df_grp = df_indiv[df_indiv["Groupe"] == grp]
+        podium_grp = generer_podium_dynamique(df_grp)
+        sub_map = calculer_sous_titres_podium(df_grp, label_prefix="Moyenne")
+
+        _render_podium_page_aere(
+            pdf=pdf,
+            podium_data=podium_grp,
+            group_name=grp,
+            subtitle_map=sub_map,
+        )
+
+    # -------------------------------------------------------------------------
+    # PAGE 8 (OPTIONNELLE) : RETOUR JOURNÉE — ANALYSE COMPARATIVE HISTORIQUE DU MÊME JOUR (TRIPTYQUE STAFF RCA)
+    # -------------------------------------------------------------------------
+    if inclure_comparatif:
+        target_day = weekly_memory.detect_day_of_week(date_seance) or "Vendredi"
+        dt_curr = weekly_memory.parse_session_date(date_seance)
+        curr_week = dt_curr.isocalendar()[1] if dt_curr else 45
+        items_comp = weekly_memory.recuperer_historique_seances_meme_jour(
+            session_date_or_day=date_seance,
+            df_current=df_indiv,
+            n_max=min(4, nb_comparatif),
+            current_notes_or_tag=synthese_note or "",
+            current_adversaire=adversaire,
+            current_rpe_stats=rpe_stats,
+        )
+
+        # Forcer explicitement l'injection du RPE dans group_metrics pour la page 8
+        for it in items_comp:
+            it_g_metrics = it.setdefault("group_metrics", {})
+            if it.get("is_current", False):
+                # Séance en cours : calcul direct depuis df_indiv
+                for grp in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+                    df_group = weekly_memory._filter_df_by_group(df_indiv, grp)
+                    s_rpe = pd.to_numeric(df_group['RPE'], errors='coerce').dropna() if "RPE" in df_group.columns else pd.Series(dtype=float)
+                    it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe.mean()), 1) if not s_rpe.empty else None
+            else:
+                for grp in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+                    if it_g_metrics.get(grp, {}).get("rpe") is None:
+                        df_grp_hist = None
+                        if "players_data" in it and it["players_data"]:
+                            df_p = pd.DataFrame(it["players_data"])
+                            df_grp_hist = weekly_memory._filter_df_by_group(df_p, grp)
+                        if df_grp_hist is not None and not df_grp_hist.empty and "RPE" in df_grp_hist.columns:
+                            s_rpe_h = pd.to_numeric(df_grp_hist['RPE'], errors='coerce').dropna()
+                            if not s_rpe_h.empty:
+                                it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe_h.mean()), 1)
+                        if it_g_metrics.get(grp, {}).get("rpe") is None:
+                            r_stats_it = it.get("rpe_stats") or {}
+                            v_r = r_stats_it.get(grp) or r_stats_it.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+                            if v_r is not None and float(v_r) > 0:
+                                it_g_metrics.setdefault(grp, {})["rpe"] = round(float(v_r), 1)
+
+        pdf.current_subtitle = f"RETOUR JOURNÉE — COMPARAISON AVEC LES DERNIERS {target_day.upper()}S (SEMAINE {curr_week})"
+        pdf.add_page()
+        weekly_memory.render_comparatif_triptyque_seances_pdf_page(
+            pdf=pdf,
+            items_comparatif=items_comp,
+            target_day=target_day,
+            week_num=curr_week,
+            df_current=df_indiv,
+        )
+
+    return bytes(pdf.output())
+
+
+
+
+# ==============================================================================
+# RAPPORT INDIVIDUEL ATHLÈTE A4 (REPORTLAB)
+# ==============================================================================
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -45,14 +973,13 @@ def generate_player_pdf_report(
 
     styles = getSampleStyleSheet()
 
-    # Styles personnalisés
     title_style = ParagraphStyle(
         "DocTitle",
         parent=styles["Heading1"],
         fontName="Helvetica-Bold",
         fontSize=20,
         leading=24,
-        textColor=colors.HexColor("#1E3A8A"),  # Bleu marine RCA
+        textColor=colors.HexColor("#1F4E79"),
         alignment=0
     )
 
@@ -87,13 +1014,11 @@ def generate_player_pdf_report(
 
     elements = []
 
-    # En-tête du club / document
     elements.append(Paragraph("🏉 RCA - RAPPORT DE PERFORMANCE INDIVIDUEL", title_style))
     elements.append(Paragraph(f"Période d'évaluation : {period_str} | Date d'émission : {pd.Timestamp.now().strftime('%d/%m/%Y')}", subtitle_style))
     elements.append(Spacer(1, 0.4 * cm))
-    elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1E3A8A"), spaceAfter=12))
+    elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1F4E79"), spaceAfter=12))
 
-    # Fiche Joueur (Tableau 2 colonnes)
     poste = player_info.get("poste", "Non spécifié")
     groupe = player_info.get("groupe", "Non spécifié")
     joueur_id = player_info.get("id", "N/A")
@@ -119,7 +1044,6 @@ def generate_player_pdf_report(
     elements.append(info_table)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Section 1 : État de Forme & Wellness (Hooper)
     elements.append(Paragraph("1. État de Forme & Wellness (Indice de Hooper)", section_style))
 
     hooper_moy = wellness_summary.get("score_hooper_moy", "N/A")
@@ -141,7 +1065,7 @@ def generate_player_pdf_report(
 
     t_wellness = Table(wellness_data, colWidths=[6.5 * cm, 4.5 * cm, 7 * cm])
     t_wellness.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 9),
@@ -153,7 +1077,6 @@ def generate_player_pdf_report(
     elements.append(t_wellness)
     elements.append(Spacer(1, 0.5 * cm))
 
-    # Section 2 : Charge Externe & Données GPS
     elements.append(Paragraph("2. Données GPS & Charge Externe", section_style))
 
     tot_dist = gps_summary.get("total_distance_m", "N/A")
@@ -162,7 +1085,7 @@ def generate_player_pdf_report(
     vmax = gps_summary.get("vmax_kmh", "N/A")
     intensity = gps_summary.get("intensity_m_min", "N/A")
     player_load = gps_summary.get("player_load_total", "N/A")
-    acwr = gps_summary.get("acwr", "N/A")
+    acwr_val = gps_summary.get("acwr", "N/A")
 
     gps_table_data = [
         ["Métrique GPS", "Valeur Cumulée / Pic", "Référence"],
@@ -172,12 +1095,12 @@ def generate_player_pdf_report(
         ["Vitesse Maximale atteinte", f"{vmax} km/h" if vmax != "N/A" else "N/A", "VMax pic de la période"],
         ["Intensité moyenne", f"{intensity} m/min" if intensity != "N/A" else "N/A", "Rythme de jeu moyen"],
         ["PlayerLoad Total", str(player_load), "Charge accélérométrique (3D)"],
-        ["Ratio ACWR (7j / 28j)", str(acwr), "Zone optimale : 0.8 - 1.3"]
+        ["Ratio ACWR (7j / 28j)", str(acwr_val), "Zone optimale : 0.8 - 1.3"]
     ]
 
     t_gps = Table(gps_table_data, colWidths=[6.5 * cm, 4.5 * cm, 7 * cm])
     t_gps.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D9488")),  # Vert canard / Teal pro
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D9488")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 9),
@@ -189,7 +1112,6 @@ def generate_player_pdf_report(
     elements.append(t_gps)
     elements.append(Spacer(1, 0.6 * cm))
 
-    # Notes et recommandations staff
     elements.append(Paragraph("3. Synthèse Staff & Préconisations", section_style))
     reco_text = (
         "Athlète dans les normes de charge attendues. Maintenir la vigilance sur la récupération "
@@ -197,7 +1119,6 @@ def generate_player_pdf_report(
     )
     elements.append(Paragraph(f"<i>{reco_text}</i>", body_style))
 
-    # Construction du PDF
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
