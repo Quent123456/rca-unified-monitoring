@@ -67,7 +67,7 @@ def render_module_card(title: str, desc: str, url_path: str, btn_text: str) -> s
       <h3 style="margin-top: 0; margin-bottom: 0.45rem; color: #162B4C; font-size: 1.15rem; font-weight: 700;">{title}</h3>
       <p style="font-size: 0.91rem; color: #4A5568; margin-bottom: 0.9rem; line-height: 1.45;">{desc}</p>
     </div>
-    <div class="rca-card-btn" style="display: inline-block; background-color: #162B4C; color: #FFFFFF; border: 1px solid #162B4C; padding: 0.45rem 0.95rem; border-radius: 6px; font-size: 0.85rem; font-weight: 700; text-align: center; width: fit-content; transition: all 0.2s ease;">{btn_text} →</div>
+    <div class="rca-card-btn" style="display: inline-block; background-color: #162B4C; color: #FFFFFF; border: 1px solid #162B4C; padding: 0.45rem 1rem; border-radius: 6px; font-size: 0.85rem; font-weight: 700; text-align: center; width: fit-content; transition: all 0.2s ease;">{btn_text}</div>
   </div>
 </a>
 """
@@ -80,7 +80,7 @@ with row1_col1:
             title="📝 1. Saisie Quotidienne",
             desc="Formulaire mobile RPE Foster (effort × durée) & questionnaire bien-être Hooper (sommeil, fatigue, courbatures).",
             url_path="/Saisie_Quotidienne",
-            btn_text="Ouvrir la saisie",
+            btn_text="📝 Ouvrir la Saisie →",
         ),
         unsafe_allow_html=True,
     )
@@ -91,7 +91,7 @@ with row1_col2:
             title="👤 2. Tableau Individuel",
             desc="Profil athlète détaillé, jauge ACWR dynamique (charge aiguë vs chronique), radar de bien-être et alertes de surmenage.",
             url_path="/Tableau_Individuel",
-            btn_text="Ouvrir le profil individuel",
+            btn_text="👤 Profil Individuel →",
         ),
         unsafe_allow_html=True,
     )
@@ -102,7 +102,7 @@ with row1_col3:
             title="👥 3. Tableau Collectif",
             desc="Vue globale de l'effectif, heatmap d'entraînement, matrice de risque ACWR et comparaisons Avants / Arrières.",
             url_path="/Tableau_Collectif",
-            btn_text="Consulter la vue équipe",
+            btn_text="👥 Voir l'Équipe →",
         ),
         unsafe_allow_html=True,
     )
@@ -117,7 +117,7 @@ with row2_col1:
             title="🛰️ 4. Analyse GPS & Rapports",
             desc="Traitement Catapult One en 3 étapes : boîtiers, métriques rugby (PlayerLoad, HSR, sprints), injection Excel STAPS et rapports hebdo.",
             url_path="/Analyse_GPS",
-            btn_text="Lancer l'analyse GPS",
+            btn_text="🛰️ Lancer l'Analyse GPS →",
         ),
         unsafe_allow_html=True,
     )
@@ -128,7 +128,7 @@ with row2_col2:
             title="⚙️ 5. Gestion de l'Effectif",
             desc="Administration de l'effectif synchronisée en direct avec Google Sheets : ajout, modification des postes, groupes et photos.",
             url_path="/Gestion_Joueurs",
-            btn_text="Gérer l'effectif",
+            btn_text="⚙️ Gérer l'Effectif →",
         ),
         unsafe_allow_html=True,
     )
