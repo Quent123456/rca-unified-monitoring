@@ -10,6 +10,13 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Gestion Joueurs", page_icon="⚙️", layout="wide")
 
+# ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
+try:
+    from modules.ui_theme import setup_sidebar
+    setup_sidebar()
+except Exception:
+    pass
+
 st.title("⚙️ Gestion de l'effectif")
 
 # ── INITIALISATION CONNEXION GOOGLE SHEETS ───────────────────────────────────────

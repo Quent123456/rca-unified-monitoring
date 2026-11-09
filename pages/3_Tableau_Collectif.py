@@ -14,6 +14,13 @@ from modules.visualizations import plot_team_heatmap
 
 st.set_page_config(page_title="Tableau Collectif", page_icon="👥", layout="wide")
 
+# ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
+try:
+    from modules.ui_theme import setup_sidebar
+    setup_sidebar()
+except Exception:
+    pass
+
 st.title("👥 Tableau de bord collectif")
 st.markdown("Vue d'ensemble de la charge, du risque et de la perception de l'effort (RPE) pour tout l'effectif.")
 

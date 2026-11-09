@@ -23,10 +23,13 @@ def test_imports():
     import modules.visualizations as visualizations
     import modules.weekly_memory as weekly_memory
     import modules.github_sync as github_sync
-    print("[OK] Tous les 12 modules de modules/ ont ete importes avec succes.")
+    import modules.ui_theme as ui_theme
+    print("[OK] Tous les 13 modules de modules/ ont ete importes avec succes.")
 
     print("\n=== TEST DE RECHERCHE ET DATA ===")
+    assert os.path.exists("assets/logo_rca.png"), "assets/logo_rca.png manquant"
     assert os.path.exists("logo_rca.png"), "logo_rca.png manquant"
+    assert len(ui_theme.get_rca_logo_base64()) > 1000, "Base64 logo invalide ou vide"
     assert os.path.exists("data/Modele_Vierge_STAPS.xlsx"), "Modele Excel manquant"
     assert os.path.exists("data/weekly_memory/week_2026_W43.json"), "Archive W43 manquante"
     assert os.path.exists("data/weekly_memory/week_2026_W45.json"), "Archive W45 manquante"

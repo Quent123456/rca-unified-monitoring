@@ -20,6 +20,13 @@ from modules.visualizations import (
 
 st.set_page_config(page_title="Tableau Individuel", page_icon="👤", layout="wide")
 
+# ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
+try:
+    from modules.ui_theme import setup_sidebar
+    setup_sidebar()
+except Exception:
+    pass
+
 st.title("👤 Tableau de bord individuel")
 
 # ── Connexion à Google Sheets ──────────────────────────────────────────────────

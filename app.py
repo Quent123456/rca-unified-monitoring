@@ -20,72 +20,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Styles CSS personnalisés pour l'identité visuelle RCA ─────────────────────
-st.markdown(
-    """
-    <style>
-    .stApp {
-        font-family: 'Segoe UI', Montserrat, Tahoma, sans-serif;
-    }
-    .main-title {
-        color: #1F4E79;
-        font-size: 2.3rem;
-        font-weight: 800;
-        margin-bottom: 0.15rem;
-        letter-spacing: -0.5px;
-        line-height: 1.15;
-    }
-    .sub-title {
-        color: #4A5568;
-        font-size: 1.1rem;
-        margin-bottom: 0.4rem;
-        font-weight: 400;
-    }
-    .badge-club {
-        display: inline-block;
-        background-color: #EBF3FA;
-        color: #1F4E79;
-        font-weight: 700;
-        font-size: 0.85rem;
-        padding: 4px 12px;
-        border-radius: 20px;
-        border: 1px solid #BFD7EA;
-        margin-bottom: 0.8rem;
-    }
-    .rca-card-box {
-        border: 1.5px solid rgba(49, 51, 63, 0.2);
-        border-radius: 0.65rem;
-        padding: 1.25rem;
-        margin-bottom: 0.8rem;
-        background-color: #FFFFFF;
-        transition: all 0.2s ease-in-out;
-        cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        min-height: 210px;
-        height: 100%;
-        box-sizing: border-box;
-    }
-    .rca-card-box:hover {
-        transform: translateY(-4px);
-        border-color: #1F4E79 !important;
-        box-shadow: 0 10px 24px rgba(31, 78, 121, 0.18) !important;
-    }
-    @media (prefers-color-scheme: dark) {
-        .rca-card-box {
-            background-color: #1A202C !important;
-            border-color: #2D3748 !important;
-        }
-        .rca-card-box p {
-            color: #A0AEC0 !important;
-        }
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ── Initialisation de la charte visuelle officielle et de la Sidebar RCA ──────
+try:
+    from modules.ui_theme import setup_sidebar
+    setup_sidebar()
+except Exception:
+    # Fallback si exécution isolée
+    pass
 
 # ── En-tête officiel avec Logo RCA ────────────────────────────────────────────
 logo_path = None
@@ -98,7 +39,7 @@ header_col1, header_col2 = st.columns([1, 8])
 
 with header_col1:
     if logo_path:
-        st.image(logo_path, width=105)
+        st.image(logo_path, width=110)
     else:
         st.markdown("<div style='font-size: 4rem; text-align: center;'>🏉</div>", unsafe_allow_html=True)
 
@@ -120,13 +61,13 @@ def render_module_card(title: str, desc: str, url_path: str, btn_text: str) -> s
     return f"""
 <a href="{url_path}" target="_self" style="text-decoration: none; color: inherit; display: block; height: 100%;">
   <div class="rca-card-box"
-       onmouseover="this.style.transform='translateY(-4px)'; this.style.borderColor='#1F4E79'; this.style.boxShadow='0 10px 24px rgba(31,78,121,0.18)';"
-       onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';">
+       onmouseover="this.style.transform='translateY(-4px)'; this.style.borderColor='#162B4C'; this.style.boxShadow='0 12px 24px rgba(22,43,76,0.18)'; const b=this.querySelector('.rca-card-btn'); if(b){{ b.style.backgroundColor='#F3C300'; b.style.color='#162B4C'; b.style.borderColor='#F3C300'; }}"
+       onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='rgba(22, 43, 76, 0.2)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)'; const b=this.querySelector('.rca-card-btn'); if(b){{ b.style.backgroundColor='#162B4C'; b.style.color='#FFFFFF'; b.style.borderColor='#162B4C'; }}">
     <div>
-      <h3 style="margin-top: 0; margin-bottom: 0.45rem; color: #1F4E79; font-size: 1.15rem; font-weight: 700;">{title}</h3>
-      <p style="font-size: 0.91rem; color: #555; margin-bottom: 0.9rem; line-height: 1.45;">{desc}</p>
+      <h3 style="margin-top: 0; margin-bottom: 0.45rem; color: #162B4C; font-size: 1.15rem; font-weight: 700;">{title}</h3>
+      <p style="font-size: 0.91rem; color: #4A5568; margin-bottom: 0.9rem; line-height: 1.45;">{desc}</p>
     </div>
-    <div style="display: inline-block; background-color: #1F4E79; color: white; padding: 0.4rem 0.85rem; border-radius: 5px; font-size: 0.85rem; font-weight: 600; text-align: center; width: fit-content;">{btn_text} →</div>
+    <div class="rca-card-btn" style="display: inline-block; background-color: #162B4C; color: #FFFFFF; border: 1px solid #162B4C; padding: 0.45rem 0.95rem; border-radius: 6px; font-size: 0.85rem; font-weight: 700; text-align: center; width: fit-content; transition: all 0.2s ease;">{btn_text} →</div>
   </div>
 </a>
 """

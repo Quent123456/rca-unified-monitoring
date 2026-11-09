@@ -5121,6 +5121,13 @@ def main() -> None:
         initial_sidebar_state="auto",
     )
 
+    # Charte visuelle officielle RCA et habillage complet de la Sidebar
+    try:
+        from modules.ui_theme import setup_sidebar
+        setup_sidebar()
+    except Exception:
+        pass
+
     # Bouton de réinitialisation GPS dans la barre latérale si une séance est active
     if st.session_state.get("gps_data_loaded") or st.session_state.get("df_raw") is not None:
         st.sidebar.markdown("---")

@@ -10,6 +10,13 @@ from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(page_title="Saisie Quotidienne", page_icon="📝", layout="centered")
 
+# ── Charte graphique officielle RCA et habillage Sidebar ──────────────────────
+try:
+    from modules.ui_theme import setup_sidebar
+    setup_sidebar()
+except Exception:
+    pass
+
 st.title("Saisie Quotidienne")
 st.markdown("Enregistrez la séance d'entraînement et le ressenti de chaque joueur.")
 
