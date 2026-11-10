@@ -5183,7 +5183,6 @@ def main() -> None:
         <style>
         .stApp {
             font-family: 'Segoe UI', Montserrat, Tahoma, sans-serif;
-            background-color: #F8FAFC;
         }
         .main-title {
             color: #1F4E79;
