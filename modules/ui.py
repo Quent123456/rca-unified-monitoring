@@ -15,7 +15,6 @@ import streamlit as st
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-@functools.lru_cache(maxsize=1)
 def _load_tactile_css() -> str:
     """Charge le CSS tactile centralisé depuis assets/style.css."""
     candidates = [
@@ -96,13 +95,23 @@ def inject_rca_page_layout(
             background-color: transparent !important;
         }}
         
-        /* 2. Sidebar stylisée aux couleurs du RCA avec logo, respiration et onglets agrandis */
+        /* 2. Sidebar stylisée aux couleurs du RCA avec largeur 320px, logo, respiration et onglets agrandis */
         section[data-testid="stSidebar"] {{
             background: linear-gradient(180deg, #1F4E79 0%, #153452 100%) !important;
             border-right: 3px solid #D4AF37 !important;
         }}
+        @media (min-width: 768px) {{
+            section[data-testid="stSidebar"]:not([aria-expanded="false"]) {{
+                width: 320px !important;
+                min-width: 320px !important;
+                max-width: 320px !important;
+            }}
+            section[data-testid="stSidebar"]:not([aria-expanded="false"]) > div {{
+                width: 320px !important;
+            }}
+        }}
         section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
-            padding: 0.6rem 0.95rem 1.5rem 0.95rem !important;
+            padding: 0.75rem 1.1rem 1.5rem 1.1rem !important;
         }}
         section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{
             height: 2.25rem !important;
@@ -163,7 +172,7 @@ def inject_rca_page_layout(
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a,
         section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"] {{
             min-height: 54px !important;
-            padding: 14px 16px !important;
+            padding: 12px 16px !important;
             border-radius: 10px !important;
             background-color: rgba(255, 255, 255, 0.06) !important;
             border: 1px solid rgba(255, 255, 255, 0.09) !important;
@@ -177,10 +186,10 @@ def inject_rca_page_layout(
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] a span,
         section[data-testid="stSidebar"] [data-testid="stSidebarNavLink"] span {{
             color: #F8FAFC !important;
-            font-size: 1.07rem !important;
-            font-weight: 600 !important;
+            font-size: 1.02rem !important;
+            font-weight: 700 !important;
             line-height: 1.35 !important;
-            letter-spacing: 0.2px !important;
+            letter-spacing: 0.25px !important;
             transition: color 0.22s ease !important;
         }}
 

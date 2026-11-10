@@ -30,7 +30,7 @@
 }
 
 /* ----------------------------------------------------------------------------
-   2. CHAMPS DE SAISIE & SÉLECTEURS (Touch target >= 48px, surface claire satinée)
+   2. CHAMPS DE SAISIE & SÉLECTEURS (Touch target >= 48px, fond #FFFFFF net, texte #0C2340)
    ---------------------------------------------------------------------------- */
 :is([data-testid="stMain"], section.main) div[data-testid="stTextInputRootElement"],
 :is([data-testid="stMain"], section.main) div[data-testid="stNumberInputContainer"],
@@ -39,10 +39,10 @@
 :is([data-testid="stMain"], section.main) div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
 :is([data-testid="stMain"], section.main) div[data-testid="stTextAreaRootElement"],
 :is([data-testid="stMain"], section.main) div[data-testid="stTextArea"] div[data-baseweb="textarea"] {
-    background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%) !important;
+    background: #FFFFFF !important;
     background-color: #FFFFFF !important;
-    border: 1.5px solid rgba(12, 35, 64, 0.24) !important;
-    border-radius: 12px !important;
+    border: 1.5px solid #CBD5E1 !important;
+    border-radius: 10px !important;
     min-height: 48px !important;
     box-shadow: inset 0 1px 2px rgba(12, 35, 64, 0.04), 0 2px 6px rgba(12, 35, 64, 0.06) !important;
     transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
@@ -51,8 +51,8 @@
 /* Éviter le double encadrement interne dans NumberInput */
 :is([data-testid="stMain"], section.main) div[data-testid="stNumberInputContainer"] div[data-baseweb="input"],
 :is([data-testid="stMain"], section.main) div[data-testid="stNumberInputContainer"] div[data-baseweb="base-input"] {
-    background: transparent !important;
-    background-color: transparent !important;
+    background: #FFFFFF !important;
+    background-color: #FFFFFF !important;
     border: none !important;
     box-shadow: none !important;
     min-height: 44px !important;
@@ -67,34 +67,38 @@
 :is([data-testid="stMain"], section.main) div[data-testid="stTextAreaRootElement"]:focus-within,
 :is([data-testid="stMain"], section.main) div[data-testid="stTextArea"] div[data-baseweb="textarea"]:focus-within {
     border-color: #F2A900 !important;
-    box-shadow: 0 0 0 3px rgba(242, 169, 0, 0.28), 0 4px 12px rgba(12, 35, 64, 0.14) !important;
+    box-shadow: 0 0 0 2px rgba(242, 169, 0, 0.30) !important;
 }
 
-/* Nettoyage des couches internes BaseWeb + texte contrasté #0C2340 en 16px (anti-zoom mobile) */
+/* Couches internes BaseWeb + texte contrasté #0C2340 en 1rem / 16px (anti-zoom mobile) */
 :is([data-testid="stMain"], section.main) div[data-baseweb="base-input"],
 :is([data-testid="stMain"], section.main) div[data-baseweb="select"] > div > div {
-    background-color: transparent !important;
+    background-color: #FFFFFF !important;
 }
 
-:is([data-testid="stMain"], section.main) div[data-baseweb="input"] input,
-:is([data-testid="stMain"], section.main) div[data-testid="stNumberInput"] input,
+div[data-testid="stTextInput"] input,
+div[data-testid="stNumberInput"] input,
+div[data-baseweb="input"] input,
 :is([data-testid="stMain"], section.main) input[data-testid="stNumberInputField"],
 :is([data-testid="stMain"], section.main) input[data-testid="stDateInputField"],
 :is([data-testid="stMain"], section.main) div[data-baseweb="textarea"] textarea,
 :is([data-testid="stMain"], section.main) div[data-baseweb="select"] input,
 :is([data-testid="stMain"], section.main) div[data-baseweb="select"] span,
 :is([data-testid="stMain"], section.main) div[data-baseweb="select"] > div > div {
-    background-color: transparent !important;
+    background-color: #FFFFFF !important;
     color: #0C2340 !important;
     -webkit-text-fill-color: #0C2340 !important;
-    font-size: 16px !important;
+    font-size: 1rem !important;
     font-weight: 600 !important;
     caret-color: #0C2340 !important;
 }
 
+div[data-testid="stTextInput"] input,
+div[data-testid="stNumberInput"] input,
 :is([data-testid="stMain"], section.main) div[data-baseweb="input"] input,
 :is([data-testid="stMain"], section.main) div[data-baseweb="select"] > div {
     padding: 8px 14px !important;
+    border: none !important;
 }
 
 :is([data-testid="stMain"], section.main) div[data-baseweb="textarea"] textarea {
@@ -103,36 +107,49 @@
     line-height: 1.45 !important;
 }
 
-:is([data-testid="stMain"], section.main) div[data-baseweb="input"] input::placeholder,
+div[data-testid="stTextInput"] input::placeholder,
+div[data-testid="stNumberInput"] input::placeholder,
+div[data-baseweb="input"] input::placeholder,
 :is([data-testid="stMain"], section.main) div[data-baseweb="textarea"] textarea::placeholder {
     color: #64748B !important;
     -webkit-text-fill-color: #64748B !important;
     font-weight: 400 !important;
 }
 
-/* Icônes des sélecteurs & boutons -/+ tactile (>= 46px) */
+/* Icônes des sélecteurs & boutons +/- du NumberInput (#0C2340 / blanc, hover #F2A900) */
 :is([data-testid="stMain"], section.main) div[data-baseweb="select"] svg,
 :is([data-testid="stMain"], section.main) div[data-testid="stDateInput"] svg {
     color: #0C2340 !important;
     fill: #0C2340 !important;
 }
 
+div[data-testid="stNumberInput"] button,
 :is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepDown"],
 :is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepUp"] {
-    min-width: 46px !important;
-    min-height: 46px !important;
-    background-color: #F1F5F9 !important;
-    color: #0C2340 !important;
-    border-left: 1px solid rgba(12, 35, 64, 0.14) !important;
-    transition: background-color 0.15s ease !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+    background-color: #0C2340 !important;
+    color: #FFFFFF !important;
+    border-radius: 8px !important;
+    border: none !important;
+    margin: 2px !important;
+    transition: background-color 0.15s ease, color 0.15s ease !important;
 }
+div[data-testid="stNumberInput"] button:hover,
 :is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepDown"]:hover,
 :is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepUp"]:hover {
     background-color: #F2A900 !important;
     color: #0C2340 !important;
 }
+div[data-testid="stNumberInput"] button svg,
 :is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepDown"] svg,
 :is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepUp"] svg {
+    fill: #FFFFFF !important;
+    color: #FFFFFF !important;
+}
+div[data-testid="stNumberInput"] button:hover svg,
+:is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepDown"]:hover svg,
+:is([data-testid="stMain"], section.main) button[data-testid="stNumberInputStepUp"]:hover svg {
     fill: #0C2340 !important;
     color: #0C2340 !important;
 }
