@@ -8,10 +8,35 @@ Charte officielle :
 """
 
 import base64
+import functools
 import os
 import streamlit as st
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+@functools.lru_cache(maxsize=1)
+def _load_tactile_css() -> str:
+    """Charge le CSS tactile centralisé depuis assets/style.css."""
+    candidates = [
+        os.path.join(PROJECT_ROOT, "assets", "style.css"),
+        "assets/style.css",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+    return ""
+
+
+def inject_rca_tactile_ui() -> None:
+    """Injecte la surcouche CSS tactile RCA (inputs, pastilles, sliders, cartes athlètes, boutons) depuis assets/style.css."""
+    css = _load_tactile_css()
+    if css:
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
 def get_base64_logo() -> str:
@@ -37,6 +62,7 @@ def get_base64_logo() -> str:
 def inject_rca_page_layout(
     page_title: str = "RCA Unified Monitoring",
     page_subtitle: str = "Pôle Performance & Préparation Physique",
+    enable_tactile_ui: bool = True,
 ) -> None:
     """
     Injecte les styles officiels RCA :
@@ -44,6 +70,7 @@ def inject_rca_page_layout(
     2. Sidebar dégradée Bleu RCA (#1F4E79) avec liseré doré (#D4AF37)
     3. Bandeau supérieur officiel (Header Banner RCA) avec logo et typographie
     4. Cartes d'accueil interactives avec animation au survol (hover)
+    5. Surcouche CSS tactile mobile/desktop (assets/style.css) si enable_tactile_ui=True
     """
     logo_src = get_base64_logo()
 
@@ -302,9 +329,7 @@ def inject_rca_page_layout(
             transition: all 0.2s ease;
         }}
 
-        /* Conteneurs et formulaires lisibles */
-        div[data-testid="stVerticalBlockBorderWrapper"],
-        div[data-testid="stForm"],
+        /* Cartes génériques blanches de la page d'accueil */
         .stCard {{
             background-color: #FFFFFF !important;
             border-radius: 10px !important;
@@ -328,4 +353,7 @@ def inject_rca_page_layout(
     """,
         unsafe_allow_html=True,
     )
+
+    if enable_tactile_ui:
+        inject_rca_tactile_ui()
 

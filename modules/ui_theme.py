@@ -17,9 +17,10 @@ import os
 import streamlit as st
 
 try:
-    from modules.ui import inject_rca_page_layout
+    from modules.ui import inject_rca_page_layout, inject_rca_tactile_ui
 except Exception:
     inject_rca_page_layout = None
+    inject_rca_tactile_ui = None
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

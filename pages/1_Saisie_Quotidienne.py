@@ -33,22 +33,16 @@ st.markdown(
         width: calc(100% - 32px);
         max-width: 680px;
         z-index: 9999;
-        background: rgba(255, 255, 255, 0.95);
+        background: rgba(12, 35, 64, 0.94);
         backdrop-filter: blur(10px);
-        padding: 8px 12px;
-        border-radius: 12px;
-        box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.15);
-        border: 1px solid rgba(0, 0, 0, 0.08);
-    }
-    @media (prefers-color-scheme: dark) {
-        div.stButton:has(button[kind="primary"]) {
-            background: rgba(18, 22, 34, 0.95);
-            border-color: rgba(255, 255, 255, 0.12);
-            box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.5);
-        }
+        padding: 10px 12px;
+        border-radius: 16px;
+        box-shadow: 0 -4px 20px rgba(12, 35, 64, 0.28);
+        border: 1.5px solid rgba(242, 169, 0, 0.35);
     }
     /* Marge inférieure pour éviter que le bouton flottant ne cache les derniers champs */
-    .main .block-container {
+    .main .block-container,
+    [data-testid="stMainBlockContainer"] {
         padding-bottom: 110px !important;
     }
     </style>
@@ -236,18 +230,24 @@ with col3:
             background: {rpe_color} !important;
             border: 3px solid #ffffff !important;
             box-shadow: 0 0 10px {rpe_color}99, 0 2px 6px rgba(0, 0, 0, 0.25) !important;
-            height: 24px !important;
-            width: 24px !important;
+            height: 28px !important;
+            width: 28px !important;
             border-radius: 50% !important;
         }}
 
-        /* ── Valeur au-dessus du curseur avec couleur dynamique ── */
+        /* ── Valeur au-dessus du curseur en badge sportif dynamique ── */
         .st-key-rpe_container div[data-testid="stSliderThumbValue"],
         div[class*="st-key-rpe_container"] div[data-testid="stSliderThumbValue"],
         div:has(.rpe-anchor) div[data-testid="stSliderThumbValue"] {{
             color: {rpe_color} !important;
-            font-weight: 700 !important;
-            background-color: transparent !important;
+            font-weight: 800 !important;
+            font-size: 0.90rem !important;
+            background-color: #0C2340 !important;
+            padding: 3px 10px !important;
+            border-radius: 999px !important;
+            border: 1.5px solid {rpe_color} !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25) !important;
+            white-space: nowrap !important;
         }}
 
         /* ── Sécurité : Conteneur extérieur transparent ── */

@@ -1,0 +1,461 @@
+/* ============================================================================
+   assets/style.css
+   Refonte UI/UX Tactile & Charte Officielle RCA (Pages 1 à 5)
+   Palette : Bleu Marine #0C2340 | Jaune Or #F2A900 | Surface Ardoise #132238
+   Strictement scopé sous [data-testid="stMain"] & popovers pour préserver
+   la sidebar et la bannière .rca-top-banner.
+   ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   1. TYPOGRAPHIE DES LABELS (adaptative selon surface claire ou carte sombre)
+   ---------------------------------------------------------------------------- */
+[data-testid="stMain"] [data-testid="stWidgetLabel"],
+[data-testid="stMain"] [data-testid="stWidgetLabel"] label,
+[data-testid="stMain"] [data-testid="stWidgetLabel"] p {
+    font-weight: 600 !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.3px !important;
+    color: #0C2340 !important;
+    margin-bottom: 6px !important;
+}
+
+/* Labels clairs #E2E8F0 à l'intérieur des cartes athlètes & formulaires sombres */
+[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stWidgetLabel"],
+[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stWidgetLabel"] p,
+[data-testid="stMain"] div[data-testid="stForm"] [data-testid="stWidgetLabel"],
+[data-testid="stMain"] div[data-testid="stForm"] [data-testid="stWidgetLabel"] p,
+[data-testid="stMain"] div[data-testid="stForm"] label,
+[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"] > div > div > div[data-testid="stMarkdownContainer"] p {
+    color: #E2E8F0 !important;
+}
+
+/* ----------------------------------------------------------------------------
+   2. CHAMPS DE SAISIE & SÉLECTEURS (Touch target >= 48px, fond satiné #132238)
+   ---------------------------------------------------------------------------- */
+[data-testid="stMain"] div[data-testid="stTextInputRootElement"],
+[data-testid="stMain"] div[data-testid="stNumberInputContainer"],
+[data-testid="stMain"] div[data-testid="stDateInput"] div[data-baseweb="input"],
+[data-testid="stMain"] div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stMain"] div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+[data-testid="stMain"] div[data-testid="stTextAreaRootElement"],
+[data-testid="stMain"] div[data-testid="stTextArea"] div[data-baseweb="textarea"] {
+    background: linear-gradient(180deg, #162844 0%, #101D33 100%) !important;
+    background-color: #132238 !important;
+    border: 1.5px solid rgba(148, 163, 184, 0.35) !important;
+    border-radius: 12px !important;
+    min-height: 48px !important;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(12, 35, 64, 0.12) !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+/* Éviter le double encadrement interne dans NumberInput */
+[data-testid="stMain"] div[data-testid="stNumberInputContainer"] div[data-baseweb="input"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    min-height: 44px !important;
+}
+
+/* Focus lumineux Jaune RCA #F2A900 */
+[data-testid="stMain"] div[data-testid="stTextInputRootElement"]:focus-within,
+[data-testid="stMain"] div[data-testid="stNumberInputContainer"]:focus-within,
+[data-testid="stMain"] div[data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
+[data-testid="stMain"] div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within,
+[data-testid="stMain"] div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div:focus-within,
+[data-testid="stMain"] div[data-testid="stTextAreaRootElement"]:focus-within,
+[data-testid="stMain"] div[data-testid="stTextArea"] div[data-baseweb="textarea"]:focus-within {
+    border-color: #F2A900 !important;
+    box-shadow: 0 0 0 3px rgba(242, 169, 0, 0.24), 0 4px 12px rgba(12, 35, 64, 0.22) !important;
+}
+
+/* Nettoyage des couches internes BaseWeb + texte contrasté 16px (anti-zoom mobile) */
+[data-testid="stMain"] div[data-baseweb="base-input"],
+[data-testid="stMain"] div[data-baseweb="select"] > div > div {
+    background-color: transparent !important;
+}
+
+[data-testid="stMain"] div[data-baseweb="input"] input,
+[data-testid="stMain"] div[data-baseweb="textarea"] textarea,
+[data-testid="stMain"] div[data-baseweb="select"] input,
+[data-testid="stMain"] div[data-baseweb="select"] span,
+[data-testid="stMain"] div[data-baseweb="select"] > div > div {
+    background-color: transparent !important;
+    color: #F8FAFC !important;
+    -webkit-text-fill-color: #F8FAFC !important;
+    font-size: 16px !important;
+    font-weight: 500 !important;
+    caret-color: #F2A900 !important;
+}
+
+[data-testid="stMain"] div[data-baseweb="input"] input,
+[data-testid="stMain"] div[data-baseweb="select"] > div {
+    padding: 8px 14px !important;
+}
+
+[data-testid="stMain"] div[data-baseweb="textarea"] textarea {
+    padding: 12px 14px !important;
+    min-height: 96px !important;
+    line-height: 1.45 !important;
+}
+
+[data-testid="stMain"] div[data-baseweb="input"] input::placeholder,
+[data-testid="stMain"] div[data-baseweb="textarea"] textarea::placeholder {
+    color: #94A3B8 !important;
+    -webkit-text-fill-color: #94A3B8 !important;
+}
+
+/* Icônes des sélecteurs & boutons -/+ tactile (>= 44px) */
+[data-testid="stMain"] div[data-baseweb="select"] svg,
+[data-testid="stMain"] div[data-testid="stDateInput"] svg {
+    color: #F2A900 !important;
+    fill: #F2A900 !important;
+}
+
+[data-testid="stMain"] button[data-testid="stNumberInputStepDown"],
+[data-testid="stMain"] button[data-testid="stNumberInputStepUp"] {
+    min-width: 44px !important;
+    min-height: 44px !important;
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    color: #F2A900 !important;
+    border-left: 1px solid rgba(148, 163, 184, 0.2) !important;
+    transition: background-color 0.15s ease !important;
+}
+[data-testid="stMain"] button[data-testid="stNumberInputStepDown"]:hover,
+[data-testid="stMain"] button[data-testid="stNumberInputStepUp"]:hover {
+    background-color: rgba(242, 169, 0, 0.22) !important;
+}
+[data-testid="stMain"] button[data-testid="stNumberInputStepDown"] svg,
+[data-testid="stMain"] button[data-testid="stNumberInputStepUp"] svg {
+    fill: #F2A900 !important;
+}
+
+/* Pastilles Multiselect */
+[data-testid="stMain"] span[data-baseweb="tag"] {
+    background-color: #F2A900 !important;
+    color: #0C2340 !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    padding: 4px 10px !important;
+    min-height: 30px !important;
+}
+[data-testid="stMain"] span[data-baseweb="tag"] span,
+[data-testid="stMain"] span[data-baseweb="tag"] svg {
+    color: #0C2340 !important;
+    -webkit-text-fill-color: #0C2340 !important;
+    fill: #0C2340 !important;
+}
+
+/* Menus déroulants (Selectbox / Datepicker popovers) */
+div[data-baseweb="popover"]:has([data-testid="stSelectboxVirtualDropdown"]) [role="listbox"],
+[data-testid="stSelectboxVirtualDropdown"],
+div[data-baseweb="popover"]:has(ul[role="listbox"]) ul[role="listbox"] {
+    background-color: #132238 !important;
+    border: 1.5px solid rgba(242, 169, 0, 0.35) !important;
+    border-radius: 12px !important;
+    padding: 6px !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35) !important;
+}
+[data-testid="stSelectboxVirtualDropdown"] li,
+[data-testid="stSelectboxVirtualDropdown"] [role="option"],
+div[data-baseweb="popover"] ul[role="listbox"] li {
+    color: #F8FAFC !important;
+    min-height: 46px !important;
+    padding: 10px 14px !important;
+    border-radius: 8px !important;
+    font-size: 0.96rem !important;
+    font-weight: 500 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+[data-testid="stSelectboxVirtualDropdown"] li:hover,
+[data-testid="stSelectboxVirtualDropdown"] [role="option"]:hover,
+[data-testid="stSelectboxVirtualDropdown"] [aria-selected="true"],
+div[data-baseweb="popover"] ul[role="listbox"] li:hover {
+    background-color: rgba(242, 169, 0, 0.22) !important;
+    color: #F2A900 !important;
+    font-weight: 700 !important;
+}
+
+/* ----------------------------------------------------------------------------
+   3. ÉMOTICÔNES & SÉLECTEURS VISUELS (st.radio horizontal & st.pills)
+   ---------------------------------------------------------------------------- */
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 10px !important;
+    margin-top: 6px !important;
+}
+
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label {
+    background: linear-gradient(145deg, #162844 0%, #0F1E36 100%) !important;
+    border: 1.5px solid rgba(148, 163, 184, 0.28) !important;
+    border-radius: 12px !important;
+    padding: 12px 16px !important;
+    min-height: 48px !important;
+    margin: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    cursor: pointer !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label:hover {
+    border-color: rgba(242, 169, 0, 0.65) !important;
+    transform: translateY(-1px) !important;
+}
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label p,
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label span {
+    color: #E2E8F0 !important;
+    font-weight: 700 !important;
+    font-size: 0.96rem !important;
+    margin: 0 !important;
+    line-height: 1.3 !important;
+}
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child {
+    margin-top: 0 !important;
+}
+
+/* État actif radio : bleu intense RCA + bordure lumineuse #F2A900 + scale(1.03) */
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) {
+    background: linear-gradient(135deg, #0C2340 0%, #1B4272 100%) !important;
+    border: 2px solid #F2A900 !important;
+    box-shadow: 0 0 0 2px rgba(242, 169, 0, 0.24), 0 6px 14px rgba(12, 35, 64, 0.35) !important;
+    transform: scale(1.03) !important;
+}
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) p,
+[data-testid="stMain"] [data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) span {
+    color: #F2A900 !important;
+}
+
+/* Pastilles st.pills / st.segmented_control */
+[data-testid="stMain"] [data-testid="stButtonGroup"] button {
+    padding: 12px 16px !important;
+    min-height: 48px !important;
+    border-radius: 12px !important;
+    font-weight: 700 !important;
+    font-size: 1.02rem !important;
+    background: linear-gradient(145deg, #162844 0%, #0F1E36 100%) !important;
+    border: 1.5px solid rgba(148, 163, 184, 0.28) !important;
+    color: #E2E8F0 !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+    transition: all 0.2s ease !important;
+}
+[data-testid="stMain"] [data-testid="stButtonGroup"] button[aria-pressed="true"],
+[data-testid="stMain"] [data-testid="stButtonGroup"] button[kind="pillsActive"] {
+    background: linear-gradient(135deg, #F2A900 0%, #D99200 100%) !important;
+    color: #0C2340 !important;
+    border: 2px solid #FFE082 !important;
+    box-shadow: 0 4px 12px rgba(242, 169, 0, 0.35) !important;
+    transform: scale(1.03) !important;
+}
+
+/* Checkbox ergonomique mobile (>= 44px touch area) */
+[data-testid="stMain"] [data-testid="stCheckbox"] label {
+    min-height: 44px !important;
+    padding: 8px 14px !important;
+    border-radius: 10px !important;
+    background-color: rgba(12, 35, 64, 0.06) !important;
+    border: 1px solid rgba(12, 35, 64, 0.14) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    cursor: pointer !important;
+}
+[data-testid="stMain"] [data-testid="stCheckbox"] label p {
+    font-weight: 600 !important;
+    color: #0C2340 !important;
+}
+
+/* ----------------------------------------------------------------------------
+   4. SLIDERS & JAUGES (Rail épaissi, poignée tactile, badge sportif)
+   ---------------------------------------------------------------------------- */
+[data-testid="stMain"] div[data-testid="stSlider"] {
+    padding: 8px 4px 4px 4px !important;
+}
+[data-testid="stMain"] div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {
+    min-height: 10px !important;
+    border-radius: 999px !important;
+}
+[data-testid="stMain"] div[data-testid="stSlider"] div[role="slider"] {
+    width: 28px !important;
+    height: 28px !important;
+    border: 3px solid #FFFFFF !important;
+    border-radius: 50% !important;
+    background-color: #F2A900 !important;
+    box-shadow: 0 2px 8px rgba(12, 35, 64, 0.35), 0 0 0 2px rgba(242, 169, 0, 0.25) !important;
+    cursor: grab !important;
+    transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+}
+[data-testid="stMain"] div[data-testid="stSlider"] div[role="slider"]:active {
+    transform: scale(1.12) !important;
+    cursor: grabbing !important;
+}
+[data-testid="stMain"] div[data-testid="stSlider"] div[data-testid="stSliderThumbValue"] {
+    background-color: #0C2340 !important;
+    color: #F2A900 !important;
+    font-weight: 800 !important;
+    font-size: 0.88rem !important;
+    padding: 3px 10px !important;
+    border-radius: 999px !important;
+    border: 1.5px solid #F2A900 !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22) !important;
+    margin-bottom: 6px !important;
+    white-space: nowrap !important;
+}
+
+/* ----------------------------------------------------------------------------
+   5. ENCADRÉS, CARTES ATHLÈTES, KPI METRICS & EXPANDERS
+   ---------------------------------------------------------------------------- */
+[data-testid="stMain"] div[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stMain"] div[data-testid="stForm"] {
+    background: linear-gradient(145deg, rgba(20, 35, 60, 0.88) 0%, rgba(12, 25, 45, 0.94) 100%) !important;
+    backdrop-filter: blur(8px) !important;
+    border: 1px solid rgba(242, 169, 0, 0.28) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25) !important;
+    padding: 16px !important;
+    margin-bottom: 16px !important;
+}
+
+/* KPI Metrics en cartes athlètes modernes */
+[data-testid="stMain"] div[data-testid="stMetric"] {
+    background: linear-gradient(145deg, rgba(20, 35, 60, 0.90) 0%, rgba(12, 25, 45, 0.96) 100%) !important;
+    border: 1px solid rgba(242, 169, 0, 0.28) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.20) !important;
+    padding: 16px !important;
+    margin-bottom: 12px !important;
+}
+[data-testid="stMain"] div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+[data-testid="stMain"] div[data-testid="stMetric"] [data-testid="stMetricLabel"] p {
+    color: #CBD5E1 !important;
+    font-weight: 600 !important;
+    font-size: 0.86rem !important;
+}
+[data-testid="stMain"] div[data-testid="stMetric"] [data-testid="stMetricValue"],
+[data-testid="stMain"] div[data-testid="stMetric"] [data-testid="stMetricValue"] > div {
+    color: #FFFFFF !important;
+    font-weight: 800 !important;
+    font-size: 1.6rem !important;
+}
+
+/* Accordéons (st.expander) : en-tête sportif RCA + contenu blanc lisible pour graphiques/tables */
+[data-testid="stMain"] div[data-testid="stExpander"] {
+    border: 1px solid rgba(242, 169, 0, 0.35) !important;
+    border-radius: 14px !important;
+    overflow: hidden !important;
+    background-color: #FFFFFF !important;
+    box-shadow: 0 4px 14px rgba(12, 35, 64, 0.10) !important;
+    margin-bottom: 14px !important;
+}
+[data-testid="stMain"] div[data-testid="stExpander"] details > summary {
+    background: linear-gradient(90deg, #0C2340 0%, #16365D 100%) !important;
+    color: #FFFFFF !important;
+    min-height: 50px !important;
+    padding: 12px 18px !important;
+    border-left: 5px solid #F2A900 !important;
+    font-weight: 700 !important;
+}
+[data-testid="stMain"] div[data-testid="stExpander"] details > summary p,
+[data-testid="stMain"] div[data-testid="stExpander"] details > summary svg {
+    color: #FFFFFF !important;
+    fill: #F2A900 !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+}
+[data-testid="stMain"] div[data-testid="stExpanderDetails"] {
+    background-color: #FFFFFF !important;
+    padding: 16px !important;
+}
+
+/* ----------------------------------------------------------------------------
+   6. BOUTONS D'ACTION (Tactiles >= 48px, pleins sur mobile, effet :active)
+   ---------------------------------------------------------------------------- */
+[data-testid="stMain"] .stButton button[kind="primary"],
+[data-testid="stMain"] button[data-testid="stBaseButton-primary"],
+[data-testid="stMain"] button[data-testid="stBaseButton-primaryFormSubmit"],
+[data-testid="stMain"] .stFormSubmitButton button[kind="primary"] {
+    min-height: 48px !important;
+    padding: 10px 20px !important;
+    border-radius: 12px !important;
+    background: linear-gradient(135deg, #F2A900 0%, #DE9600 100%) !important;
+    color: #0C2340 !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    border: none !important;
+    box-shadow: 0 4px 12px rgba(242, 169, 0, 0.30) !important;
+    transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease !important;
+}
+[data-testid="stMain"] .stButton button[kind="primary"] *,
+[data-testid="stMain"] button[data-testid="stBaseButton-primary"] *,
+[data-testid="stMain"] button[data-testid="stBaseButton-primaryFormSubmit"] * {
+    color: #0C2340 !important;
+    font-weight: 700 !important;
+}
+[data-testid="stMain"] .stButton button[kind="primary"]:hover,
+[data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover,
+[data-testid="stMain"] button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+    filter: brightness(1.06) !important;
+    box-shadow: 0 6px 18px rgba(242, 169, 0, 0.42) !important;
+}
+[data-testid="stMain"] .stButton button[kind="primary"]:active,
+[data-testid="stMain"] button[data-testid="stBaseButton-primary"]:active,
+[data-testid="stMain"] button[data-testid="stBaseButton-primaryFormSubmit"]:active {
+    transform: scale(0.98) !important;
+}
+
+/* Boutons secondaires & Téléchargement / Export */
+[data-testid="stMain"] .stButton button:not([kind="primary"]),
+[data-testid="stMain"] .stDownloadButton button,
+[data-testid="stMain"] .stFormSubmitButton button:not([kind="primary"]),
+[data-testid="stMain"] button[data-testid="stBaseButton-secondary"],
+[data-testid="stMain"] button[data-testid="stBaseButton-secondaryFormSubmit"] {
+    min-height: 48px !important;
+    padding: 10px 18px !important;
+    border-radius: 12px !important;
+    background: linear-gradient(135deg, #0C2340 0%, #173A68 100%) !important;
+    color: #FFFFFF !important;
+    font-weight: 700 !important;
+    font-size: 0.92rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    border: 1.5px solid rgba(242, 169, 0, 0.40) !important;
+    box-shadow: 0 3px 10px rgba(12, 35, 64, 0.22) !important;
+    transition: transform 0.12s ease, border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+[data-testid="stMain"] .stButton button:not([kind="primary"]) *,
+[data-testid="stMain"] .stDownloadButton button *,
+[data-testid="stMain"] .stFormSubmitButton button:not([kind="primary"]) *,
+[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] * {
+    color: #FFFFFF !important;
+    font-weight: 700 !important;
+}
+[data-testid="stMain"] .stButton button:not([kind="primary"]):hover,
+[data-testid="stMain"] .stDownloadButton button:hover,
+[data-testid="stMain"] .stFormSubmitButton button:not([kind="primary"]):hover,
+[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover {
+    border-color: #F2A900 !important;
+    box-shadow: 0 5px 14px rgba(12, 35, 64, 0.34) !important;
+}
+[data-testid="stMain"] .stButton button:not([kind="primary"]):active,
+[data-testid="stMain"] .stDownloadButton button:active,
+[data-testid="stMain"] .stFormSubmitButton button:not([kind="primary"]):active,
+[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:active {
+    transform: scale(0.98) !important;
+}
+
+/* Pleine largeur automatique sur mobile */
+@media (max-width: 768px) {
+    [data-testid="stMain"] .stButton,
+    [data-testid="stMain"] .stButton > button,
+    [data-testid="stMain"] .stDownloadButton,
+    [data-testid="stMain"] .stDownloadButton > button,
+    [data-testid="stMain"] .stFormSubmitButton,
+    [data-testid="stMain"] .stFormSubmitButton > button {
+        width: 100% !important;
+    }
+}

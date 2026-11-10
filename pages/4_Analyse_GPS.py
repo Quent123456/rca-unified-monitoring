@@ -5228,48 +5228,28 @@ def main() -> None:
             font-weight: 600;
             font-size: 0.82rem;
         }
-        div[data-testid="stMetricValue"] {
-            font-size: 1.6rem !important;
-            color: #1F4E79 !important;
-            font-weight: 700 !important;
-        }
         .stTabs [data-baseweb="tab-list"] {
             gap: 10px;
             margin-bottom: 1rem;
         }
         .stTabs [data-baseweb="tab"] {
-            height: 44px;
+            min-height: 48px;
             white-space: pre-wrap;
             background-color: #FFFFFF;
-            border-radius: 8px 8px 0px 0px;
-            color: #4A5568;
-            font-weight: 600;
-            font-size: 1.02rem;
-            padding: 8px 18px;
-            border: 1px solid #E2E8F0;
+            border-radius: 10px 10px 0px 0px;
+            color: #0C2340;
+            font-weight: 700;
+            font-size: 1rem;
+            padding: 10px 18px;
+            border: 1px solid rgba(12, 35, 64, 0.16);
             border-bottom: none;
             transition: all 0.2s ease;
         }
         .stTabs [aria-selected="true"] {
-            background-color: #1F4E79 !important;
-            color: #FFFFFF !important;
-            border-color: #1F4E79 !important;
-        }
-        .stDownloadButton button {
-            background-color: #1F4E79 !important;
-            color: white !important;
-            font-weight: 600 !important;
-            font-size: 1.05rem !important;
-            padding: 0.65rem 2rem !important;
-            border-radius: 8px !important;
-            border: none !important;
-            width: 100% !important;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 10px rgba(31, 78, 121, 0.25) !important;
-        }
-        .stDownloadButton button:hover {
-            background-color: #163654 !important;
-            box-shadow: 0 6px 15px rgba(31, 78, 121, 0.35) !important;
+            background-color: #0C2340 !important;
+            color: #F2A900 !important;
+            border-color: #0C2340 !important;
+            border-top: 3px solid #F2A900 !important;
         }
 
         /* Cartes Podium (Esthétique Canva / RCA) */

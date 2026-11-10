@@ -23,7 +23,11 @@ st.set_page_config(
 # ── Injection du layout officiel RCA & Bannière universelle ───────────────────
 try:
     from modules.ui import inject_rca_page_layout
-    inject_rca_page_layout("RCA Unified Monitoring", "Plateforme centralisée RPE & Catapult GPS")
+    inject_rca_page_layout(
+        "RCA Unified Monitoring",
+        "Plateforme centralisée RPE & Catapult GPS",
+        enable_tactile_ui=False,
+    )
 except Exception:
     pass
 
