@@ -171,7 +171,10 @@ OUTPUT_DOWNLOAD_FILENAME = "Synthese_Complete_Seance.xlsx"
 # Dossiers contenant les photos des joueurs (assets/players_photos/ normalisé)
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 PLAYERS_PHOTOS_DIR = os.path.join(ASSETS_DIR, "players_photos")
-os.makedirs(PLAYERS_PHOTOS_DIR, exist_ok=True)
+try:
+    os.makedirs(PLAYERS_PHOTOS_DIR, exist_ok=True)
+except Exception:
+    pass
 PHOTOS_DIR = PLAYERS_PHOTOS_DIR
 DEFAULT_AVATAR = os.path.join(PLAYERS_PHOTOS_DIR, "avatar_par_defaut.png")
 
@@ -336,7 +339,10 @@ def synchroniser_effectif_avec_custom() -> None:
 
 
 # Synchronisation initiale au démarrage du module
-synchroniser_effectif_avec_custom()
+try:
+    synchroniser_effectif_avec_custom()
+except Exception:
+    pass
 
 
 def sauvegarder_joueur_personnalise(
@@ -5125,8 +5131,8 @@ def main() -> None:
     try:
         from modules.ui import inject_rca_page_layout
         inject_rca_page_layout("4. Analyse Catapult GPS", "Traitement des boîtiers, métriques rugby & export PDF")
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"Erreur GPS : {e}")
 
     # Bouton de réinitialisation GPS dans la barre latérale si une séance est active
     if st.session_state.get("gps_data_loaded") or st.session_state.get("df_raw") is not None:
@@ -5174,8 +5180,8 @@ def main() -> None:
                         st.rerun()
                     else:
                         st.error(m_r)
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"Erreur GPS : {e}")
 
     # Styles CSS modernes et soignés (Esthétique Canva / Design épuré RCA)
     st.markdown(
@@ -5481,22 +5487,30 @@ def main() -> None:
     # --------------------------------------------------------------------------
     # GESTION DES ÉTATS DE SESSION (3 ÉTAPES OBLIGATOIRES)
     # --------------------------------------------------------------------------
-    if "df_raw" not in st.session_state:
-        st.session_state["df_raw"] = None
-    if "uploaded_file_sig" not in st.session_state:
-        st.session_state["uploaded_file_sig"] = None
-    if "step2_validated" not in st.session_state:
-        st.session_state["step2_validated"] = False
-    if "mapping_gps_joueurs" not in st.session_state:
-        # Chargement persistant depuis fichier JSON ou dictionnaire officiel
-        persisted = charger_mapping_gps_persistant()
-        if persisted:
-            st.session_state["mapping_gps_joueurs"] = persisted
-        else:
-            st.session_state["mapping_gps_joueurs"] = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
-            sauvegarder_mapping_gps_persistant(st.session_state["mapping_gps_joueurs"])
-    if "gps_mapping" not in st.session_state:
-        st.session_state["gps_mapping"] = dict(st.session_state["mapping_gps_joueurs"])
+    try:
+        if "df_raw" not in st.session_state:
+            st.session_state["df_raw"] = None
+        if "uploaded_file_sig" not in st.session_state:
+            st.session_state["uploaded_file_sig"] = None
+        if "step2_validated" not in st.session_state:
+            st.session_state["step2_validated"] = False
+        if "mapping_gps_joueurs" not in st.session_state:
+            # Chargement persistant depuis fichier JSON ou dictionnaire officiel
+            persisted = charger_mapping_gps_persistant()
+            if persisted:
+                st.session_state["mapping_gps_joueurs"] = persisted
+            else:
+                st.session_state["mapping_gps_joueurs"] = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
+                sauvegarder_mapping_gps_persistant(st.session_state["mapping_gps_joueurs"])
+        if "gps_mapping" not in st.session_state:
+            st.session_state["gps_mapping"] = dict(st.session_state["mapping_gps_joueurs"])
+    except Exception as e:
+        st.error(f"Erreur GPS : {e}")
+        st.session_state.setdefault("df_raw", None)
+        st.session_state.setdefault("uploaded_file_sig", None)
+        st.session_state.setdefault("step2_validated", False)
+        st.session_state.setdefault("mapping_gps_joueurs", {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()})
+        st.session_state.setdefault("gps_mapping", dict(st.session_state["mapping_gps_joueurs"]))
 
     is_step1_done = st.session_state.get("df_raw") is not None
     is_step2_done = is_step1_done and bool(st.session_state.get("step2_validated", False))
@@ -5604,8 +5618,8 @@ def main() -> None:
         )
 
         if uploaded_file is None:
-            if st.session_state.get("df_raw") is not None and st.session_state.get("gps_data_loaded"):
-                pass
+            if st.session_state.get("df_raw") is not None:
+                st.session_state["gps_data_loaded"] = True
             else:
                 col_msg, col_demo = st.columns([3.8, 1.2])
                 with col_msg:
@@ -5651,10 +5665,10 @@ def main() -> None:
                     st.toast("Mode démonstration actif avec les données de simulation RCA.")
                     st.rerun()
                 else:
-                    st.session_state["df_raw"] = None
-                    st.session_state["uploaded_file_sig"] = None
-                    st.session_state["gps_data_loaded"] = False
-                    st.session_state["step2_validated"] = False
+                    st.session_state.setdefault("df_raw", None)
+                    st.session_state.setdefault("uploaded_file_sig", None)
+                    st.session_state.setdefault("gps_data_loaded", False)
+                    st.session_state.setdefault("step2_validated", False)
                     # BLOQUE STRICTEMENT L'EXÉCUTION TANT QU'AUCUN FICHIER N'EST CHARGÉ
                     return
 
