@@ -193,9 +193,29 @@ with rpe_container:
 
 # Couleur dynamique selon la valeur RPE choisie
 rpe_color = RPE_COLORS.get(rpe, "#eab308")
-pct = int((rpe / 10) * 100)
-fill_pct = 4 if rpe == 0 else pct
-track_gradient = f"linear-gradient(to right, {rpe_color} 0%, {rpe_color} {fill_pct}%, rgba(140, 150, 160, 0.24) {fill_pct}%, rgba(140, 150, 160, 0.24) 100%)"
+if rpe == 0:
+    fill_stop = "0%"
+elif rpe == 10:
+    fill_stop = "100%"
+else:
+    fill_stop = f"calc(23px + (100% - 46px) * {rpe / 10:.1f})"
+
+track_gradient = (
+    f"linear-gradient(to right, transparent 0%, transparent {fill_stop}, "
+    f"#1E293B {fill_stop}, #1E293B 100%), "
+    "linear-gradient(90deg, #10B981 0%, #F59E0B 40%, #EF4444 80%, #7F1D1D 100%)"
+)
+
+
+def _rpe_sel(sub: str = "") -> str:
+    """Retourne les sélecteurs CSS scopés au conteneur RPE (spécificité >= assets/style.css)."""
+    suffix = f" {sub}" if sub else ""
+    return ",\n".join([
+        f':is([data-testid="stMain"], section.main) .st-key-rpe_container{suffix}',
+        f':is([data-testid="stMain"], section.main) div[class*="st-key-rpe_container"]{suffix}',
+        f':is([data-testid="stMain"], section.main) div:has(.rpe-anchor){suffix}',
+    ])
+
 
 rpe_banner_html = textwrap.dedent(f"""
 <div style="background: linear-gradient(135deg, #0C2340 0%, #16365D 100%); border: 1.5px solid {rpe_color}; border-left: 6px solid {rpe_color}; border-radius: 12px; padding: 10px 16px; margin-top: 8px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 3px 10px rgba(12, 35, 64, 0.16);">
@@ -204,72 +224,20 @@ rpe_banner_html = textwrap.dedent(f"""
 </div>
 """).strip()
 
-rpe_css = textwrap.dedent(f"""
-<style>
-.st-key-rpe_container,
-div[class*="st-key-rpe_container"],
-div:has(.rpe-anchor) {{
-    --primary-color: {rpe_color} !important;
-    --st-color-primary: {rpe_color} !important;
-    padding: 12px 6px 8px 6px !important;
-}}
-.st-key-rpe_container div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div,
-div[class*="st-key-rpe_container"] div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div,
-div:has(.rpe-anchor) div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {{
-    height: 18px !important;
-    min-height: 18px !important;
-    border-radius: 9px !important;
-}}
-.st-key-rpe_container div[data-baseweb="slider"] div[style*="linear-gradient"],
-.st-key-rpe_container div[data-baseweb="slider"] > div > div > div:last-child,
-.st-key-rpe_container div[data-baseweb="slider"] > div > div:last-child,
-div[class*="st-key-rpe_container"] div[data-baseweb="slider"] div[style*="linear-gradient"],
-div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div > div > div:last-child,
-div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div > div:last-child,
-div:has(.rpe-anchor) div[data-baseweb="slider"] div[style*="linear-gradient"],
-div:has(.rpe-anchor) div[data-baseweb="slider"] > div > div > div:last-child,
-div:has(.rpe-anchor) div[data-baseweb="slider"] > div > div:last-child {{
-    height: 18px !important;
-    min-height: 18px !important;
-    border-radius: 9px !important;
-    background: {track_gradient} !important;
-}}
-div[data-testid="stSlider"] div[role="slider"],
-.st-key-rpe_container div[role="slider"],
-div[class*="st-key-rpe_container"] div[role="slider"],
-div:has(.rpe-anchor) div[role="slider"] {{
-    height: 34px !important;
-    width: 34px !important;
-    background-color: #F2A900 !important;
-    background: #F2A900 !important;
-    border: 3px solid #0C2340 !important;
-    border-radius: 50% !important;
-    box-shadow: 0 0 10px rgba(242, 169, 0, 0.6) !important;
-    top: calc(50% - 17px) !important;
-}}
-div[data-testid="stSlider"] div[data-testid="stSliderThumbValue"],
-.st-key-rpe_container div[data-testid="stSliderThumbValue"],
-div[class*="st-key-rpe_container"] div[data-testid="stSliderThumbValue"],
-div:has(.rpe-anchor) div[data-testid="stSliderThumbValue"] {{
-    font-weight: 800 !important;
-    font-size: 1rem !important;
-    color: #F2A900 !important;
-    background-color: #0C2340 !important;
-    border: 1.5px solid #F2A900 !important;
-    border-radius: 8px !important;
-    padding: 2px 8px !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25) !important;
-    top: auto !important;
-    bottom: calc(100% + 8px) !important;
-    white-space: nowrap !important;
-}}
-.st-key-rpe_container div[data-baseweb="slider"] > div,
-div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div,
-div:has(.rpe-anchor) div[data-baseweb="slider"] > div {{
-    background-color: transparent !important;
-}}
-</style>
-""").strip()
+rpe_css_rules = [
+    f"{_rpe_sel()} {{\n    --primary-color: {rpe_color} !important;\n    --st-color-primary: {rpe_color} !important;\n    padding: 10px 6px 6px 6px !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"]')} {{\n    padding: 16px 4px 22px 4px !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] label[data-testid=\"stWidgetLabel\"]')} {{\n    margin-bottom: 22px !important;\n    font-weight: 700 !important;\n    color: #0C2340 !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[data-baseweb=\"slider\"] > div:first-child')} {{\n    background-color: transparent !important;\n    background: transparent !important;\n    padding: 18px 0 14px 0 !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[data-baseweb=\"slider\"] > div:first-child > div')} {{\n    position: relative !important;\n    height: 46px !important;\n    min-height: 46px !important;\n    width: 100% !important;\n    border-radius: 999px !important;\n    background: transparent !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[data-baseweb=\"slider\"] > div:first-child > div > div:first-child')} {{\n    position: absolute !important;\n    top: 0 !important;\n    bottom: 0 !important;\n    left: 23px !important;\n    right: 23px !important;\n    height: 46px !important;\n    min-height: 46px !important;\n    margin: 0 !important;\n    padding: 0 !important;\n    border: none !important;\n    background: transparent !important;\n    box-sizing: border-box !important;\n    overflow: visible !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[data-baseweb=\"slider\"] > div:first-child > div > div:last-child')} {{\n    height: 46px !important;\n    min-height: 46px !important;\n    width: 100% !important;\n    border-radius: 999px !important;\n    border: 1.5px solid rgba(255, 255, 255, 0.14) !important;\n    background: {track_gradient} !important;\n    box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(12, 35, 64, 0.22) !important;\n    box-sizing: border-box !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[role=\"slider\"]')} {{\n    top: 0 !important;\n    height: 42px !important;\n    width: 42px !important;\n    border-radius: 50% !important;\n    background: #FFFFFF !important;\n    background-color: #FFFFFF !important;\n    border: 2px solid #E2E8F0 !important;\n    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35) !important;\n    box-sizing: border-box !important;\n    cursor: grab !important;\n    transition: box-shadow 0.12s ease, scale 0.12s ease !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[role=\"slider\"]:active')} {{\n    cursor: grabbing !important;\n    scale: 1.05 !important;\n    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.42) !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[data-testid=\"stSliderThumbValue\"]')} {{\n    font-weight: 800 !important;\n    font-size: 0.95rem !important;\n    color: #F2A900 !important;\n    background-color: #0C2340 !important;\n    border: 1.5px solid #F2A900 !important;\n    border-radius: 999px !important;\n    padding: 3px 10px !important;\n    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28) !important;\n    top: auto !important;\n    bottom: calc(100% + 10px) !important;\n    white-space: nowrap !important;\n}}",
+    f"{_rpe_sel('div[data-testid=\"stSlider\"] div[data-testid=\"stSliderTickBar\"]')} {{\n    opacity: 0.9 !important;\n    color: #334155 !important;\n    font-weight: 600 !important;\n    font-size: 0.78rem !important;\n    top: calc(100% - 6px) !important;\n    margin-top: 0 !important;\n}}",
+]
+rpe_css = "<style>\n" + "\n".join(rpe_css_rules) + "\n</style>"
 
 st.markdown(rpe_banner_html, unsafe_allow_html=True)
 st.markdown(rpe_css, unsafe_allow_html=True)

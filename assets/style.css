@@ -317,10 +317,10 @@ div[data-baseweb="popover"] ul[role="listbox"] li:hover {
     box-shadow: 0 0 10px rgba(242, 169, 0, 0.6) !important;
     top: calc(50% - 17px) !important;
     cursor: grab !important;
-    transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+    transition: scale 0.15s ease, box-shadow 0.15s ease !important;
 }
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] div[role="slider"]:active {
-    transform: scale(1.10) !important;
+    scale: 1.08 !important;
     cursor: grabbing !important;
 }
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] div[data-testid="stSliderThumbValue"] {
