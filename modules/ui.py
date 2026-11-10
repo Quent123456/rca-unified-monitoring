@@ -338,6 +338,61 @@ def inject_rca_page_layout(
             transition: all 0.2s ease;
         }}
 
+        /* Cartes natives d'accueil connectées via st.switch_page */
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"] {{
+            background: #FFFFFF !important;
+            border-radius: 12px !important;
+            padding: 20px !important;
+            border: 1px solid #E1E8F0 !important;
+            border-top: 4px solid #1F4E79 !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+            transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            min-height: 225px !important;
+            justify-content: space-between !important;
+            box-sizing: border-box !important;
+        }}
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"]:hover {{
+            transform: translateY(-6px) scale(1.02) !important;
+            box-shadow: 0 12px 24px rgba(31, 78, 121, 0.18) !important;
+            border-top: 4px solid #D4AF37 !important;
+        }}
+        .rca-card-body h3 {{
+            color: #1F4E79 !important;
+            font-size: 1.15rem !important;
+            font-weight: 700 !important;
+            margin: 0 0 8px 0 !important;
+        }}
+        .rca-card-body p {{
+            color: #556980 !important;
+            font-size: 0.88rem !important;
+            line-height: 1.45 !important;
+            margin: 0 0 12px 0 !important;
+        }}
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"] button {{
+            background-color: #1F4E79 !important;
+            color: #FFFFFF !important;
+            border: 1px solid #1F4E79 !important;
+            border-radius: 8px !important;
+            font-size: 0.88rem !important;
+            font-weight: 700 !important;
+            min-height: 44px !important;
+            transition: all 0.2s ease !important;
+        }}
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"] button * {{
+            color: #FFFFFF !important;
+            font-weight: 700 !important;
+        }}
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"]:hover button,
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"] button:hover {{
+            background-color: #D4AF37 !important;
+            border-color: #D4AF37 !important;
+            color: #1F4E79 !important;
+        }}
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"]:hover button *,
+        :is([data-testid="stMain"], section.main) div[class*="st-key-home_card_"] button:hover * {{
+            color: #1F4E79 !important;
+        }}
+
         /* Cartes génériques blanches de la page d'accueil */
         .stCard {{
             background-color: #FFFFFF !important;

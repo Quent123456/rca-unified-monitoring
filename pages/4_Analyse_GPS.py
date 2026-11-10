@@ -2038,122 +2038,141 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
             st.rerun()
 
     mapping: Dict[Union[int, str], str] = {}
-    col_gauche, col_droite = st.columns(2)
-    split_index = (len(liste_gps_detectes) + 1) // 2
+    form_choices: Dict[int, str] = {}
 
-    # 3. Boucle STRICTE sur la liste des identifiants détectés (aucun range() utilisé)
-    for idx, gps_id in enumerate(liste_gps_detectes):
-        conteneur = col_gauche if idx < split_index else col_droite
+    with st.form("association_boitiers"):
+        col_gauche, col_droite = st.columns(2)
+        split_index = (len(liste_gps_detectes) + 1) // 2
 
-        with conteneur:
-            c_photo, c_select = st.columns([1, 3])
+        # 3. Boucle STRICTE sur la liste des identifiants détectés (dans st.form pour éviter tout rerun par clic)
+        for idx, gps_id in enumerate(liste_gps_detectes):
+            conteneur = col_gauche if idx < split_index else col_droite
 
-            prev = (
-                saved_session.get(gps_id)
-                or saved_session.get(str(gps_id))
-                or reference_mapping.get(str(gps_id))
-                or saved_disk.get(str(gps_id))
-                or DEFAULT_GPS_MAPPING.get(gps_id)
-            )
-            default_idx = options.index(prev) if prev in options else 0
+            with conteneur:
+                c_photo, c_select = st.columns([1, 3])
 
-            def _enregistrer_changement_boitier(gps_id_target: int = gps_id):
-                k_w = f"gps_sel_boitier_{gps_id_target}"
-                val_w = st.session_state.get(k_w)
-                if val_w and val_w not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-                    sauvegarder_mapping_gps_persistant({str(gps_id_target): val_w})
-
-            with c_select:
-                choix = st.selectbox(
-                    f"Boîtier GPS n°{gps_id}",
-                    options=options,
-                    index=default_idx,
-                    format_func=format_affichage_joueur,
-                    key=f"gps_sel_boitier_{gps_id}",
-                    on_change=_enregistrer_changement_boitier,
+                prev = (
+                    saved_session.get(gps_id)
+                    or saved_session.get(str(gps_id))
+                    or reference_mapping.get(str(gps_id))
+                    or saved_disk.get(str(gps_id))
+                    or DEFAULT_GPS_MAPPING.get(gps_id)
                 )
+                default_idx = options.index(prev) if prev in options else 0
 
-                if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-                    poste_d = joueurs_data.get(choix, "Inconnu")
-                    grp_rca_defaut = mapper_poste_vers_groupe_rca(poste_d, choix)
-
-                    # Initialisation de la mémoire de session pour les surcharges de postes
-                    if "session_player_postes" not in st.session_state:
-                        st.session_state["session_player_postes"] = {}
-
-                    groupes_options = ["5 de devant", "3ème Ligne", "Trois-quarts"]
-                    grp_actuel = st.session_state["session_player_postes"].get(choix, grp_rca_defaut)
-                    if grp_actuel not in groupes_options:
-                        grp_actuel = grp_rca_defaut
-
-                    idx_grp = groupes_options.index(grp_actuel) if grp_actuel in groupes_options else 2
-
-                    c_sel_grp, c_chk_persist = st.columns([1.7, 1.3])
-                    with c_sel_grp:
-                        nouveau_grp = st.selectbox(
-                            f"Poste séance ({choix})",
-                            options=groupes_options,
-                            index=idx_grp,
-                            key=f"session_grp_{gps_id}_{choix}",
-                            help="Modifier en temps réel la catégorie de poste de ce joueur pour la séance en cours",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state["session_player_postes"][choix] = nouveau_grp
-                    with c_chk_persist:
-                        sauvegarder_defaut = st.checkbox(
-                            "📌 Mémoriser",
-                            key=f"chk_save_def_{gps_id}_{choix}",
-                            help="Définir également ce groupe comme poste habituel par défaut dans l'effectif",
-                        )
-                        if sauvegarder_defaut and joueurs_data.get(choix) != nouveau_grp:
-                            joueurs_data[choix] = nouveau_grp
-                            sauvegarder_joueur_personnalise(choix, nouveau_grp, groupe=nouveau_grp)
-                            st.toast(f"Poste par défaut de {choix} enregistré : {nouveau_grp}")
-
-                    if nouveau_grp == "5 de devant":
-                        badge_html = '<span style="background-color:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 5 de devant</span>'
-                    elif nouveau_grp == "3ème Ligne":
-                        badge_html = '<span style="background-color:#F0FDF4;color:#15803D;border:1px solid #BBF7D0;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 3ème Ligne</span>'
-                    else:
-                        badge_html = '<span style="background-color:#FEF2F2;color:#B91C1C;border:1px solid #FECACA;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 Trois-quarts</span>'
-
-                    st.markdown(
-                        f"<div style='font-size:0.78rem;color:#475569;margin-top:-4px;margin-bottom:8px;'>"
-                        f"Profil : <em>{poste_d}</em> &nbsp;➔&nbsp; Séance : {badge_html}</div>",
-                        unsafe_allow_html=True,
+                with c_select:
+                    choix = st.selectbox(
+                        f"Boîtier GPS n°{gps_id}",
+                        options=options,
+                        index=default_idx,
+                        format_func=format_affichage_joueur,
+                        key=f"gps_sel_boitier_{gps_id}",
                     )
+                    form_choices[gps_id] = choix
 
-            with c_photo:
-                if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-                    photo = obtenir_chemin_photo(choix)
-                    if photo and os.path.isfile(photo):
-                        st.image(photo, width=48)
-                    else:
-                        avatar_b64 = get_player_image_b64(choix, size=48)
+                    if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+                        poste_d = joueurs_data.get(choix, "Inconnu")
+                        grp_rca_defaut = mapper_poste_vers_groupe_rca(poste_d, choix)
+                        grp_actuel = st.session_state.get("session_player_postes", {}).get(choix, grp_rca_defaut)
+                        if grp_actuel == "5 de devant":
+                            badge_html = '<span style="background-color:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 5 de devant</span>'
+                        elif grp_actuel == "3ème Ligne":
+                            badge_html = '<span style="background-color:#F0FDF4;color:#15803D;border:1px solid #BBF7D0;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 3ème Ligne</span>'
+                        else:
+                            badge_html = '<span style="background-color:#FEF2F2;color:#B91C1C;border:1px solid #FECACA;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 Trois-quarts</span>'
+
                         st.markdown(
-                            f"<div style='width:48px;height:48px;border-radius:50%;overflow:hidden;border:2px solid #003399;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,51,153,0.15);'>"
-                            f"<img src='{avatar_b64}' style='width:48px;height:48px;object-fit:cover;' /></div>",
+                            f"<div style='font-size:0.78rem;color:#475569;margin-top:-4px;margin-bottom:8px;'>"
+                            f"Profil : <em>{poste_d}</em> &nbsp;➔&nbsp; Séance : {badge_html}</div>",
                             unsafe_allow_html=True,
                         )
-                else:
-                    st.markdown(
-                        "<div style='width:48px;height:48px;border-radius:50%;"
-                        "background:#E2E8F0;display:flex;align-items:center;"
-                        "justify-content:center;color:#94A3B8;font-size:1.4rem;'>?</div>",
-                        unsafe_allow_html=True,
-                    )
 
-            if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-                mapping[gps_id] = choix
-                mapping[str(gps_id)] = choix
-                st.session_state["gps_mapping"][gps_id] = choix
-                st.session_state["gps_mapping"][str(gps_id)] = choix
-                st.session_state["mapping_gps_joueurs"][gps_id] = choix
-                st.session_state["mapping_gps_joueurs"][str(gps_id)] = choix
+                with c_photo:
+                    if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+                        photo = obtenir_chemin_photo(choix)
+                        if photo and os.path.isfile(photo):
+                            st.image(photo, width=48)
+                        else:
+                            avatar_b64 = get_player_image_b64(choix, size=48)
+                            st.markdown(
+                                f"<div style='width:48px;height:48px;border-radius:50%;overflow:hidden;border:2px solid #003399;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,51,153,0.15);'>"
+                                f"<img src='{avatar_b64}' style='width:48px;height:48px;object-fit:cover;' /></div>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown(
+                            "<div style='width:48px;height:48px;border-radius:50%;"
+                            "background:#E2E8F0;display:flex;align-items:center;"
+                            "justify-content:center;color:#94A3B8;font-size:1.4rem;'>?</div>",
+                            unsafe_allow_html=True,
+                        )
 
-    # Synchronisation immédiate des attributions actives dans le stockage persistant
-    if mapping:
+        submitted_boitiers = st.form_submit_button(
+            "💾 Appliquer les associations des boîtiers",
+            type="secondary",
+            use_container_width=True,
+        )
+
+    for gps_id, choix in form_choices.items():
+        if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+            mapping[gps_id] = choix
+            mapping[str(gps_id)] = choix
+            st.session_state["gps_mapping"][gps_id] = choix
+            st.session_state["gps_mapping"][str(gps_id)] = choix
+            st.session_state["mapping_gps_joueurs"][gps_id] = choix
+            st.session_state["mapping_gps_joueurs"][str(gps_id)] = choix
+
+    # Sauvegarde persistante uniquement lors de la soumission explicite du formulaire
+    if submitted_boitiers and mapping:
         sauvegarder_mapping_gps_persistant(mapping)
+        st.toast("✅ Associations des boîtiers enregistrées.")
+
+    # Ajustement optionnel des postes de séance dans un formulaire secondaire replié
+    assigned_pairs = [
+        (g_id, form_choices[g_id])
+        for g_id in liste_gps_detectes
+        if form_choices.get(g_id) not in [None, placeholder, TRIGGER_NOUVEAU_JOUEUR]
+    ]
+    if assigned_pairs:
+        if "session_player_postes" not in st.session_state:
+            st.session_state["session_player_postes"] = {}
+        with st.expander("🏉 Affiner manuellement les postes pour cette séance (optionnel)", expanded=False):
+            with st.form("postes_seance_form"):
+                groupes_options = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+                col_p1, col_p2 = st.columns(2)
+                half_p = (len(assigned_pairs) + 1) // 2
+                poste_updates: Dict[str, Tuple[str, bool]] = {}
+                for i_p, (g_id, p_choix) in enumerate(assigned_pairs):
+                    target_c = col_p1 if i_p < half_p else col_p2
+                    poste_d = joueurs_data.get(p_choix, "Inconnu")
+                    grp_def = mapper_poste_vers_groupe_rca(poste_d, p_choix)
+                    grp_curr = st.session_state["session_player_postes"].get(p_choix, grp_def)
+                    if grp_curr not in groupes_options:
+                        grp_curr = grp_def
+                    idx_g = groupes_options.index(grp_curr)
+                    with target_c:
+                        c_sg, c_chk = st.columns([2, 1.2])
+                        with c_sg:
+                            sel_g = st.selectbox(
+                                f"Boîtier #{g_id} — {p_choix}",
+                                options=groupes_options,
+                                index=idx_g,
+                                key=f"session_grp_{g_id}_{p_choix}",
+                            )
+                        with c_chk:
+                            save_d = st.checkbox(
+                                "📌 Mémoriser",
+                                key=f"chk_save_def_{g_id}_{p_choix}",
+                                help="Définir ce groupe comme poste par défaut dans l'effectif",
+                            )
+                        poste_updates[p_choix] = (sel_g, save_d)
+                if st.form_submit_button("✅ Appliquer les postes de séance", use_container_width=True):
+                    for p_choix, (sel_g, save_d) in poste_updates.items():
+                        st.session_state["session_player_postes"][p_choix] = sel_g
+                        if save_d and joueurs_data.get(p_choix) != sel_g:
+                            joueurs_data[p_choix] = sel_g
+                            sauvegarder_joueur_personnalise(p_choix, sel_g, groupe=sel_g)
+                    st.toast("✅ Postes de séance mis à jour.")
 
     # 4. Sécurité anti-doublon stricte lors de l'attribution des GPS
     joueurs_assignes: Dict[str, List[int]] = {}
