@@ -284,36 +284,39 @@ div[data-baseweb="popover"] ul[role="listbox"] li:hover {
    4. SLIDERS & JAUGES (Rail épaissi, poignée tactile, badge sportif)
    ---------------------------------------------------------------------------- */
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] {
-    padding: 8px 4px 4px 4px !important;
+    padding: 12px 4px 8px 4px !important;
 }
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {
-    min-height: 10px !important;
-    border-radius: 999px !important;
+    height: 18px !important;
+    min-height: 18px !important;
+    border-radius: 9px !important;
 }
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] div[role="slider"] {
-    width: 28px !important;
-    height: 28px !important;
-    border: 3px solid #FFFFFF !important;
-    border-radius: 50% !important;
+    width: 34px !important;
+    height: 34px !important;
     background-color: #F2A900 !important;
-    box-shadow: 0 2px 8px rgba(12, 35, 64, 0.35), 0 0 0 2px rgba(242, 169, 0, 0.25) !important;
+    border: 3px solid #0C2340 !important;
+    border-radius: 50% !important;
+    box-shadow: 0 0 10px rgba(242, 169, 0, 0.6) !important;
+    top: calc(50% - 17px) !important;
     cursor: grab !important;
     transition: transform 0.15s ease, box-shadow 0.15s ease !important;
 }
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] div[role="slider"]:active {
-    transform: scale(1.12) !important;
+    transform: scale(1.10) !important;
     cursor: grabbing !important;
 }
 :is([data-testid="stMain"], section.main) div[data-testid="stSlider"] div[data-testid="stSliderThumbValue"] {
-    background-color: #0C2340 !important;
-    color: #F2A900 !important;
     font-weight: 800 !important;
-    font-size: 0.88rem !important;
-    padding: 3px 10px !important;
-    border-radius: 999px !important;
+    font-size: 1rem !important;
+    color: #F2A900 !important;
+    background-color: #0C2340 !important;
     border: 1.5px solid #F2A900 !important;
+    border-radius: 8px !important;
+    padding: 2px 8px !important;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22) !important;
-    margin-bottom: 6px !important;
+    top: auto !important;
+    bottom: calc(100% + 8px) !important;
     white-space: nowrap !important;
 }
 

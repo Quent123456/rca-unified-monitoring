@@ -3,6 +3,7 @@ pages/1_Saisie_Quotidienne.py
 Formulaire de saisie quotidienne (100% Google Sheets) avec recherche, mémorisation et masquage dynamique.
 """
 
+import textwrap
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime
@@ -22,31 +23,29 @@ st.markdown("Enregistrez la séance d'entraînement et le ressenti de chaque jou
 
 # ── CSS Personnalisé : Bouton Sticky & RPE ──────────────────────────────────────
 st.markdown(
-    """
-    <style>
-    /* Bouton d'enregistrement flottant (Sticky Bottom) */
-    div.stButton:has(button[kind="primary"]) {
-        position: fixed;
-        bottom: 14px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: calc(100% - 32px);
-        max-width: 680px;
-        z-index: 9999;
-        background: rgba(12, 35, 64, 0.94);
-        backdrop-filter: blur(10px);
-        padding: 10px 12px;
-        border-radius: 16px;
-        box-shadow: 0 -4px 20px rgba(12, 35, 64, 0.28);
-        border: 1.5px solid rgba(242, 169, 0, 0.35);
-    }
-    /* Marge inférieure pour éviter que le bouton flottant ne cache les derniers champs */
-    .main .block-container,
-    [data-testid="stMainBlockContainer"] {
-        padding-bottom: 110px !important;
-    }
-    </style>
-    """,
+    textwrap.dedent("""
+<style>
+div.stButton:has(button[kind="primary"]) {
+    position: fixed;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 32px);
+    max-width: 680px;
+    z-index: 9999;
+    background: rgba(12, 35, 64, 0.94);
+    backdrop-filter: blur(10px);
+    padding: 10px 12px;
+    border-radius: 16px;
+    box-shadow: 0 -4px 20px rgba(12, 35, 64, 0.28);
+    border: 1.5px solid rgba(242, 169, 0, 0.35);
+}
+.main .block-container,
+[data-testid="stMainBlockContainer"] {
+    padding-bottom: 110px !important;
+}
+</style>
+""").strip(),
     unsafe_allow_html=True,
 )
 
@@ -198,77 +197,82 @@ pct = int((rpe / 10) * 100)
 fill_pct = 4 if rpe == 0 else pct
 track_gradient = f"linear-gradient(to right, {rpe_color} 0%, {rpe_color} {fill_pct}%, rgba(140, 150, 160, 0.24) {fill_pct}%, rgba(140, 150, 160, 0.24) 100%)"
 
-st.markdown(
-    f"""
-    <div style="background: linear-gradient(135deg, #0C2340 0%, #16365D 100%); border: 1.5px solid {rpe_color}; border-left: 6px solid {rpe_color}; border-radius: 12px; padding: 10px 16px; margin-top: 4px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 3px 10px rgba(12, 35, 64, 0.16);">
-        <span style="color: #E2E8F0; font-weight: 600; font-size: 0.92rem;">Niveau d'effort sélectionné</span>
-        <span style="color: {rpe_color}; font-weight: 800; font-size: 1.05rem;">{RPE_LABELS[rpe]}</span>
-    </div>
-    <style>
-    /* ── Redéfinition des variables natives Streamlit pour le conteneur RPE ── */
-    .st-key-rpe_container,
-    div[class*="st-key-rpe_container"],
-    div:has(.rpe-anchor) {{
-        --primary-color: {rpe_color} !important;
-        --st-color-primary: {rpe_color} !important;
-        padding: 8px 4px 4px 4px !important;
-    }}
+rpe_banner_html = textwrap.dedent(f"""
+<div style="background: linear-gradient(135deg, #0C2340 0%, #16365D 100%); border: 1.5px solid {rpe_color}; border-left: 6px solid {rpe_color}; border-radius: 12px; padding: 10px 16px; margin-top: 8px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 3px 10px rgba(12, 35, 64, 0.16);">
+<span style="color: #E2E8F0; font-weight: 600; font-size: 0.92rem;">Niveau d'effort sélectionné</span>
+<span style="color: {rpe_color}; font-weight: 800; font-size: 1.05rem;">{RPE_LABELS[rpe]}</span>
+</div>
+""").strip()
 
-    /* ── Barre de fond (Track) : Pleine largeur, épaisseur 22px et dégradé dynamique ── */
-    .st-key-rpe_container div[data-baseweb="slider"] div[style*="linear-gradient"],
-    .st-key-rpe_container div[data-baseweb="slider"] > div > div > div:last-child,
-    .st-key-rpe_container div[data-baseweb="slider"] > div > div:last-child,
-    div[class*="st-key-rpe_container"] div[data-baseweb="slider"] div[style*="linear-gradient"],
-    div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div > div > div:last-child,
-    div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div > div:last-child,
-    div:has(.rpe-anchor) div[data-baseweb="slider"] div[style*="linear-gradient"],
-    div:has(.rpe-anchor) div[data-baseweb="slider"] > div > div > div:last-child,
-    div:has(.rpe-anchor) div[data-baseweb="slider"] > div > div:last-child {{
-        height: 22px !important;
-        min-height: 22px !important;
-        border-radius: 11px !important;
-        background: {track_gradient} !important;
-    }}
+rpe_css = textwrap.dedent(f"""
+<style>
+.st-key-rpe_container,
+div[class*="st-key-rpe_container"],
+div:has(.rpe-anchor) {{
+    --primary-color: {rpe_color} !important;
+    --st-color-primary: {rpe_color} !important;
+    padding: 12px 6px 8px 6px !important;
+}}
+.st-key-rpe_container div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div,
+div[class*="st-key-rpe_container"] div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div,
+div:has(.rpe-anchor) div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {{
+    height: 18px !important;
+    min-height: 18px !important;
+    border-radius: 9px !important;
+}}
+.st-key-rpe_container div[data-baseweb="slider"] div[style*="linear-gradient"],
+.st-key-rpe_container div[data-baseweb="slider"] > div > div > div:last-child,
+.st-key-rpe_container div[data-baseweb="slider"] > div > div:last-child,
+div[class*="st-key-rpe_container"] div[data-baseweb="slider"] div[style*="linear-gradient"],
+div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div > div > div:last-child,
+div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div > div:last-child,
+div:has(.rpe-anchor) div[data-baseweb="slider"] div[style*="linear-gradient"],
+div:has(.rpe-anchor) div[data-baseweb="slider"] > div > div > div:last-child,
+div:has(.rpe-anchor) div[data-baseweb="slider"] > div > div:last-child {{
+    height: 18px !important;
+    min-height: 18px !important;
+    border-radius: 9px !important;
+    background: {track_gradient} !important;
+}}
+div[data-testid="stSlider"] div[role="slider"],
+.st-key-rpe_container div[role="slider"],
+div[class*="st-key-rpe_container"] div[role="slider"],
+div:has(.rpe-anchor) div[role="slider"] {{
+    height: 34px !important;
+    width: 34px !important;
+    background-color: #F2A900 !important;
+    background: #F2A900 !important;
+    border: 3px solid #0C2340 !important;
+    border-radius: 50% !important;
+    box-shadow: 0 0 10px rgba(242, 169, 0, 0.6) !important;
+    top: calc(50% - 17px) !important;
+}}
+div[data-testid="stSlider"] div[data-testid="stSliderThumbValue"],
+.st-key-rpe_container div[data-testid="stSliderThumbValue"],
+div[class*="st-key-rpe_container"] div[data-testid="stSliderThumbValue"],
+div:has(.rpe-anchor) div[data-testid="stSliderThumbValue"] {{
+    font-weight: 800 !important;
+    font-size: 1rem !important;
+    color: #F2A900 !important;
+    background-color: #0C2340 !important;
+    border: 1.5px solid #F2A900 !important;
+    border-radius: 8px !important;
+    padding: 2px 8px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25) !important;
+    top: auto !important;
+    bottom: calc(100% + 8px) !important;
+    white-space: nowrap !important;
+}}
+.st-key-rpe_container div[data-baseweb="slider"] > div,
+div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div,
+div:has(.rpe-anchor) div[data-baseweb="slider"] > div {{
+    background-color: transparent !important;
+}}
+</style>
+""").strip()
 
-    /* ── Curseur (Thumb) : Large 34px tactile, contour blanc et halo ── */
-    .st-key-rpe_container div[role="slider"],
-    div[class*="st-key-rpe_container"] div[role="slider"],
-    div:has(.rpe-anchor) div[role="slider"] {{
-        background-color: {rpe_color} !important;
-        background: {rpe_color} !important;
-        border: 3.5px solid #ffffff !important;
-        box-shadow: 0 0 12px {rpe_color}99, 0 3px 8px rgba(0, 0, 0, 0.30) !important;
-        height: 34px !important;
-        width: 34px !important;
-        border-radius: 50% !important;
-    }}
-
-    /* ── Valeur au-dessus du curseur en badge sportif dynamique ── */
-    .st-key-rpe_container div[data-testid="stSliderThumbValue"],
-    div[class*="st-key-rpe_container"] div[data-testid="stSliderThumbValue"],
-    div:has(.rpe-anchor) div[data-testid="stSliderThumbValue"] {{
-        color: {rpe_color} !important;
-        font-weight: 800 !important;
-        font-size: 0.96rem !important;
-        background-color: #0C2340 !important;
-        padding: 4px 12px !important;
-        border-radius: 999px !important;
-        border: 2px solid {rpe_color} !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28) !important;
-        white-space: nowrap !important;
-        margin-bottom: 10px !important;
-    }}
-
-    /* ── Sécurité : Conteneur extérieur transparent ── */
-    .st-key-rpe_container div[data-baseweb="slider"] > div,
-    div[class*="st-key-rpe_container"] div[data-baseweb="slider"] > div,
-    div:has(.rpe-anchor) div[data-baseweb="slider"] > div {{
-        background-color: transparent !important;
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown(rpe_banner_html, unsafe_allow_html=True)
+st.markdown(rpe_css, unsafe_allow_html=True)
 
 col4, col5 = st.columns([1.2, 1])
 with col4:
