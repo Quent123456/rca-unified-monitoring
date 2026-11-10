@@ -78,8 +78,8 @@ except Exception as e:
 min_date = pd.Timestamp.now().normalize() - pd.Timedelta(days=35)
 sessions_all = df_raw[df_raw["session_date"] >= min_date].copy()
 
-# Affichage des filtres principaux en colonnes
-col_f1, col_f2 = st.columns(2)
+# Affichage des filtres principaux en colonnes équilibrées
+col_f1, col_f2 = st.columns([1.25, 1])
 with col_f1:
     filtre_groupe = st.radio(
         "Filtrer l'affichage (groupe d'entraînement) :",
