@@ -23,9 +23,9 @@
     "22": "SELTZER Antoine",
     "18": "WAEYAERT Thomas"
   },
-  "derniere_mise_a_jour": "10/11/2026 17:01:25",
+  "derniere_mise_a_jour": "10/11/2026 17:01:27",
   "nb_boitiers": 22,
-  "last_validated_file_sig": "DB 061126.xlsx_68169",
+  "last_validated_file_sig": "Données brutes -J7.xlsx_58010",
   "splits_participation": {
     "PECQUERY Thomas:::Split 1": true,
     "PECQUERY Thomas:::Split 2": true,
@@ -125,6 +125,30 @@
     "MZE Mouhayam:::Split 3": true,
     "CARPENTIER Simon:::Split 1": true,
     "CARPENTIER Simon:::Split 2": true,
-    "CARPENTIER Simon:::Split 3": true
+    "CARPENTIER Simon:::Split 3": true,
+    "Jean-Étienne ( TIJ):::1er mi-temps": true,
+    "SAINTOMER Lucas:::1er mi-temps": false,
+    "FRION Quentin:::1er mi-temps": false,
+    "MARTIN Benjamin:::1er mi-temps": false,
+    "PANIZZO Demian:::1er mi-temps": false,
+    "PANIZZO Demian:::Split 1": true,
+    "PANIZZO Demian:::Split 2": true,
+    "VASELLI Enzo:::1er mi-temps": false,
+    "GRENET Paul:::1er mi-temps": false,
+    "SOTILLO Alejo:::1er mi-temps": false,
+    "TESSON Gabriel:::1er mi-temps": false,
+    "HARRY Max:::1er mi-temps": false,
+    "MZE Mouhayam:::1er mi-temps": false,
+    "PELESEUMA Ope:::1er mi-temps": true,
+    "CARPENTIER Maël:::1er mi-temps": false,
+    "TREMBLAY Brieuc:::1er mi-temps": false,
+    "PREVOTE Olivier:::1er mi-temps": false,
+    "PECQUERY Thomas:::1er mi-temps": false,
+    "SALUA Landry:::1er mi-temps": false,
+    "WAEYAERT Thomas:::1er mi-temps": false,
+    "ORION Lucas:::1er mi-temps": false,
+    "CARPENTIER Simon:::1er mi-temps": false,
+    "ULMUCK Victor:::1er mi-temps": false,
+    "SELTZER Antoine:::1er mi-temps": false
   }
 }
