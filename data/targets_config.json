@@ -1,26 +1,26 @@
 {
   "5 de devant": {
-    "Objectif Distance (m)": 4500.0,
-    "Obj. HSR": 250.0,
-    "Obj. VHSR": 50.0,
-    "Obj. ACC/DEC": 35.0
+    "Objectif Distance (m)": 5358.0,
+    "Obj. HSR": 380.0,
+    "Obj. VHSR": 213.0,
+    "Obj. ACC/DEC": 75.0
   },
   "3ème Ligne": {
-    "Objectif Distance (m)": 5500.0,
-    "Obj. HSR": 450.0,
-    "Obj. VHSR": 100.0,
-    "Obj. ACC/DEC": 45.0
+    "Objectif Distance (m)": 5495.0,
+    "Obj. HSR": 596.0,
+    "Obj. VHSR": 392.0,
+    "Obj. ACC/DEC": 95.0
   },
   "Trois-quarts": {
-    "Objectif Distance (m)": 6200.0,
-    "Obj. HSR": 700.0,
-    "Obj. VHSR": 250.0,
+    "Objectif Distance (m)": 5885.0,
+    "Obj. HSR": 604.0,
+    "Obj. VHSR": 574.0,
     "Obj. ACC/DEC": 50.0
   },
   "Tous les groupes": {
-    "Objectif Distance (m)": 5400.0,
-    "Obj. HSR": 466.7,
-    "Obj. VHSR": 133.3,
-    "Obj. ACC/DEC": 43.3
+    "Objectif Distance (m)": 5579.3,
+    "Obj. HSR": 526.7,
+    "Obj. VHSR": 393.0,
+    "Obj. ACC/DEC": 73.3
   }
 }
