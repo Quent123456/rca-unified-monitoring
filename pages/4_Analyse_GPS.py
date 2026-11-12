@@ -328,8 +328,49 @@ def charger_joueurs_personnalises() -> Dict[str, Dict[str, Any]]:
     return {}
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def charger_effectif_google_sheets() -> Dict[str, str]:
+    """
+    Récupère les joueurs depuis l'onglet Google Sheets 'Effectif' s'il est configuré.
+    Retourne un dictionnaire { 'NOM Prénom': 'Poste' } sans jamais bloquer en mode local.
+    """
+    try:
+        try:
+            from modules import gsheet_sync
+        except (ImportError, ModuleNotFoundError):
+            import gsheet_sync
+
+        if not gsheet_sync.is_gsheet_configured():
+            return {}
+
+        df_gs = gsheet_sync.get_players()
+        if df_gs is None or df_gs.empty:
+            return {}
+
+        res: Dict[str, str] = {}
+        for _, row in df_gs.iterrows():
+            nom = str(row.get("nom", "")).strip().upper()
+            prenom = str(row.get("prenom", "")).strip()
+            poste = str(row.get("poste", "")).strip() or "Non spécifié"
+            if nom and prenom and nom.lower() != "inconnu":
+                res[f"{nom} {prenom}"] = poste
+        return res
+    except Exception:
+        return {}
+
+
 def synchroniser_effectif_avec_custom() -> None:
-    """Injecte les joueurs personnalisés dans le dictionnaire global joueurs_data."""
+    """Injecte les joueurs Google Sheets et personnalisés dans le dictionnaire global joueurs_data."""
+    try:
+        gs_players = charger_effectif_google_sheets()
+        existing_lower = {k.strip().lower() for k in joueurs_data}
+        for nom, poste in gs_players.items():
+            if nom.strip().lower() not in existing_lower:
+                joueurs_data[nom] = poste
+                existing_lower.add(nom.strip().lower())
+    except Exception:
+        pass
+
     custom = charger_joueurs_personnalises()
     for nom, info in custom.items():
         if isinstance(info, dict):
@@ -617,6 +658,99 @@ POSTE_VERS_GROUPE: Dict[str, str] = {
     "Arrières": "Trois-quarts",
     "Trois-quarts": "Trois-quarts",
 }
+
+GROUPES_POSTES_STEP2: List[str] = ["5 de devant", "3ème ligne", "Demi", "Trois-quarts"]
+
+
+def canonicalize_group_for_step3(groupe_val: Optional[str]) -> str:
+    """Normalise un libellé de groupe Étape 2 vers les 3 groupes officiels Étape 3 / PDF."""
+    g_clean = str(groupe_val or "").strip().lower()
+    if "5 de devant" in g_clean or "devant" in g_clean:
+        return "5 de devant"
+    if "3ème" in g_clean or "3eme" in g_clean or "3e" in g_clean:
+        return "3ème Ligne"
+    # "Demi" et "Trois-quarts" appartiennent au groupe collectif "Trois-quarts" des rapports/objectifs
+    return "Trois-quarts"
+
+
+def mapper_vers_groupe_step2(poste_ou_groupe: Optional[str], nom_joueur: str = "") -> str:
+    """
+    Résout le grand groupe de poste pour l'Étape 2 parmi :
+    ['5 de devant', '3ème ligne', 'Demi', 'Trois-quarts'].
+    """
+    p_clean = str(poste_ou_groupe or "").strip().lower()
+    nom_clean = str(nom_joueur or "").strip().lower()
+
+    # Surcharge personnalisée explicite si le joueur existe dans JOUEURS_CUSTOM_CACHE
+    custom_info = None
+    if nom_clean:
+        for c_nom, c_val in JOUEURS_CUSTOM_CACHE.items():
+            if c_nom.strip().lower() == nom_clean and isinstance(c_val, dict):
+                custom_info = c_val
+                break
+
+    # Vérifier d'abord une valeur déjà dans les 4 groupes cibles
+    if p_clean == "5 de devant":
+        return "5 de devant"
+    if p_clean in ["3ème ligne", "3eme ligne", "3e ligne"]:
+        return "3ème ligne"
+    if p_clean in ["demi", "demis", "demi de mêlée", "demi de melee", "demi d'ouverture", "demi d ouverture", "ouvreur", "ouvrière"]:
+        return "Demi"
+    if p_clean in ["trois-quarts", "trois quarts", "3/4"]:
+        return "Trois-quarts"
+
+    if custom_info:
+        c_grp = str(custom_info.get("groupe", "")).strip()
+        c_poste = str(custom_info.get("poste", "")).strip().lower()
+        if "demi" in c_poste and c_grp in ["", "Trois-quarts", "Demi"]:
+            return "Demi"
+        if c_grp == "5 de devant":
+            return "5 de devant"
+        if c_grp.lower() in ["3ème ligne", "3eme ligne"]:
+            return "3ème ligne"
+        if c_grp == "Demi":
+            return "Demi"
+        if c_grp == "Trois-quarts":
+            return "Trois-quarts"
+
+    if "demi" in p_clean:
+        return "Demi"
+
+    grp_3 = mapper_poste_vers_groupe_rca(str(poste_ou_groupe or ""), nom_joueur)
+    if grp_3 == "5 de devant":
+        return "5 de devant"
+    if grp_3 == "3ème Ligne":
+        return "3ème ligne"
+    return "Trois-quarts"
+
+
+def get_player_poste_and_group_step2(nom_joueur: str) -> Tuple[str, str]:
+    """Retourne (poste_specifique, groupe_step2) d'un joueur depuis le référentiel effectif."""
+    if not nom_joueur or nom_joueur in ["— Sélectionner un joueur —", "➕ [Créer un nouveau joueur...]", "-"]:
+        return "Non spécifié", "Trois-quarts"
+
+    poste_spec = joueurs_data.get(nom_joueur, "")
+    if not poste_spec:
+        n_low = nom_joueur.strip().lower()
+        for k, v in joueurs_data.items():
+            if k.strip().lower() == n_low:
+                poste_spec = v
+                break
+    poste_spec = poste_spec or "Non spécifié"
+    grp_step2 = mapper_vers_groupe_step2(poste_spec, nom_joueur)
+    return poste_spec, grp_step2
+
+
+def get_group_badge_style_step2(groupe_val: Optional[str]) -> Tuple[str, str, str]:
+    """Retourne (bg_hex, text_hex, border_hex) pour l'affichage coloré du groupe."""
+    g_low = str(groupe_val or "").strip().lower()
+    if "5 de devant" in g_low:
+        return "#EFF6FF", "#0C2340", "#93C5FD"
+    if "3ème" in g_low or "3eme" in g_low:
+        return "#F0FDF4", "#15803D", "#86EFAC"
+    if "demi" in g_low:
+        return "#FFFBEB", "#B45309", "#F2A900"
+    return "#FEF2F2", "#B91C1C", "#FCA5A5"
 
 # Objectifs athlétiques de référence par groupe (Moyenne individuelle cible par séance)
 OBJECTIFS_CONFIG: Dict[str, Dict[str, float]] = {
@@ -1261,26 +1395,53 @@ DEFAULT_GPS_MAPPING: Dict[int, str] = {
 CONFIG_GPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_rca_gps.json")
 
 
-def charger_mapping_gps_persistant() -> Dict[str, str]:
+def charger_memoire_gps_complete() -> Dict[str, Any]:
     """
-    Charge le dictionnaire d'association GPS -> Joueur depuis config_rca_gps.json s'il existe.
-    Retourne un dictionnaire normalisé { 'gps_id': 'Nom Joueur' }.
+    Charge la configuration persistante complète depuis config_rca_gps.json :
+    - mapping : { 'gps_id': 'Nom Joueur' }
+    - group_mapping : { 'gps_id': 'Groupe Step 2' }
+    - last_validated_file_sig : str | None
+    - splits_participation : dict
     """
+    result: Dict[str, Any] = {
+        "mapping": {},
+        "group_mapping": {},
+        "last_validated_file_sig": None,
+        "splits_participation": {},
+    }
     if os.path.exists(CONFIG_GPS_FILE):
         try:
             with open(CONFIG_GPS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    raw_map = data.get("mapping", data)
+                    raw_map = data.get("mapping", data if "mapping" not in data else {})
                     if isinstance(raw_map, dict):
-                        return {
+                        result["mapping"] = {
                             str(k).strip(): str(v).strip()
                             for k, v in raw_map.items()
-                            if v and str(v).strip() not in ["— Sélectionner un joueur —", "-"]
+                            if v and str(v).strip() not in ["— Sélectionner un joueur —", "➕ [Créer un nouveau joueur...]", "-"]
                         }
+                    raw_grp = data.get("group_mapping", {})
+                    if isinstance(raw_grp, dict):
+                        result["group_mapping"] = {
+                            str(k).strip(): str(v).strip()
+                            for k, v in raw_grp.items()
+                            if v and str(v).strip()
+                        }
+                    result["last_validated_file_sig"] = data.get("last_validated_file_sig")
+                    if isinstance(data.get("splits_participation"), dict):
+                        result["splits_participation"] = data["splits_participation"]
         except Exception:
             pass
-    return {}
+    return result
+
+
+def charger_mapping_gps_persistant() -> Dict[str, str]:
+    """
+    Charge le dictionnaire d'association GPS -> Joueur depuis config_rca_gps.json s'il existe.
+    Retourne un dictionnaire normalisé { 'gps_id': 'Nom Joueur' }.
+    """
+    return charger_memoire_gps_complete().get("mapping", {})
 
 
 def sauvegarder_mapping_gps_persistant(
@@ -1288,30 +1449,40 @@ def sauvegarder_mapping_gps_persistant(
     last_file_sig: Optional[str] = None,
     overwrite: bool = False,
     splits_cache: Optional[Dict[Any, bool]] = None,
+    group_mapping: Optional[Dict[Any, str]] = None,
+    remove_keys: Optional[List[Any]] = None,
+    push_github: bool = True,
 ) -> bool:
     """
-    Sauvegarde le dictionnaire d'association GPS -> Joueur dans config_rca_gps.json.
+    Sauvegarde le dictionnaire d'association GPS -> Joueur (et groupes mémorisés) dans config_rca_gps.json.
     Fusionne intelligemment avec les attributions déjà enregistrées pour ne jamais
     écraser les boîtiers non présents dans la séance active (sauf si overwrite=True).
-    Mémorise également la signature du fichier validé et le cache de participation aux splits
-    pour restaurer intégralement la session au rafraîchissement.
     """
-    full_map: Dict[str, str] = {} if overwrite else charger_mapping_gps_persistant()
-    for k, v in mapping.items():
-        if v and str(v).strip() and str(v).strip() not in ["— Sélectionner un joueur —", "-"]:
-            full_map[str(k).strip()] = str(v).strip()
+    mem_exist = charger_memoire_gps_complete()
+    full_map: Dict[str, str] = {} if overwrite else dict(mem_exist.get("mapping", {}))
+    full_group_map: Dict[str, str] = {} if overwrite else dict(mem_exist.get("group_mapping", {}))
 
-    existing_sig = None
-    existing_splits = {}
-    if os.path.exists(CONFIG_GPS_FILE):
-        try:
-            with open(CONFIG_GPS_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
-                if isinstance(d, dict):
-                    existing_sig = d.get("last_validated_file_sig")
-                    existing_splits = d.get("splits_participation", {})
-        except Exception:
-            pass
+    if remove_keys:
+        for rk in remove_keys:
+            rk_str = str(rk).strip()
+            full_map.pop(rk_str, None)
+            full_group_map.pop(rk_str, None)
+
+    for k, v in mapping.items():
+        k_str = str(k).strip()
+        v_str = str(v).strip() if v else ""
+        if v_str and v_str not in ["— Sélectionner un joueur —", "➕ [Créer un nouveau joueur...]", "-"]:
+            full_map[k_str] = v_str
+
+    if group_mapping:
+        for k, g in group_mapping.items():
+            k_str = str(k).strip()
+            g_str = str(g).strip() if g else ""
+            if g_str:
+                full_group_map[k_str] = g_str
+
+    existing_sig = mem_exist.get("last_validated_file_sig")
+    existing_splits = mem_exist.get("splits_participation", {})
 
     # Conversion propre du cache de participation aux splits
     splits_dict_to_save = dict(existing_splits) if isinstance(existing_splits, dict) else {}
@@ -1325,6 +1496,7 @@ def sauvegarder_mapping_gps_persistant(
 
     payload = {
         "mapping": full_map,
+        "group_mapping": full_group_map,
         "derniere_mise_a_jour": datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         "nb_boitiers": len(full_map),
         "last_validated_file_sig": last_file_sig or existing_sig,
@@ -1334,20 +1506,18 @@ def sauvegarder_mapping_gps_persistant(
         with open(CONFIG_GPS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
-        try:
+        if push_github:
             try:
-
-                import github_sync
-
-            except (ImportError, ModuleNotFoundError):
-
-                from modules import github_sync
-            github_sync.push_file_to_github(
-                CONFIG_GPS_FILE,
-                commit_message="config: mise à jour mapping boîtiers GPS"
-            )
-        except Exception:
-            pass
+                try:
+                    import github_sync
+                except (ImportError, ModuleNotFoundError):
+                    from modules import github_sync
+                github_sync.push_file_to_github(
+                    CONFIG_GPS_FILE,
+                    commit_message="config: mise à jour mapping boîtiers GPS"
+                )
+            except Exception:
+                pass
 
         return True
     except Exception:
@@ -1506,7 +1676,19 @@ def dialog_creer_nouveau_joueur(
                         # Si assignation directe à un boîtier GPS
                         if boitier_choisi_str and "Boîtier GPS n°" in boitier_choisi_str:
                             b_num = int(boitier_choisi_str.replace("Boîtier GPS n°", "").strip())
+                            grp_new_step2 = mapper_vers_groupe_step2(groupe_final, nom_clean)
                             st.session_state[f"gps_sel_boitier_{b_num}"] = nom_clean
+                            st.session_state[f"gps_sel_groupe_{b_num}"] = grp_new_step2
+                            st.session_state.setdefault("session_player_postes", {})[nom_clean] = grp_new_step2
+                            st.session_state.setdefault("sensor_assignments", {})[str(b_num)] = {
+                                "player": nom_clean,
+                                "group": grp_new_step2,
+                            }
+                            if st.session_state.get(f"gps_chk_memo_{b_num}", True):
+                                st.session_state.setdefault("sensor_memory", {})[str(b_num)] = {
+                                    "player": nom_clean,
+                                    "group": grp_new_step2,
+                                }
                             if "gps_mapping" in st.session_state:
                                 st.session_state["gps_mapping"][b_num] = nom_clean
                                 st.session_state["gps_mapping"][str(b_num)] = nom_clean
@@ -1514,9 +1696,12 @@ def dialog_creer_nouveau_joueur(
                                 st.session_state["mapping_gps_joueurs"][b_num] = nom_clean
                                 st.session_state["mapping_gps_joueurs"][str(b_num)] = nom_clean
 
-                            c_map = charger_mapping_gps_persistant()
+                            mem_full = charger_memoire_gps_complete()
+                            c_map = dict(mem_full.get("mapping", {}))
+                            g_map = dict(mem_full.get("group_mapping", {}))
                             c_map[str(b_num)] = nom_clean
-                            sauvegarder_mapping_gps_persistant(c_map)
+                            g_map[str(b_num)] = grp_new_step2
+                            sauvegarder_mapping_gps_persistant(c_map, group_mapping=g_map)
 
                         st.toast(f"✅ {msg}")
                         st.rerun()
@@ -1637,6 +1822,47 @@ def dialog_creer_nouveau_joueur(
                             if deleted:
                                 st.toast(f"🗑️ Photo supprimée pour {joueur_choisi_trombi}.")
                                 st.rerun()
+
+
+@st.dialog("🌦️ Météo & Conditions de la séance")
+def dialog_meteo_seance() -> None:
+    """Permet de saisir les conditions météo et l'état du terrain pour la séance GPS."""
+    current_m = st.session_state.get("session_meteo") or {
+        "meteo": "Nuageux / Sec",
+        "terrain": "Herbe sèche",
+        "temperature": 14,
+        "vent": "Faible",
+    }
+    opts_meteo = ["☀️ Ensoleillé", "⛅ Nuageux / Sec", "🌧️ Pluie / Humide", "💨 Venteux", "❄️ Froid (< 5°C)"]
+    opts_terrain = ["Herbe sèche", "Herbe humide / boueuse", "Synthétique sec", "Synthétique humide"]
+    opts_vent = ["Calme", "Faible", "Modéré", "Fort"]
+
+    idx_m = opts_meteo.index(current_m.get("meteo")) if current_m.get("meteo") in opts_meteo else 1
+    idx_t = opts_terrain.index(current_m.get("terrain")) if current_m.get("terrain") in opts_terrain else 0
+    idx_v = opts_vent.index(current_m.get("vent")) if current_m.get("vent") in opts_vent else 1
+
+    sel_m = st.selectbox("Conditions météo :", options=opts_meteo, index=idx_m, key="dlg_meteo_cond")
+    sel_t = st.selectbox("Surface / État du terrain :", options=opts_terrain, index=idx_t, key="dlg_meteo_terrain")
+    c_m1, c_m2 = st.columns(2)
+    with c_m1:
+        sel_temp = st.number_input("Température (°C) :", min_value=-10, max_value=45, value=int(current_m.get("temperature", 14)), step=1, key="dlg_meteo_temp")
+    with c_m2:
+        sel_v = st.selectbox("Vent :", options=opts_vent, index=idx_v, key="dlg_meteo_vent")
+
+    col_ok, col_close = st.columns(2)
+    with col_ok:
+        if st.button("💾 Enregistrer la météo", type="primary", use_container_width=True, key="dlg_btn_save_meteo"):
+            st.session_state["session_meteo"] = {
+                "meteo": sel_m,
+                "terrain": sel_t,
+                "temperature": int(sel_temp),
+                "vent": sel_v,
+            }
+            st.toast(f"🌦️ Météo enregistrée : {sel_m} • {sel_t} ({int(sel_temp)}°C)")
+            st.rerun()
+    with col_close:
+        if st.button("Fermer", use_container_width=True, key="dlg_btn_close_meteo"):
+            st.rerun()
 
 
 # ==============================================================================
@@ -1792,9 +2018,9 @@ def construire_matrice_splits(
 
     for g_num, g_id, p_name in unique_assigned:
         poste_j = joueurs_data.get(p_name, "")
-        if not poste_j:
-            poste_j = st.session_state.get("session_player_postes", {}).get(p_name, "")
-        grp_j = mapper_poste_vers_groupe_rca(poste_j, p_name)
+        grp_ovr = st.session_state.get("session_player_postes", {}).get(p_name, "")
+        grp_j = canonicalize_group_for_step3(grp_ovr) if grp_ovr else mapper_poste_vers_groupe_rca(poste_j, p_name)
+        poste_affiche = grp_ovr if (not poste_j and grp_ovr) else (poste_j or grp_ovr)
 
         sub_p = df_mapped[df_mapped[player_col].astype(str).str.strip().str.lower() == p_name.strip().lower()] if player_col else pd.DataFrame()
         sub_training = sub_p[sub_p[split_col].astype(str).str.strip().isin(training_splits)] if not sub_p.empty and split_col else pd.DataFrame()
@@ -1810,7 +2036,7 @@ def construire_matrice_splits(
         row_dict: Dict[str, Any] = {
             "GPS": g_num if g_num != 999 else str(g_id),
             "Joueur": p_name,
-            "Groupe": f"{grp_j} ({poste_j})" if poste_j else grp_j,
+            "Groupe": f"{grp_j} ({poste_affiche})" if poste_affiche else grp_j,
             "Distance brute (m)": int(round(dist_brute_m)),
         }
 
@@ -1943,12 +2169,16 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
                 if st.button("➕ Nouveau joueur", key="btn_creer_joueur_no_units", use_container_width=True, help="Créer un joueur absent de la base"):
                     dialog_creer_nouveau_joueur()
             with c_b2:
-                if st.button("✅ Valider l'effectif et l'association GPS", type="primary", use_container_width=True, key="btn_valider_sans_boitiers"):
+                if st.button("✅ Valider l'effectif et l'association GPS (pour débloquer l'Étape 3)", type="primary", use_container_width=True, key="btn_valider_sans_boitiers"):
                     st.session_state["step2_validated"] = True
+                    st.session_state["edit_step2"] = False
+                    st.session_state["gps_data_loaded"] = True
+                    st.session_state["gps_step"] = 3
                     map_direct = {n: n for n in names_found}
                     st.session_state["gps_mapping"] = map_direct
                     st.session_state["mapping_gps_joueurs"] = map_direct
-                    sauvegarder_mapping_gps_persistant(map_direct)
+                    st.session_state["mapping_gps"] = map_direct
+                    sauvegarder_mapping_gps_persistant(map_direct, push_github=True)
                     st.toast("✅ Effectif validé et mémorisé avec succès !")
                     st.rerun()
             return {n: n for n in names_found}, False
@@ -1960,16 +2190,8 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
     placeholder = "— Sélectionner un joueur —"
     TRIGGER_NOUVEAU_JOUEUR = "➕ [Créer un nouveau joueur...]"
 
-    # Détection automatique si l'utilisateur a sélectionné l'option de création dans un selectbox
-    boitier_declencheur: Optional[int] = None
-    for g_id in liste_gps_detectes:
-        k_w = f"gps_sel_boitier_{g_id}"
-        if st.session_state.get(k_w) == TRIGGER_NOUVEAU_JOUEUR:
-            boitier_declencheur = g_id
-            # On réinitialise la clé avant que le widget ne soit ré-instancié
-            st.session_state[k_w] = placeholder
-            break
-
+    # Ouverture différée du dialogue de création si déclenchée depuis un sélecteur de boîtier
+    boitier_declencheur: Optional[int] = st.session_state.pop("_trigger_new_player_boitier", None)
     if boitier_declencheur is not None:
         dialog_creer_nouveau_joueur(boitier_cible=boitier_declencheur, liste_boitiers=liste_gps_detectes)
 
@@ -1977,7 +2199,7 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
     options = [placeholder, TRIGGER_NOUVEAU_JOUEUR] + noms_joueurs_tries
 
     def format_affichage_joueur(nom: str) -> str:
-        """Affiche 'Nom Prénom - Poste' dans la liste déroulante et la barre de recherche."""
+        """Affiche 'NOM Prénom - Poste' dans la liste déroulante et la barre de recherche."""
         if nom == placeholder:
             return placeholder
         if nom == TRIGGER_NOUVEAU_JOUEUR:
@@ -1987,203 +2209,504 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
             return f"{nom} - {poste}"
         return nom
 
-    # Initialisation & Synchronisation des dictionnaires de session
+    # 3. Initialisation & Synchronisation des dictionnaires de mémoire / séance
+    mem_disk_full = charger_memoire_gps_complete()
+    saved_disk: Dict[str, str] = mem_disk_full.get("mapping", {})
+    saved_disk_groups: Dict[str, str] = mem_disk_full.get("group_mapping", {})
+
     if "mapping_gps_joueurs" not in st.session_state:
-        st.session_state["mapping_gps_joueurs"] = charger_mapping_gps_persistant() or {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
+        st.session_state["mapping_gps_joueurs"] = dict(saved_disk) if saved_disk else {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
     if "gps_mapping" not in st.session_state:
         st.session_state["gps_mapping"] = dict(st.session_state["mapping_gps_joueurs"])
+    if "mapping_gps" not in st.session_state:
+        st.session_state["mapping_gps"] = dict(st.session_state["gps_mapping"])
+    if "session_player_postes" not in st.session_state:
+        st.session_state["session_player_postes"] = {}
+    if "sensor_assignments" not in st.session_state:
+        st.session_state["sensor_assignments"] = {}
+    if "sensor_memo_flags" not in st.session_state:
+        st.session_state["sensor_memo_flags"] = {}
 
-    saved_disk = charger_mapping_gps_persistant()
+    if "sensor_memory" not in st.session_state:
+        init_mem: Dict[str, Dict[str, str]] = {}
+        combined_init = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
+        combined_init.update(saved_disk)
+        for gid_k, p_val in combined_init.items():
+            if p_val and p_val not in [placeholder, TRIGGER_NOUVEAU_JOUEUR, "-"]:
+                grp_raw = saved_disk_groups.get(str(gid_k))
+                if grp_raw:
+                    grp_init = mapper_vers_groupe_step2(grp_raw, p_val)
+                else:
+                    _, grp_init = get_player_poste_and_group_step2(p_val)
+                init_mem[str(gid_k)] = {"player": p_val, "group": grp_init}
+        st.session_state["sensor_memory"] = init_mem
+
     saved_session = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping") or {}
 
-    # Dictionnaire de référence combiné pour pré-remplir instantanément
-    reference_mapping: Dict[str, str] = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
-    reference_mapping.update(saved_disk)
-    reference_mapping.update({str(k): v for k, v in saved_session.items() if v and v != placeholder})
+    def _extract_mem_player_group(entry: Any) -> Tuple[Optional[str], Optional[str]]:
+        if isinstance(entry, dict):
+            return entry.get("player"), entry.get("group")
+        if isinstance(entry, str) and entry.strip():
+            return entry.strip(), None
+        return None, None
 
-    # Calcul du nombre de boîtiers pré-remplis
-    nb_prefilled = sum(
-        1 for g_id in liste_gps_detectes
-        if reference_mapping.get(str(g_id)) in options and reference_mapping.get(str(g_id)) not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]
-    )
+    def _resolve_default_player(gid: int) -> str:
+        sa_entry = st.session_state.get("sensor_assignments", {}).get(str(gid))
+        sa_player, _ = _extract_mem_player_group(sa_entry)
+        sm_player, _ = _extract_mem_player_group(st.session_state.get("sensor_memory", {}).get(str(gid)))
+        candidat = (
+            sa_player
+            or saved_session.get(gid)
+            or saved_session.get(str(gid))
+            or sm_player
+            or saved_disk.get(str(gid))
+            or DEFAULT_GPS_MAPPING.get(gid)
+        )
+        if candidat and candidat in options and candidat not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+            return candidat
+        return placeholder
 
-    c_info1, c_btn_creer, c_btn_trombi, c_info2 = st.columns([2.6, 1.3, 1.4, 1.2])
-    with c_info1:
-        if nb_prefilled > 0:
-            st.success(
-                f"💡 **Mémorisation & Pré-remplissage actif :** {nb_prefilled} boîtier(s) sur {len(liste_gps_detectes)} "
-                "ont été pré-remplis automatiquement selon vos configurations précédentes enregistrées."
+    def _resolve_default_group(gid: int, player_name: str) -> str:
+        if not player_name or player_name in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+            return "Trois-quarts"
+
+        sa_player, sa_grp = _extract_mem_player_group(st.session_state.get("sensor_assignments", {}).get(str(gid)))
+        if sa_player == player_name and sa_grp:
+            return mapper_vers_groupe_step2(sa_grp, player_name)
+
+        override_grp = st.session_state.get("session_player_postes", {}).get(player_name)
+        if override_grp:
+            return mapper_vers_groupe_step2(override_grp, player_name)
+
+        sm_player, sm_grp = _extract_mem_player_group(st.session_state.get("sensor_memory", {}).get(str(gid)))
+        if sm_player == player_name and sm_grp:
+            return mapper_vers_groupe_step2(sm_grp, player_name)
+
+        if saved_disk.get(str(gid)) == player_name and saved_disk_groups.get(str(gid)):
+            return mapper_vers_groupe_step2(saved_disk_groups[str(gid)], player_name)
+
+        _, grp_default = get_player_poste_and_group_step2(player_name)
+        return grp_default
+
+    def _resolve_memo_display_group(gid: int, player_name: str) -> str:
+        sm_player, sm_grp = _extract_mem_player_group(st.session_state.get("sensor_memory", {}).get(str(gid)))
+        if sm_player == player_name and sm_grp:
+            return mapper_vers_groupe_step2(sm_grp, player_name)
+        if saved_disk.get(str(gid)) == player_name and saved_disk_groups.get(str(gid)):
+            return mapper_vers_groupe_step2(saved_disk_groups[str(gid)], player_name)
+        _, grp_default = get_player_poste_and_group_step2(player_name)
+        return grp_default
+
+    def _current_player_for(gid: int) -> str:
+        w_key = f"gps_sel_boitier_{gid}"
+        if w_key in st.session_state:
+            val_w = st.session_state[w_key]
+            if val_w in options and val_w != TRIGGER_NOUVEAU_JOUEUR:
+                return val_w
+            return placeholder
+        return _resolve_default_player(gid)
+
+    def _current_group_for(gid: int, player_name: str) -> str:
+        g_key = f"gps_sel_groupe_{gid}"
+        if g_key in st.session_state and st.session_state[g_key] in GROUPES_POSTES_STEP2:
+            return st.session_state[g_key]
+        return _resolve_default_group(gid, player_name)
+
+    def _resolve_default_memo(gid: int) -> bool:
+        return bool(st.session_state.get("sensor_memo_flags", {}).get(str(gid), True))
+
+    # Callbacks réactifs immédiats par boîtier (aucun st.form bloquant ni commit GitHub bloquant)
+    def _on_player_change(gid: int) -> None:
+        new_player = st.session_state.get(f"gps_sel_boitier_{gid}", placeholder)
+        if new_player == TRIGGER_NOUVEAU_JOUEUR:
+            st.session_state["_trigger_new_player_boitier"] = gid
+            st.session_state[f"gps_sel_boitier_{gid}"] = placeholder
+            return
+
+        if not new_player or new_player == placeholder:
+            st.session_state.setdefault("sensor_assignments", {}).pop(str(gid), None)
+            for d_name in ("gps_mapping", "mapping_gps_joueurs", "mapping_gps"):
+                st.session_state.setdefault(d_name, {}).pop(gid, None)
+                st.session_state.setdefault(d_name, {}).pop(str(gid), None)
+            st.session_state[f"gps_sel_groupe_{gid}"] = "Trois-quarts"
+            return
+
+        _, new_grp_step2 = get_player_poste_and_group_step2(new_player)
+        # Mise à jour instantanée du selectbox de groupe associé à ce boîtier
+        st.session_state[f"gps_sel_groupe_{gid}"] = new_grp_step2
+        st.session_state.setdefault("sensor_assignments", {})[str(gid)] = {
+            "player": new_player,
+            "group": new_grp_step2,
+        }
+        st.session_state.setdefault("session_player_postes", {})[new_player] = new_grp_step2
+        for d_name in ("gps_mapping", "mapping_gps_joueurs", "mapping_gps"):
+            d_obj = st.session_state.setdefault(d_name, {})
+            d_obj[gid] = new_player
+            d_obj[str(gid)] = new_player
+
+        if st.session_state.get(f"gps_chk_memo_{gid}", True):
+            st.session_state.setdefault("sensor_memory", {})[str(gid)] = {
+                "player": new_player,
+                "group": new_grp_step2,
+            }
+            sauvegarder_mapping_gps_persistant(
+                {str(gid): new_player},
+                group_mapping={str(gid): new_grp_step2},
+                push_github=False,
             )
-        else:
-            st.caption(
-                f"**{len(liste_gps_detectes)} boîtier(s) GPS actif(s) détecté(s)** sur cette séance. "
-                "Associez chaque boîtier à son joueur :"
-            )
-    with c_btn_creer:
+
+    def _on_group_change(gid: int) -> None:
+        curr_player = st.session_state.get(f"gps_sel_boitier_{gid}", placeholder)
+        new_grp = st.session_state.get(f"gps_sel_groupe_{gid}", "Trois-quarts")
+        if curr_player and curr_player not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+            st.session_state.setdefault("sensor_assignments", {})[str(gid)] = {
+                "player": curr_player,
+                "group": new_grp,
+            }
+            st.session_state.setdefault("session_player_postes", {})[curr_player] = new_grp
+            if st.session_state.get(f"gps_chk_memo_{gid}", True):
+                st.session_state.setdefault("sensor_memory", {})[str(gid)] = {
+                    "player": curr_player,
+                    "group": new_grp,
+                }
+                sauvegarder_mapping_gps_persistant(
+                    {str(gid): curr_player},
+                    group_mapping={str(gid): new_grp},
+                    push_github=False,
+                )
+
+    def _on_memo_toggle(gid: int) -> None:
+        is_checked = bool(st.session_state.get(f"gps_chk_memo_{gid}", True))
+        st.session_state.setdefault("sensor_memo_flags", {})[str(gid)] = is_checked
+        if is_checked:
+            curr_player = st.session_state.get(f"gps_sel_boitier_{gid}", placeholder)
+            curr_grp = st.session_state.get(f"gps_sel_groupe_{gid}", "Trois-quarts")
+            if curr_player and curr_player not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+                st.session_state.setdefault("sensor_memory", {})[str(gid)] = {
+                    "player": curr_player,
+                    "group": curr_grp,
+                }
+                sauvegarder_mapping_gps_persistant(
+                    {str(gid): curr_player},
+                    group_mapping={str(gid): curr_grp},
+                    push_github=False,
+                )
+
+    def _on_reset_boitier(gid: int) -> None:
+        st.session_state[f"gps_sel_boitier_{gid}"] = placeholder
+        st.session_state[f"gps_sel_groupe_{gid}"] = "Trois-quarts"
+        st.session_state.setdefault("sensor_assignments", {}).pop(str(gid), None)
+        st.session_state.setdefault("sensor_memory", {}).pop(str(gid), None)
+        for d_name in ("gps_mapping", "mapping_gps_joueurs", "mapping_gps"):
+            st.session_state.setdefault(d_name, {}).pop(gid, None)
+            st.session_state.setdefault(d_name, {}).pop(str(gid), None)
+        sauvegarder_mapping_gps_persistant({}, remove_keys=[str(gid)], push_github=False)
+
+    # Pré-calcul de l'état d'attribution courant avant le bouton de validation haut
+    current_player_selections: Dict[int, str] = {}
+    mapping: Dict[Union[int, str], str] = {}
+    joueurs_assignes: Dict[str, List[int]] = {}
+    nb_prefilled = 0
+
+    for g_id in liste_gps_detectes:
+        p_cur = _current_player_for(g_id)
+        current_player_selections[g_id] = p_cur
+        if p_cur and p_cur not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+            mapping[g_id] = p_cur
+            mapping[str(g_id)] = p_cur
+            joueurs_assignes.setdefault(p_cur, []).append(g_id)
+            nb_prefilled += 1
+            grp_cur = _current_group_for(g_id, p_cur)
+            st.session_state["sensor_assignments"][str(g_id)] = {"player": p_cur, "group": grp_cur}
+            for d_name in ("gps_mapping", "mapping_gps_joueurs", "mapping_gps"):
+                st.session_state[d_name][g_id] = p_cur
+                st.session_state[d_name][str(g_id)] = p_cur
+
+    doublons = {j: ids for j, ids in joueurs_assignes.items() if len(ids) > 1}
+    has_doublons = len(doublons) > 0
+    nb_assignes = len(joueurs_assignes)
+    nb_total = len(liste_gps_detectes)
+
+    has_splits_detected = False
+    split_col_m: Optional[str] = None
+    training_splits_list: List[str] = []
+    if not has_doublons and nb_assignes > 0 and df_raw is not None and not df_raw.empty:
+        split_col_m, training_splits_list = extraire_splits_entrainement(df_raw)
+        has_splits_detected = bool(training_splits_list)
+
+    def _valider_etape2() -> None:
+        if has_doublons:
+            st.error("⛔ Validation bloquée : veuillez résoudre les doublons avant de continuer.")
+            return
+        if nb_assignes == 0:
+            st.warning("⚠️ Veuillez attribuer au moins un boîtier GPS avant de valider.")
+            return
+
+        final_mapping: Dict[Union[int, str], str] = {}
+        memo_mapping: Dict[str, str] = {}
+        memo_groups: Dict[str, str] = {}
+        final_assignments: Dict[str, Dict[str, str]] = {}
+        postes_map = st.session_state.setdefault("session_player_postes", {})
+
+        for g_id in liste_gps_detectes:
+            p_sel = current_player_selections.get(g_id, placeholder)
+            if p_sel and p_sel not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
+                g_sel = _current_group_for(g_id, p_sel)
+                final_mapping[g_id] = p_sel
+                final_mapping[str(g_id)] = p_sel
+                final_assignments[str(g_id)] = {"player": p_sel, "group": g_sel}
+                postes_map[p_sel] = g_sel
+                if st.session_state.get(f"gps_chk_memo_{g_id}", True):
+                    memo_mapping[str(g_id)] = p_sel
+                    memo_groups[str(g_id)] = g_sel
+                    st.session_state.setdefault("sensor_memory", {})[str(g_id)] = {
+                        "player": p_sel,
+                        "group": g_sel,
+                    }
+
+        st.session_state["step2_validated"] = True
+        st.session_state["edit_step2"] = False
+        st.session_state["gps_data_loaded"] = True
+        st.session_state["gps_step"] = 3
+        st.session_state["gps_mapping"] = final_mapping
+        st.session_state["mapping_gps_joueurs"] = final_mapping
+        st.session_state["mapping_gps"] = final_mapping
+        st.session_state["sensor_assignments"] = final_assignments
+
+        df_mat_to_save = st.session_state.get("splits_matrix_validated")
+        if df_mat_to_save is not None:
+            st.session_state["splits_matrix_validated"] = df_mat_to_save
+        cache_splits = st.session_state.get("splits_participation_cache", {})
+        sauvegarder_mapping_gps_persistant(
+            memo_mapping,
+            last_file_sig=st.session_state.get("uploaded_file_sig"),
+            splits_cache=cache_splits,
+            group_mapping=memo_groups,
+            push_github=True,
+        )
+        st.toast("✅ Effectif, boîtiers GPS et groupes validés avec succès !")
+        st.rerun()
+
+    # Bouton de validation principal placé tout en haut pour débloquer l'Étape 3 en 1 clic
+    if st.button(
+        "✅ Valider l'effectif et l'association GPS (pour débloquer l'Étape 3)",
+        type="primary",
+        disabled=has_doublons or nb_assignes == 0,
+        use_container_width=True,
+        key="btn_valider_effectif_step2_top",
+        help="Valide immédiatement l'attribution des boîtiers GPS, les groupes de poste et les splits pour afficher les analyses de l'Étape 3.",
+    ):
+        _valider_etape2()
+
+    # Barre d'actions directe : + Nouveau joueur | Trombinoscope | Météo séance | Rétablir usine
+    c_act_creer, c_act_trombi, c_act_meteo, c_act_reset = st.columns([1.2, 1.2, 1.2, 1.2])
+    with c_act_creer:
         if st.button("➕ Nouveau joueur", type="secondary", help="Créer et ajouter un joueur dans l'effectif RCA", key="btn_add_player_step2_top", use_container_width=True):
             dialog_creer_nouveau_joueur(liste_boitiers=liste_gps_detectes)
-    with c_btn_trombi:
+    with c_act_trombi:
         if st.button("📸 Trombinoscope", type="secondary", help="Consulter et administrer les photos des joueurs", key="btn_trombi_step2_top", use_container_width=True):
             dialog_creer_nouveau_joueur(liste_boitiers=liste_gps_detectes)
-    with c_info2:
+    with c_act_meteo:
+        meteo_sess = st.session_state.get("session_meteo")
+        meteo_btn_label = f"🌦️ Météo ({meteo_sess.get('temperature', 14)}°C)" if meteo_sess else "🌦️ Météo séance"
+        if st.button(meteo_btn_label, type="secondary", help="Renseigner la météo et l'état du terrain pour la séance", key="btn_meteo_step2_top", use_container_width=True):
+            dialog_meteo_seance()
+    with c_act_reset:
         if st.button("🔄 Rétablir usine", help="Restaure les attributions initiales officielles du club RCA", key="btn_reset_default_factory", use_container_width=True):
             default_map = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
-            st.session_state["mapping_gps_joueurs"] = default_map
-            st.session_state["gps_mapping"] = default_map
-            sauvegarder_mapping_gps_persistant(default_map, overwrite=True)
+            st.session_state["mapping_gps_joueurs"] = dict(default_map)
+            st.session_state["gps_mapping"] = dict(default_map)
+            st.session_state["mapping_gps"] = dict(default_map)
+            st.session_state["sensor_assignments"] = {}
+            st.session_state["session_player_postes"] = {}
+            st.session_state["sensor_memo_flags"] = {}
+            st.session_state["sensor_memory"] = {
+                str(k): {"player": v, "group": get_player_poste_and_group_step2(v)[1]}
+                for k, v in DEFAULT_GPS_MAPPING.items()
+            }
+            sauvegarder_mapping_gps_persistant(default_map, group_mapping={}, overwrite=True, push_github=True)
             for k in list(st.session_state.keys()):
-                if k.startswith("gps_sel_boitier_"):
+                if k.startswith("gps_sel_boitier_") or k.startswith("gps_sel_groupe_") or k.startswith("gps_chk_memo_"):
                     del st.session_state[k]
             st.toast("Attributions d'usine RCA restaurées.")
             st.rerun()
 
-    mapping: Dict[Union[int, str], str] = {}
-    form_choices: Dict[int, str] = {}
+    # Bandeau d'état de pré-remplissage / météo active
+    if nb_prefilled > 0:
+        st.success(
+            f"💡 **Mémorisation & Pré-remplissage actif :** {nb_prefilled} boîtier(s) sur {nb_total} "
+            "sont attribués et synchronisés avec leurs groupes de poste."
+        )
+    else:
+        st.info(
+            f"📡 **{nb_total} boîtier(s) GPS actif(s) détecté(s)** sur cette séance. "
+            "Associez chaque boîtier à son joueur et vérifiez son groupe ci-dessous :"
+        )
 
-    with st.form("association_boitiers"):
-        col_gauche, col_droite = st.columns(2)
-        split_index = (len(liste_gps_detectes) + 1) // 2
+    if st.session_state.get("session_meteo"):
+        m_cur = st.session_state["session_meteo"]
+        st.markdown(
+            f"<div style='background:#0C2340;color:#FFFFFF;border-left:4px solid #F2A900;border-radius:8px;padding:7px 14px;margin-bottom:10px;font-size:0.84rem;font-weight:600;'>"
+            f"🌦️ Conditions séance : <strong>{m_cur.get('meteo', '')}</strong> • Terrain : {m_cur.get('terrain', '')} • "
+            f"{m_cur.get('temperature', '')}°C • Vent : {m_cur.get('vent', '')}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-        # 3. Boucle STRICTE sur la liste des identifiants détectés (dans st.form pour éviter tout rerun par clic)
-        for idx, gps_id in enumerate(liste_gps_detectes):
-            conteneur = col_gauche if idx < split_index else col_droite
+    # CSS ciblé pour les cartes Boîtier GPS n°X (Charte RCA + contraste optimal des checkboxes)
+    st.markdown(
+        """
+        <style>
+        div[class*="st-key-gps_card_"] {
+            background: #FFFFFF !important;
+            border: 1.5px solid #CBD5E1 !important;
+            border-top: 4px solid #0C2340 !important;
+            border-radius: 14px !important;
+            padding: 14px 16px !important;
+            margin-bottom: 14px !important;
+            box-shadow: 0 4px 14px rgba(12, 35, 64, 0.08) !important;
+        }
+        div[class*="st-key-gps_card_"] [data-testid="stCheckbox"] label,
+        div[class*="st-key-gps_card_"] [data-testid="stCheckbox"] label p,
+        div[class*="st-key-gps_card_"] [data-testid="stCheckbox"] span {
+            color: #0C2340 !important;
+            font-weight: 600 !important;
+            font-size: 0.84rem !important;
+        }
+        div[class*="st-key-gps_card_"] [data-testid="stSelectbox"] > label,
+        div[class*="st-key-gps_card_"] [data-testid="stSelectbox"] > label p {
+            color: #0C2340 !important;
+            font-weight: 700 !important;
+            font-size: 0.80rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-            with conteneur:
-                c_photo, c_select = st.columns([1, 3])
+    # 4. Grille des cartes Boîtier GPS n°X (mise à jour directe et réactive)
+    col_gauche, col_droite = st.columns(2)
+    split_index = (len(liste_gps_detectes) + 1) // 2
 
-                prev = (
-                    saved_session.get(gps_id)
-                    or saved_session.get(str(gps_id))
-                    or reference_mapping.get(str(gps_id))
-                    or saved_disk.get(str(gps_id))
-                    or DEFAULT_GPS_MAPPING.get(gps_id)
+    for idx, gps_id in enumerate(liste_gps_detectes):
+        conteneur = col_gauche if idx < split_index else col_droite
+        default_player = _resolve_default_player(gps_id)
+        default_idx = options.index(default_player) if default_player in options else 0
+
+        cur_player = _current_player_for(gps_id)
+        is_assigned = bool(cur_player and cur_player not in [placeholder, TRIGGER_NOUVEAU_JOUEUR])
+
+        default_grp = _resolve_default_group(gps_id, cur_player)
+        default_grp_idx = GROUPES_POSTES_STEP2.index(default_grp) if default_grp in GROUPES_POSTES_STEP2 else 3
+        cur_grp = _current_group_for(gps_id, cur_player)
+
+        bg_hex, txt_hex, brd_hex = get_group_badge_style_step2(cur_grp if is_assigned else "Trois-quarts")
+
+        with conteneur:
+            with st.container(key=f"gps_card_{gps_id}"):
+                # (a) En-tête Boîtier GPS n°X + badge groupe synthétique
+                header_badge = (
+                    f"<span style='background:{bg_hex};color:{txt_hex};border:1px solid {brd_hex};"
+                    f"padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:800;'>{cur_grp}</span>"
+                    if is_assigned
+                    else "<span style='background:#F1F5F9;color:#64748B;border:1px solid #CBD5E1;padding:2px 9px;border-radius:999px;font-size:0.74rem;font-weight:700;'>Non attribué</span>"
                 )
-                default_idx = options.index(prev) if prev in options else 0
+                st.markdown(
+                    f"<div style='display:flex;align-items:center;justify-content:space-between;"
+                    f"border-bottom:1px solid #E2E8F0;padding-bottom:8px;margin-bottom:10px;'>"
+                    f"<span style='background:#0C2340;color:#F2A900;padding:3px 10px;border-radius:8px;"
+                    f"font-weight:800;font-size:0.86rem;letter-spacing:0.3px;'>📡 Boîtier GPS n°{gps_id}</span>"
+                    f"{header_badge}</div>",
+                    unsafe_allow_html=True,
+                )
 
-                with c_select:
-                    choix = st.selectbox(
-                        f"Boîtier GPS n°{gps_id}",
-                        options=options,
-                        index=default_idx,
-                        format_func=format_affichage_joueur,
-                        key=f"gps_sel_boitier_{gps_id}",
-                    )
-                    form_choices[gps_id] = choix
-
-                    if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-                        poste_d = joueurs_data.get(choix, "Inconnu")
-                        grp_rca_defaut = mapper_poste_vers_groupe_rca(poste_d, choix)
-                        grp_actuel = st.session_state.get("session_player_postes", {}).get(choix, grp_rca_defaut)
-                        if grp_actuel == "5 de devant":
-                            badge_html = '<span style="background-color:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 5 de devant</span>'
-                        elif grp_actuel == "3ème Ligne":
-                            badge_html = '<span style="background-color:#F0FDF4;color:#15803D;border:1px solid #BBF7D0;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 3ème Ligne</span>'
-                        else:
-                            badge_html = '<span style="background-color:#FEF2F2;color:#B91C1C;border:1px solid #FECACA;padding:2px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;">🏉 Trois-quarts</span>'
-
-                        st.markdown(
-                            f"<div style='font-size:0.78rem;color:#475569;margin-top:-4px;margin-bottom:8px;'>"
-                            f"Profil : <em>{poste_d}</em> &nbsp;➔&nbsp; Séance : {badge_html}</div>",
-                            unsafe_allow_html=True,
-                        )
-
+                c_photo, c_select = st.columns([0.95, 3.25])
                 with c_photo:
-                    if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-                        photo = obtenir_chemin_photo(choix)
+                    if is_assigned:
+                        photo = obtenir_chemin_photo(cur_player)
                         if photo and os.path.isfile(photo):
-                            st.image(photo, width=48)
+                            st.image(photo, width=54)
                         else:
-                            avatar_b64 = get_player_image_b64(choix, size=48)
+                            avatar_b64 = get_player_image_b64(cur_player, size=54)
                             st.markdown(
-                                f"<div style='width:48px;height:48px;border-radius:50%;overflow:hidden;border:2px solid #003399;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,51,153,0.15);'>"
-                                f"<img src='{avatar_b64}' style='width:48px;height:48px;object-fit:cover;' /></div>",
+                                f"<div style='width:54px;height:54px;border-radius:50%;overflow:hidden;border:2.5px solid #0C2340;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(12,35,64,0.18);'>"
+                                f"<img src='{avatar_b64}' style='width:54px;height:54px;object-fit:cover;' /></div>",
                                 unsafe_allow_html=True,
                             )
                     else:
                         st.markdown(
-                            "<div style='width:48px;height:48px;border-radius:50%;"
-                            "background:#E2E8F0;display:flex;align-items:center;"
-                            "justify-content:center;color:#94A3B8;font-size:1.4rem;'>?</div>",
+                            "<div style='width:54px;height:54px;border-radius:50%;"
+                            "background:#E2E8F0;border:2px dashed #94A3B8;display:flex;align-items:center;"
+                            "justify-content:center;color:#64748B;font-size:1.35rem;font-weight:700;'>?</div>",
                             unsafe_allow_html=True,
                         )
 
-        submitted_boitiers = st.form_submit_button(
-            "💾 Appliquer les associations des boîtiers",
-            type="secondary",
-            use_container_width=True,
-        )
+                with c_select:
+                    # (b) Selectbox principal : Joueur (NOM Prénom - Poste spécifique)
+                    st.selectbox(
+                        f"Joueur — Boîtier GPS n°{gps_id}",
+                        options=options,
+                        index=default_idx,
+                        format_func=format_affichage_joueur,
+                        key=f"gps_sel_boitier_{gps_id}",
+                        on_change=_on_player_change,
+                        args=(gps_id,),
+                        label_visibility="collapsed",
+                    )
 
-    for gps_id, choix in form_choices.items():
-        if choix not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-            mapping[gps_id] = choix
-            mapping[str(gps_id)] = choix
-            st.session_state["gps_mapping"][gps_id] = choix
-            st.session_state["gps_mapping"][str(gps_id)] = choix
-            st.session_state["mapping_gps_joueurs"][gps_id] = choix
-            st.session_state["mapping_gps_joueurs"][str(gps_id)] = choix
+                    # (c) Second selectbox éditable : Groupe de poste RCA
+                    st.selectbox(
+                        "Groupe de poste (séance)",
+                        options=GROUPES_POSTES_STEP2,
+                        index=default_grp_idx,
+                        key=f"gps_sel_groupe_{gps_id}",
+                        disabled=not is_assigned,
+                        on_change=_on_group_change,
+                        args=(gps_id,),
+                    )
 
-    # Sauvegarde persistante uniquement lors de la soumission explicite du formulaire
-    if submitted_boitiers and mapping:
-        sauvegarder_mapping_gps_persistant(mapping)
-        st.toast("✅ Associations des boîtiers enregistrées.")
+                    # (d) Ligne d'état dynamique colorée
+                    if is_assigned:
+                        poste_spec, _ = get_player_poste_and_group_step2(cur_player)
+                        memo_grp_disp = _resolve_memo_display_group(gps_id, cur_player)
+                        m_bg, m_txt, m_brd = get_group_badge_style_step2(memo_grp_disp)
+                        st.markdown(
+                            f"<div style='font-size:0.79rem;color:#334155;margin-top:-2px;margin-bottom:6px;line-height:1.4;'>"
+                            f"Profil : <strong style='color:#0C2340;'>{poste_spec}</strong> &nbsp;•&nbsp; "
+                            f"Mémo : <span style='background:{m_bg};color:{m_txt};border:1px solid {m_brd};"
+                            f"padding:1px 7px;border-radius:5px;font-weight:700;font-size:0.75rem;'>{memo_grp_disp}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<div style='font-size:0.78rem;color:#64748B;margin-top:-2px;margin-bottom:6px;'>"
+                            "Profil : <em>Aucun joueur attribué</em></div>",
+                            unsafe_allow_html=True,
+                        )
 
-    # Ajustement optionnel des postes de séance dans un formulaire secondaire replié
-    assigned_pairs = [
-        (g_id, form_choices[g_id])
-        for g_id in liste_gps_detectes
-        if form_choices.get(g_id) not in [None, placeholder, TRIGGER_NOUVEAU_JOUEUR]
-    ]
-    if assigned_pairs:
-        if "session_player_postes" not in st.session_state:
-            st.session_state["session_player_postes"] = {}
-        with st.expander("🏉 Affiner manuellement les postes pour cette séance (optionnel)", expanded=False):
-            with st.form("postes_seance_form"):
-                groupes_options = ["5 de devant", "3ème Ligne", "Trois-quarts"]
-                col_p1, col_p2 = st.columns(2)
-                half_p = (len(assigned_pairs) + 1) // 2
-                poste_updates: Dict[str, Tuple[str, bool]] = {}
-                for i_p, (g_id, p_choix) in enumerate(assigned_pairs):
-                    target_c = col_p1 if i_p < half_p else col_p2
-                    poste_d = joueurs_data.get(p_choix, "Inconnu")
-                    grp_def = mapper_poste_vers_groupe_rca(poste_d, p_choix)
-                    grp_curr = st.session_state["session_player_postes"].get(p_choix, grp_def)
-                    if grp_curr not in groupes_options:
-                        grp_curr = grp_def
-                    idx_g = groupes_options.index(grp_curr)
-                    with target_c:
-                        c_sg, c_chk = st.columns([2, 1.2])
-                        with c_sg:
-                            sel_g = st.selectbox(
-                                f"Boîtier #{g_id} — {p_choix}",
-                                options=groupes_options,
-                                index=idx_g,
-                                key=f"session_grp_{g_id}_{p_choix}",
-                            )
-                        with c_chk:
-                            save_d = st.checkbox(
-                                "📌 Mémoriser",
-                                key=f"chk_save_def_{g_id}_{p_choix}",
-                                help="Définir ce groupe comme poste par défaut dans l'effectif",
-                            )
-                        poste_updates[p_choix] = (sel_g, save_d)
-                if st.form_submit_button("✅ Appliquer les postes de séance", use_container_width=True):
-                    for p_choix, (sel_g, save_d) in poste_updates.items():
-                        st.session_state["session_player_postes"][p_choix] = sel_g
-                        if save_d and joueurs_data.get(p_choix) != sel_g:
-                            joueurs_data[p_choix] = sel_g
-                            sauvegarder_joueur_personnalise(p_choix, sel_g, groupe=sel_g)
-                    st.toast("✅ Postes de séance mis à jour.")
+                # (e) Contrôles de persistance en bas de carte : Mémoriser + Reset boîtier
+                c_memo, c_rst = st.columns([3.4, 0.9])
+                with c_memo:
+                    st.checkbox(
+                        "Mémoriser ce boîtier",
+                        value=_resolve_default_memo(gps_id),
+                        key=f"gps_chk_memo_{gps_id}",
+                        on_change=_on_memo_toggle,
+                        args=(gps_id,),
+                        help="Mémorise ce joueur et son groupe sur ce boîtier pour les séances suivantes.",
+                    )
+                with c_rst:
+                    st.button(
+                        "🔄",
+                        key=f"gps_btn_reset_{gps_id}",
+                        help=f"Réinitialiser l'attribution du boîtier n°{gps_id}",
+                        on_click=_on_reset_boitier,
+                        args=(gps_id,),
+                        use_container_width=True,
+                    )
 
-    # 4. Sécurité anti-doublon stricte lors de l'attribution des GPS
-    joueurs_assignes: Dict[str, List[int]] = {}
-    for g_id in liste_gps_detectes:
-        j_choisi = mapping.get(g_id)
-        if j_choisi and j_choisi not in [placeholder, TRIGGER_NOUVEAU_JOUEUR]:
-            joueurs_assignes.setdefault(j_choisi, []).append(g_id)
-
-    doublons = {j: ids for j, ids in joueurs_assignes.items() if len(ids) > 1}
-    has_doublons = len(doublons) > 0
-
+    # 5. Sécurité anti-doublon stricte lors de l'attribution des GPS
     if has_doublons:
         details_doublons = ", ".join([
             f"« {j} » (boîtiers {', '.join(f'n°{i}' for i in ids)})"
@@ -2197,167 +2720,137 @@ def ui_attribution_gps(df_raw: Optional[pd.DataFrame] = None) -> Tuple[Dict[Unio
         )
 
     # Récapitulatif d'attribution
-    nb_assignes = len(joueurs_assignes)
-    nb_total = len(liste_gps_detectes)
     if nb_assignes < nb_total and not has_doublons:
         st.warning(f"⚠️ **Attention :** {nb_total - nb_assignes} boîtier(s) sur {nb_total} ne sont pas encore attribués.")
     elif not has_doublons and nb_assignes > 0:
-        st.success(f"✅ Tous les {nb_assignes} boîtiers GPS détectés sont attribués sans aucun doublon.")
+        st.success(f"✅ Tous les {nb_assignes} boîtiers GPS attribués sont valides sans aucun doublon.")
 
     # --------------------------------------------------------------------------
     # 4.3 MATRICE INTERACTIVE DE PARTICIPATION AUX SPLITS (JOUEURS × ATELIERS)
     # --------------------------------------------------------------------------
-    df_matrix_validated = None
-    has_splits_detected = False
-    training_splits_list: List[str] = []
+    if has_splits_detected and split_col_m:
+        st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            '<div style="background: linear-gradient(135deg, #0B192C 0%, #1F4E79 100%); padding: 12px 18px; border-radius: 10px; margin-bottom: 12px; border-left: 5px solid #D4AF37;">'
+            '<div style="font-size: 1.12rem; font-weight: 800; color: #FFFFFF; display: flex; align-items: center; gap: 8px;">'
+            '<span>⏱️</span> <span>Matrice de Participation aux Splits (Joueurs × Ateliers)</span>'
+            '</div>'
+            '<div style="font-size: 0.84rem; color: #E2E8F0; margin-top: 4px;">'
+            'Par défaut, tous les joueurs assignés sont considérés comme participants à tous les ateliers (<strong>100% cochés</strong>). '
+            'Si un joueur est sorti blessé, est arrivé en retard ou était ménagé sur un atelier, décochez sa case afin d\'aligner les calculs collectifs et individuels.'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    if not has_doublons and nb_assignes > 0 and df_raw is not None and not df_raw.empty:
-        split_col_m, training_splits_list = extraire_splits_entrainement(df_raw)
-        if training_splits_list:
-            has_splits_detected = True
-            st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
+        # A. Système de détection automatique d'anomalies (0 m ou 0 s sur un split)
+        anomalies = detecter_anomalies_splits(df_raw, mapping, split_col_m, training_splits_list)
+        if anomalies:
+            items_str = "\n".join([f"• {a['message']}. Décochez la case correspondante s'il n'a pas participé à cet exercice." for a in anomalies])
+            st.warning(
+                f"⚠️ **Attention — Anomalie(s) de participation détectée(s) ({len(anomalies)}) :**\n\n"
+                f"{items_str}\n\n"
+                "💡 *Conseil : Vous pouvez utiliser le bouton « ⚡ Décocher automatiquement les splits à 0 m » ci-dessous pour ajuster la matrice en un clic.*"
+            )
+        else:
+            st.success("✅ **Participation nominale :** Tous les joueurs assignés ont enregistré de la distance (> 0 m) sur chaque split d'entraînement.")
+
+        # B. Barre d'outils et actions rapides
+        c_btn_a, c_btn_b, c_info = st.columns([2.5, 2.5, 3])
+        with c_btn_a:
+            if st.button(
+                "⚡ Décocher automatiquement les splits à 0 m",
+                use_container_width=True,
+                key="btn_auto_uncheck_zero_splits",
+                help="Décoche automatiquement les splits où le joueur a 0 m ou n'a pas couru (anomalies).",
+            ):
+                cache_choix = st.session_state.setdefault("splits_participation_cache", {})
+                ano_set = {(a["player"].strip().lower(), a["split"].strip().lower()) for a in anomalies}
+                for g_id, p_name in mapping.items():
+                    if p_name and p_name not in [placeholder, TRIGGER_NOUVEAU_JOUEUR, "-"]:
+                        for sp in training_splits_list:
+                            if (p_name.strip().lower(), sp.strip().lower()) in ano_set:
+                                cache_choix[(p_name, sp)] = False
+                            elif (p_name, sp) not in cache_choix:
+                                cache_choix[(p_name, sp)] = True
+                st.session_state["splits_matrix_version"] = st.session_state.get("splits_matrix_version", 0) + 1
+                st.toast("⚡ Splits à 0 m décochés automatiquement !")
+                st.rerun()
+
+        with c_btn_b:
+            if st.button(
+                "🔄 Tout cocher (100% de participation)",
+                use_container_width=True,
+                key="btn_check_all_splits",
+                help="Réinitialise toutes les cases à Vrai (100% de participation sur tous les exercices).",
+            ):
+                cache_choix = st.session_state.setdefault("splits_participation_cache", {})
+                for g_id, p_name in mapping.items():
+                    if p_name and p_name not in [placeholder, TRIGGER_NOUVEAU_JOUEUR, "-"]:
+                        for sp in training_splits_list:
+                            cache_choix[(p_name, sp)] = True
+                st.session_state["splits_matrix_version"] = st.session_state.get("splits_matrix_version", 0) + 1
+                st.toast("🔄 Tous les splits ont été cochés (100% de participation) !")
+                st.rerun()
+
+        with c_info:
             st.markdown(
-                '<div style="background: linear-gradient(135deg, #0B192C 0%, #1F4E79 100%); padding: 12px 18px; border-radius: 10px; margin-bottom: 12px; border-left: 5px solid #D4AF37;">'
-                '<div style="font-size: 1.12rem; font-weight: 800; color: #FFFFFF; display: flex; align-items: center; gap: 8px;">'
-                '<span>⏱️</span> <span>Matrice de Participation aux Splits (Joueurs × Ateliers)</span>'
-                '</div>'
-                '<div style="font-size: 0.84rem; color: #E2E8F0; margin-top: 4px;">'
-                'Par défaut, tous les joueurs assignés sont considérés comme participants à tous les ateliers (<strong>100% cochés</strong>). '
-                'Si un joueur est sorti blessé, est arrivé en retard ou était ménagé sur un atelier, décochez sa case afin d\'aligner les calculs collectifs et individuels.'
-                '</div>'
-                '</div>',
+                f"<div style='background:#F1F5F9;border:1px solid #CBD5E1;border-radius:8px;padding:8px 12px;text-align:center;font-size:0.85rem;font-weight:700;color:#1E293B;'>"
+                f"📊 {nb_assignes} joueur(s) • {len(training_splits_list)} splits détectés"
+                f"</div>",
                 unsafe_allow_html=True,
             )
 
-            # A. Système de détection automatique d'anomalies (0 m ou 0 s sur un split)
-            anomalies = detecter_anomalies_splits(df_raw, mapping, split_col_m, training_splits_list)
-            if anomalies:
-                items_str = "\n".join([f"• {a['message']}. Décochez la case correspondante s'il n'a pas participé à cet exercice." for a in anomalies])
-                st.warning(
-                    f"⚠️ **Attention — Anomalie(s) de participation détectée(s) ({len(anomalies)}) :**\n\n"
-                    f"{items_str}\n\n"
-                    "💡 *Conseil : Vous pouvez utiliser le bouton « ⚡ Décocher automatiquement les splits à 0 m » ci-dessous pour ajuster la matrice en un clic.*"
-                )
-            else:
-                st.success("✅ **Participation nominale :** Tous les joueurs assignés ont enregistré de la distance (> 0 m) sur chaque split d'entraînement.")
+        # C. Construction du DataFrame de la matrice et affichage avec st.data_editor
+        df_mat = construire_matrice_splits(df_raw, mapping, split_col_m, training_splits_list)
 
-            # B. Barre d'outils et actions rapides
-            c_btn_a, c_btn_b, c_info = st.columns([2.5, 2.5, 3])
-            with c_btn_a:
-                if st.button(
-                    "⚡ Décocher automatiquement les splits à 0 m",
-                    use_container_width=True,
-                    key="btn_auto_uncheck_zero_splits",
-                    help="Décoche automatiquement les splits où le joueur a 0 m ou n'a pas couru (anomalies).",
-                ):
-                    cache_choix = st.session_state.setdefault("splits_participation_cache", {})
-                    ano_set = {(a["player"].strip().lower(), a["split"].strip().lower()) for a in anomalies}
-                    for g_id, p_name in mapping.items():
-                        if p_name and p_name not in [placeholder, TRIGGER_NOUVEAU_JOUEUR, "-"]:
-                            for sp in training_splits_list:
-                                if (p_name.strip().lower(), sp.strip().lower()) in ano_set:
-                                    cache_choix[(p_name, sp)] = False
-                                elif (p_name, sp) not in cache_choix:
-                                    cache_choix[(p_name, sp)] = True
-                    st.session_state["splits_matrix_version"] = st.session_state.get("splits_matrix_version", 0) + 1
-                    st.toast("⚡ Splits à 0 m décochés automatiquement !")
-                    st.rerun()
-
-            with c_btn_b:
-                if st.button(
-                    "🔄 Tout cocher (100% de participation)",
-                    use_container_width=True,
-                    key="btn_check_all_splits",
-                    help="Réinitialise toutes les cases à Vrai (100% de participation sur tous les exercices).",
-                ):
-                    cache_choix = st.session_state.setdefault("splits_participation_cache", {})
-                    for g_id, p_name in mapping.items():
-                        if p_name and p_name not in [placeholder, TRIGGER_NOUVEAU_JOUEUR, "-"]:
-                            for sp in training_splits_list:
-                                cache_choix[(p_name, sp)] = True
-                    st.session_state["splits_matrix_version"] = st.session_state.get("splits_matrix_version", 0) + 1
-                    st.toast("🔄 Tous les splits ont été cochés (100% de participation) !")
-                    st.rerun()
-
-            with c_info:
-                st.markdown(
-                    f"<div style='background:#F1F5F9;border:1px solid #CBD5E1;border-radius:8px;padding:8px 12px;text-align:center;font-size:0.85rem;font-weight:700;color:#1E293B;'>"
-                    f"📊 {nb_assignes} joueur(s) • {len(training_splits_list)} splits détectés"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # C. Construction du DataFrame de la matrice et affichage avec st.data_editor
-            df_mat = construire_matrice_splits(df_raw, mapping, split_col_m, training_splits_list)
-
-            col_cfg = {
-                "GPS": st.column_config.NumberColumn("Boîtier GPS", disabled=True, format="%d", help="Numéro du boîtier GPS"),
-                "Joueur": st.column_config.TextColumn("Joueur", disabled=True, help="Nom du joueur officiel"),
-                "Groupe": st.column_config.TextColumn("Groupe / Poste", disabled=True, help="Ligne officielle RCA"),
-                "Distance brute (m)": st.column_config.NumberColumn("Distance brute (m)", disabled=True, format="%d m", help="Cumul brut enregistré sur les splits d'entraînement"),
-            }
-            for sp in training_splits_list:
-                col_cfg[sp] = st.column_config.CheckboxColumn(
-                    label=sp,
-                    help=f"Participation de ce joueur au {sp}",
-                    default=True,
-                )
-
-            mat_version = st.session_state.get("splits_matrix_version", 0)
-            edited_mat = st.data_editor(
-                df_mat,
-                key=f"splits_data_editor_{mat_version}",
-                column_config=col_cfg,
-                disabled=["GPS", "Joueur", "Groupe", "Distance brute (m)"],
-                hide_index=True,
-                use_container_width=True,
+        col_cfg = {
+            "GPS": st.column_config.NumberColumn("Boîtier GPS", disabled=True, format="%d", help="Numéro du boîtier GPS"),
+            "Joueur": st.column_config.TextColumn("Joueur", disabled=True, help="Nom du joueur officiel"),
+            "Groupe": st.column_config.TextColumn("Groupe / Poste", disabled=True, help="Ligne officielle RCA"),
+            "Distance brute (m)": st.column_config.NumberColumn("Distance brute (m)", disabled=True, format="%d m", help="Cumul brut enregistré sur les splits d'entraînement"),
+        }
+        for sp in training_splits_list:
+            col_cfg[sp] = st.column_config.CheckboxColumn(
+                label=sp,
+                help=f"Participation de ce joueur au {sp}",
+                default=True,
             )
 
-            # Synchronisation continue du cache de choix
-            cache_choix = st.session_state.setdefault("splits_participation_cache", {})
-            for _, r in edited_mat.iterrows():
-                p_n = str(r["Joueur"])
-                for sp in training_splits_list:
-                    if sp in r:
-                        cache_choix[(p_n, sp)] = bool(r[sp])
+        mat_version = st.session_state.get("splits_matrix_version", 0)
+        edited_mat = st.data_editor(
+            df_mat,
+            key=f"splits_data_editor_{mat_version}",
+            column_config=col_cfg,
+            disabled=["GPS", "Joueur", "Groupe", "Distance brute (m)"],
+            hide_index=True,
+            use_container_width=True,
+        )
 
-            df_matrix_validated = edited_mat
-            st.session_state["splits_matrix_validated"] = edited_mat
+        # Synchronisation continue du cache de choix
+        cache_choix = st.session_state.setdefault("splits_participation_cache", {})
+        for _, r in edited_mat.iterrows():
+            p_n = str(r["Joueur"])
+            for sp in training_splits_list:
+                if sp in r:
+                    cache_choix[(p_n, sp)] = bool(r[sp])
 
-    # 5. Bouton de validation explicite de l'Étape 2 (Sauvegarde dans st.session_state et fichier JSON)
+        st.session_state["splits_matrix_validated"] = edited_mat
+
+    # 6. Bouton de validation bas de page (rappel rapide après édition de la matrice)
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
     c_btn1, c_btn2, c_btn3 = st.columns([1, 2.5, 1])
     with c_btn2:
         btn_label = "✅ Valider l'effectif et la participation aux Splits" if has_splits_detected else "✅ Valider l'effectif et l'association GPS"
-        btn_valider = st.button(
+        if st.button(
             btn_label,
             type="primary",
             disabled=has_doublons or nb_assignes == 0,
             use_container_width=True,
             key="btn_valider_effectif_step2",
             help="Valide définitivement l'attribution des boîtiers GPS et la matrice de participation aux splits, les enregistre en session et dans la configuration persistante.",
-        )
-        if btn_valider:
-            if has_doublons:
-                st.error("⛔ Validation bloquée : veuillez résoudre les doublons avant de continuer.")
-            elif nb_assignes == 0:
-                st.warning("⚠️ Veuillez attribuer au moins un boîtier GPS avant de valider.")
-            else:
-                st.session_state["step2_validated"] = True
-                st.session_state["gps_data_loaded"] = True
-                st.session_state["gps_step"] = 3
-                st.session_state["gps_mapping"] = mapping
-                st.session_state["mapping_gps_joueurs"] = mapping
-                if df_matrix_validated is not None:
-                    st.session_state["splits_matrix_validated"] = df_matrix_validated
-                cache_splits = st.session_state.get("splits_participation_cache", {})
-                sauvegarder_mapping_gps_persistant(
-                    mapping,
-                    last_file_sig=st.session_state.get("uploaded_file_sig"),
-                    splits_cache=cache_splits,
-                )
-                st.toast("✅ Effectif et participation aux splits validés avec succès !")
-                st.rerun()
+        ):
+            _valider_etape2()
 
     return mapping, has_doublons
 
@@ -2468,7 +2961,14 @@ def assign_player_groups(df: pd.DataFrame, df_raw: Optional[pd.DataFrame] = None
         p_clean = str(p).strip()
         p_lower = p_clean.lower()
 
-        # 0. Surcharge en temps réel spécifique à la séance (Étape 2 - Attribution GPS)
+        # 0. Recherche du poste spécifique réel du joueur dans le référentiel effectif RCA
+        matched_poste = None
+        for j_nom, j_poste in joueurs_data.items():
+            if j_nom.lower() == p_lower or j_nom.lower() in p_lower or p_lower in j_nom.lower():
+                matched_poste = j_poste
+                break
+
+        # 1. Surcharge en temps réel spécifique à la séance (Étape 2 - Attribution GPS)
         session_overrides = st.session_state.get("session_player_postes", {}) if hasattr(st, "session_state") else {}
         matched_override = None
         for s_nom, s_grp in session_overrides.items():
@@ -2477,17 +2977,15 @@ def assign_player_groups(df: pd.DataFrame, df_raw: Optional[pd.DataFrame] = None
                 break
 
         if matched_override:
-            group_list.append(matched_override)
-            poste_detaille_list.append(matched_override)
+            group_list.append(canonicalize_group_for_step3(matched_override))
+            if str(matched_override).strip().lower() == "demi":
+                poste_val = matched_poste if (matched_poste and "demi" in matched_poste.lower()) else "Demi"
+            else:
+                poste_val = matched_poste or canonicalize_group_for_step3(matched_override)
+            poste_detaille_list.append(poste_val)
             continue
 
-        # 1. Correspondance avec la base de données effectif RCA
-        matched_poste = None
-        for j_nom, j_poste in joueurs_data.items():
-            if j_nom.lower() == p_lower or j_nom.lower() in p_lower or p_lower in j_nom.lower():
-                matched_poste = j_poste
-                break
-
+        # 2. Affectation nominale depuis la base de données effectif RCA
         if matched_poste:
             grp = mapper_poste_vers_groupe_rca(matched_poste, nom_joueur=p_clean)
             poste_detaille_list.append(matched_poste)
@@ -5120,6 +5618,7 @@ def reinitialiser_session_gps() -> None:
         "uploaded_file_sig",
         "uploaded_file_name",
         "step2_validated",
+        "edit_step2",
         "gps_data_loaded",
         "gps_step",
         "active_gps_session",
@@ -5127,12 +5626,20 @@ def reinitialiser_session_gps() -> None:
         "main_file_uploader",
         "main_file_uploader_expander",
         "chk_mode_demo",
+        "sensor_assignments",
+        "session_player_postes",
+        "session_meteo",
+        "sensor_memo_flags",
     ]
     for k in cles_a_vider:
         if k in st.session_state:
             del st.session_state[k]
     for k in list(st.session_state.keys()):
-        if k.startswith("gps_sel_boitier_"):
+        if (
+            k.startswith("gps_sel_boitier_")
+            or k.startswith("gps_sel_groupe_")
+            or k.startswith("gps_chk_memo_")
+        ):
             del st.session_state[k]
     st.toast("Séance réinitialisée. Vous pouvez importer un nouveau fichier.")
     st.rerun()
@@ -5513,26 +6020,53 @@ def main() -> None:
             st.session_state["uploaded_file_sig"] = None
         if "step2_validated" not in st.session_state:
             st.session_state["step2_validated"] = False
-        if "mapping_gps_joueurs" not in st.session_state:
-            # Chargement persistant depuis fichier JSON ou dictionnaire officiel
-            persisted = charger_mapping_gps_persistant()
-            if persisted:
-                st.session_state["mapping_gps_joueurs"] = persisted
-            else:
-                st.session_state["mapping_gps_joueurs"] = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
-                sauvegarder_mapping_gps_persistant(st.session_state["mapping_gps_joueurs"])
+        if "edit_step2" not in st.session_state:
+            st.session_state["edit_step2"] = False
+        if "sensor_assignments" not in st.session_state:
+            st.session_state["sensor_assignments"] = {}
+        if "session_player_postes" not in st.session_state:
+            st.session_state["session_player_postes"] = {}
+        if "mapping_gps_joueurs" not in st.session_state or "sensor_memory" not in st.session_state:
+            mem_cfg_init = charger_memoire_gps_complete()
+            persisted = mem_cfg_init.get("mapping", {})
+            persisted_grps = mem_cfg_init.get("group_mapping", {})
+            if "mapping_gps_joueurs" not in st.session_state:
+                if persisted:
+                    st.session_state["mapping_gps_joueurs"] = persisted
+                else:
+                    st.session_state["mapping_gps_joueurs"] = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
+                    sauvegarder_mapping_gps_persistant(st.session_state["mapping_gps_joueurs"], push_github=False)
+            if "sensor_memory" not in st.session_state:
+                init_sm: Dict[str, Dict[str, str]] = {}
+                comb_sm = {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()}
+                comb_sm.update(persisted)
+                for gk, pv in comb_sm.items():
+                    if pv:
+                        gv = persisted_grps.get(str(gk)) or get_player_poste_and_group_step2(pv)[1]
+                        init_sm[str(gk)] = {"player": pv, "group": mapper_vers_groupe_step2(gv, pv)}
+                st.session_state["sensor_memory"] = init_sm
         if "gps_mapping" not in st.session_state:
             st.session_state["gps_mapping"] = dict(st.session_state["mapping_gps_joueurs"])
+        if "mapping_gps" not in st.session_state:
+            st.session_state["mapping_gps"] = dict(st.session_state["gps_mapping"])
     except Exception as e:
         st.error(f"Erreur GPS : {e}")
         st.session_state.setdefault("df_raw", None)
         st.session_state.setdefault("uploaded_file_sig", None)
         st.session_state.setdefault("step2_validated", False)
+        st.session_state.setdefault("edit_step2", False)
+        st.session_state.setdefault("sensor_assignments", {})
+        st.session_state.setdefault("session_player_postes", {})
         st.session_state.setdefault("mapping_gps_joueurs", {str(k): v for k, v in DEFAULT_GPS_MAPPING.items()})
         st.session_state.setdefault("gps_mapping", dict(st.session_state["mapping_gps_joueurs"]))
+        st.session_state.setdefault("mapping_gps", dict(st.session_state["gps_mapping"]))
 
     is_step1_done = st.session_state.get("df_raw") is not None
-    is_step2_done = is_step1_done and bool(st.session_state.get("step2_validated", False))
+    is_step2_done = (
+        is_step1_done
+        and bool(st.session_state.get("step2_validated", False))
+        and not bool(st.session_state.get("edit_step2", False))
+    )
     is_step3_active = is_step2_done
 
     step1_cls = "completed" if is_step1_done else "active"
@@ -5570,168 +6104,155 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # Si l'Étape 3 est déjà active et consolidée dans la session, afficher le bandeau de session active et l'expander de repli
+    # Si l'Étape 3 est active, afficher directement le bandeau avec accès 1 clic à l'édition Étape 2 ou réinitialisation
     if is_step3_active:
-        col_banner_info, col_banner_btn = st.columns([4, 1.5])
+        col_banner_info, col_banner_edit, col_banner_reset = st.columns([3.2, 1.5, 1.5])
         with col_banner_info:
             nom_f = st.session_state.get("uploaded_file_name", "Séance active Catapult")
             st.success(f"📂 **Séance active :** `{nom_f}` — L'Étape 3 avec l'ensemble des analyses et rapports est prête.")
-        with col_banner_btn:
-            if st.button("🔄 Traiter une nouvelle séance / Réinitialiser", key="btn_reset_banner_top", use_container_width=True, type="primary"):
-                reinitialiser_session_gps()
-
-        with st.expander("⚙️ Revoir le fichier importé ou modifier l'attribution des boîtiers GPS (Étapes 1 & 2)", expanded=False):
-            st.markdown("##### 📥 Remplacer le fichier de séance")
-            new_file_act = st.file_uploader(
-                "Déposer un autre export Excel brut Catapult One (.xlsx) :",
-                type=["xlsx", "xls", "csv"],
-                key="file_uploader_expander_active",
-            )
-            if new_file_act is not None:
-                new_sig = f"{new_file_act.name}_{new_file_act.size}"
-                if st.session_state.get("uploaded_file_sig") != new_sig:
-                    st.session_state["uploaded_file_sig"] = new_sig
-                    st.session_state["uploaded_file_name"] = new_file_act.name
-                    st.session_state["gps_data_loaded"] = True
-                    st.session_state["step2_validated"] = False
-                    st.session_state["gps_step"] = 2
-                    try:
-                        st.session_state["df_raw"] = load_catapult_file(new_file_act)
-                        st.toast(f"✅ Nouveau fichier '{new_file_act.name}' importé avec succès.")
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"❌ Erreur lors du chargement : {err}")
-
-            st.markdown("---")
-            st.markdown("##### 📡 Association des boîtiers GPS validée")
-            if st.button("🔄 Modifier l'attribution GPS / Effectif", key="btn_reopen_step2_from_exp", use_container_width=True):
+        with col_banner_edit:
+            if st.button("🔄 Modifier l'attribution GPS / Effectif", key="btn_reopen_step2", type="secondary", use_container_width=True):
                 st.session_state["step2_validated"] = False
+                st.session_state["edit_step2"] = True
                 st.session_state["gps_step"] = 2
                 st.rerun()
-
-            mapping_gps_curr = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
-            c_exp1, c_exp2 = st.columns(2)
-            unique_keys = sorted(list({int(k) for k in mapping_gps_curr if str(k).isdigit()}))
-            half = (len(unique_keys) + 1) // 2
-            for i_idx, k in enumerate(unique_keys):
-                col_target = c_exp1 if i_idx < half else c_exp2
-                nom_j = mapping_gps_curr.get(k) or mapping_gps_curr.get(str(k))
-                poste_j = joueurs_data.get(nom_j, "")
-                grp_j = mapper_poste_vers_groupe_rca(poste_j, nom_j)
-                col_target.markdown(f"• **Boîtier {k}** : {nom_j} (*{poste_j}* ➔ `{grp_j}`)")
+        with col_banner_reset:
+            if st.button("🔄 Traiter une nouvelle séance / Réinitialiser", key="btn_reset_banner_top", use_container_width=True, type="primary"):
+                reinitialiser_session_gps()
 
         df_raw = st.session_state.get("df_raw")
         mapping_gps = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
 
     else:
-        # ==========================================================================
-        # ÉTAPE 1 : IMPORTATION DU FICHIER BRUT CATAPULT (.XLSX)
-        # ==========================================================================
-        st.markdown('<div class="section-header">📥 Étape 1 : Importation du Fichier Brut Catapult</div>', unsafe_allow_html=True)
+        # En mode édition directe de l'Étape 2 (1 clic depuis l'Étape 3), contourner la zone d'import
+        if not (bool(st.session_state.get("edit_step2", False)) and st.session_state.get("df_raw") is not None):
+            # ==========================================================================
+            # ÉTAPE 1 : IMPORTATION DU FICHIER BRUT CATAPULT (.XLSX)
+            # ==========================================================================
+            st.markdown('<div class="section-header">📥 Étape 1 : Importation du Fichier Brut Catapult</div>', unsafe_allow_html=True)
 
-        uploaded_file = st.file_uploader(
-            "Déposer l'export Excel brut Catapult One (.xlsx) :",
-            type=["xlsx", "xls", "csv"],
-            help="Prend en charge les exports Catapult One, PlayerTek et OpenField au format Excel (.xlsx) ou CSV avec détection automatique du tableau.",
-            key="main_file_uploader",
-        )
+            uploaded_file = st.file_uploader(
+                "Déposer l'export Excel brut Catapult One (.xlsx) :",
+                type=["xlsx", "xls", "csv"],
+                help="Prend en charge les exports Catapult One, PlayerTek et OpenField au format Excel (.xlsx) ou CSV avec détection automatique du tableau.",
+                key="main_file_uploader",
+            )
 
-        if uploaded_file is None:
-            if st.session_state.get("df_raw") is not None:
-                st.session_state["gps_data_loaded"] = True
-            else:
-                col_msg, col_demo = st.columns([3.8, 1.2])
-                with col_msg:
-                    st.info(
-                        "👋 **Bienvenue sur le portail d'analyse GPS du Rugby Club Amiénois (RCA).**\n\n"
-                        "👉 **Étape 1 obligatoire :** Veuillez importer l'export Excel brut Catapult (`.xlsx`) "
-                        "de la séance du jour ci-dessus pour initialiser le traitement."
-                    )
-                with col_demo:
-                    use_demo = st.checkbox("🧪 Mode Démo", value=False, help="Active des données de démonstration avec l'effectif réel RCA.", key="chk_mode_demo")
-                    if st.button("➕ Créer un joueur", help="Ajouter un joueur à l'effectif RCA", key="btn_create_player_home", use_container_width=True):
-                        dialog_creer_nouveau_joueur()
-
-                if use_demo:
-                    demo_rows = []
-                    for d in MOCK_DEMO_DATA:
-                        demo_rows.append({
-                            "Date": "08/09/2026",
-                            "Player Name": d["Player Name"],
-                            "Position": d["Position"],
-                            "Distance (km)": d["Distance (km)"],
-                            "Distance in Speed Zone 4 (km)": d["Zone 4 (km)"],
-                            "Distance in Speed Zone 5 (km)": d["Zone 5 (km)"],
-                            "Top Speed (km/h)": d["Top Speed"],
-                            "Duration": d["Duration"],
-                            "Distance in Speed Zone 1 (km)": d["Z1 (km)"],
-                            "Distance in Speed Zone 2 (km)": d["Z2 (km)"],
-                            "Distance in Speed Zone 3 (km)": d["Z3 (km)"],
-                            "Accelerations Zone Count: 3 - 4 m/s/s": d["Acc34"],
-                            "Accelerations Zone Count: > 4 m/s/s": d["Acc4"],
-                            "Deceleration Zone Count: 3 - 4 m/s/s": d["Dec34"],
-                            "Deceleration Zone Count: > 4 m/s/s": d["Dec4"],
-                        })
-                    st.session_state["df_raw"] = pd.DataFrame(demo_rows)
-                    st.session_state["uploaded_file_sig"] = "demo_data_rca"
-                    st.session_state["uploaded_file_name"] = "Données_Simulation_RCA_Demo.xlsx"
+            if uploaded_file is None:
+                if st.session_state.get("df_raw") is not None:
                     st.session_state["gps_data_loaded"] = True
-                    st.session_state["gps_step"] = 2
-                    st.session_state["step2_validated"] = False
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("gps_sel_boitier_"):
-                            del st.session_state[k]
-                    st.toast("Mode démonstration actif avec les données de simulation RCA.")
-                    st.rerun()
                 else:
-                    st.session_state.setdefault("df_raw", None)
-                    st.session_state.setdefault("uploaded_file_sig", None)
-                    st.session_state.setdefault("gps_data_loaded", False)
-                    st.session_state.setdefault("step2_validated", False)
-                    # BLOQUE STRICTEMENT L'EXÉCUTION TANT QU'AUCUN FICHIER N'EST CHARGÉ
-                    return
+                    col_msg, col_demo = st.columns([3.8, 1.2])
+                    with col_msg:
+                        st.info(
+                            "👋 **Bienvenue sur le portail d'analyse GPS du Rugby Club Amiénois (RCA).**\n\n"
+                            "👉 **Étape 1 obligatoire :** Veuillez importer l'export Excel brut Catapult (`.xlsx`) "
+                            "de la séance du jour ci-dessus pour initialiser le traitement."
+                        )
+                    with col_demo:
+                        use_demo = st.checkbox("🧪 Mode Démo", value=False, help="Active des données de démonstration avec l'effectif réel RCA.", key="chk_mode_demo")
+                        if st.button("➕ Créer un joueur", help="Ajouter un joueur à l'effectif RCA", key="btn_create_player_home", use_container_width=True):
+                            dialog_creer_nouveau_joueur()
 
-        else:
-            file_sig = f"{uploaded_file.name}_{uploaded_file.size}"
-            persisted_sig = None
-            if os.path.exists(CONFIG_GPS_FILE):
-                try:
-                    with open(CONFIG_GPS_FILE, "r", encoding="utf-8") as f:
-                        d_cfg = json.load(f)
-                        if isinstance(d_cfg, dict):
-                            persisted_sig = d_cfg.get("last_validated_file_sig")
-                            if "splits_participation" in d_cfg and isinstance(d_cfg["splits_participation"], dict):
-                                sp_c = st.session_state.setdefault("splits_participation_cache", {})
-                                for k_sp, v_sp in d_cfg["splits_participation"].items():
-                                    if ":::" in k_sp:
-                                        p_sp, s_sp = k_sp.split(":::", 1)
-                                        sp_c[(p_sp, s_sp)] = bool(v_sp)
-                except Exception:
-                    pass
-
-            if st.session_state.get("uploaded_file_sig") != file_sig:
-                st.session_state["uploaded_file_sig"] = file_sig
-                st.session_state["uploaded_file_name"] = uploaded_file.name
-                st.session_state["gps_data_loaded"] = True
-                st.session_state["gps_step"] = 2
-                # Si le fichier a déjà été validé précédemment, restaurer automatiquement la validation au rafraîchissement
-                if persisted_sig and persisted_sig == file_sig:
-                    st.session_state["step2_validated"] = True
-                    st.session_state["gps_step"] = 3
-                else:
-                    st.session_state["step2_validated"] = False
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("gps_sel_boitier_"):
-                            del st.session_state[k]
-                with st.spinner("Lecture et analyse de l'export Catapult One..."):
-                    try:
-                        st.session_state["df_raw"] = load_catapult_file(uploaded_file)
-                        st.toast(f"✅ Fichier '{uploaded_file.name}' importé avec succès.")
-                    except Exception as e:
-                        st.error(f"❌ Erreur lors du chargement du fichier Catapult : {str(e)}")
-                        with st.expander("Détails techniques de l'erreur"):
-                            st.exception(e)
+                    if use_demo:
+                        demo_rows = []
+                        for d in MOCK_DEMO_DATA:
+                            demo_rows.append({
+                                "Date": "08/09/2026",
+                                "Player Name": d["Player Name"],
+                                "Position": d["Position"],
+                                "Distance (km)": d["Distance (km)"],
+                                "Distance in Speed Zone 4 (km)": d["Zone 4 (km)"],
+                                "Distance in Speed Zone 5 (km)": d["Zone 5 (km)"],
+                                "Top Speed (km/h)": d["Top Speed"],
+                                "Duration": d["Duration"],
+                                "Distance in Speed Zone 1 (km)": d["Z1 (km)"],
+                                "Distance in Speed Zone 2 (km)": d["Z2 (km)"],
+                                "Distance in Speed Zone 3 (km)": d["Z3 (km)"],
+                                "Accelerations Zone Count: 3 - 4 m/s/s": d["Acc34"],
+                                "Accelerations Zone Count: > 4 m/s/s": d["Acc4"],
+                                "Deceleration Zone Count: 3 - 4 m/s/s": d["Dec34"],
+                                "Deceleration Zone Count: > 4 m/s/s": d["Dec4"],
+                            })
+                        st.session_state["df_raw"] = pd.DataFrame(demo_rows)
+                        st.session_state["uploaded_file_sig"] = "demo_data_rca"
+                        st.session_state["uploaded_file_name"] = "Données_Simulation_RCA_Demo.xlsx"
+                        st.session_state["gps_data_loaded"] = True
+                        st.session_state["gps_step"] = 2
+                        st.session_state["step2_validated"] = False
+                        st.session_state["edit_step2"] = True
+                        st.session_state["sensor_assignments"] = {}
+                        st.session_state["session_player_postes"] = {}
+                        for k in list(st.session_state.keys()):
+                            if (
+                                k.startswith("gps_sel_boitier_")
+                                or k.startswith("gps_sel_groupe_")
+                                or k.startswith("gps_chk_memo_")
+                            ):
+                                del st.session_state[k]
+                        st.toast("Mode démonstration actif avec les données de simulation RCA.")
+                        st.rerun()
+                    else:
+                        st.session_state.setdefault("df_raw", None)
+                        st.session_state.setdefault("uploaded_file_sig", None)
+                        st.session_state.setdefault("gps_data_loaded", False)
+                        st.session_state.setdefault("step2_validated", False)
+                        # BLOQUE STRICTEMENT L'EXÉCUTION TANT QU'AUCUN FICHIER N'EST CHARGÉ
                         return
+
+            else:
+                file_sig = f"{uploaded_file.name}_{uploaded_file.size}"
+                mem_cfg_up = charger_memoire_gps_complete()
+                persisted_sig = mem_cfg_up.get("last_validated_file_sig")
+                if isinstance(mem_cfg_up.get("splits_participation"), dict):
+                    sp_c = st.session_state.setdefault("splits_participation_cache", {})
+                    for k_sp, v_sp in mem_cfg_up["splits_participation"].items():
+                        if ":::" in k_sp:
+                            p_sp, s_sp = k_sp.split(":::", 1)
+                            sp_c[(p_sp, s_sp)] = bool(v_sp)
+
+                if st.session_state.get("uploaded_file_sig") != file_sig:
+                    st.session_state["uploaded_file_sig"] = file_sig
+                    st.session_state["uploaded_file_name"] = uploaded_file.name
+                    st.session_state["gps_data_loaded"] = True
+                    st.session_state["edit_step2"] = False
+                    for k in list(st.session_state.keys()):
+                        if (
+                            k.startswith("gps_sel_boitier_")
+                            or k.startswith("gps_sel_groupe_")
+                            or k.startswith("gps_chk_memo_")
+                        ):
+                            del st.session_state[k]
+
+                    with st.spinner("Lecture et analyse de l'export Catapult One..."):
+                        try:
+                            st.session_state["df_raw"] = load_catapult_file(uploaded_file)
+                            st.toast(f"✅ Fichier '{uploaded_file.name}' importé avec succès.")
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors du chargement du fichier Catapult : {str(e)}")
+                            with st.expander("Détails techniques de l'erreur"):
+                                st.exception(e)
+                            return
+
+                    # Si le fichier a déjà été validé précédemment, restaurer la validation et ouvrir l'Étape 3 immédiatement
+                    if persisted_sig and persisted_sig == file_sig:
+                        persisted_map = mem_cfg_up.get("mapping", {})
+                        persisted_grp = mem_cfg_up.get("group_mapping", {})
+                        postes_restore = st.session_state.setdefault("session_player_postes", {})
+                        assign_restore = st.session_state.setdefault("sensor_assignments", {})
+                        for g_k, p_v in persisted_map.items():
+                            if g_k in persisted_grp:
+                                g_v = mapper_vers_groupe_step2(persisted_grp[g_k], p_v)
+                                postes_restore[p_v] = g_v
+                                assign_restore[str(g_k)] = {"player": p_v, "group": g_v}
+                        st.session_state["step2_validated"] = True
+                        st.session_state["gps_step"] = 3
+                        st.rerun()
+                    else:
+                        st.session_state["step2_validated"] = False
+                        st.session_state["gps_step"] = 2
+                        st.session_state["sensor_assignments"] = {}
+                        st.session_state["session_player_postes"] = {}
 
         df_raw = st.session_state.get("df_raw")
         if df_raw is None or df_raw.empty:
@@ -5743,15 +6264,13 @@ def main() -> None:
         # ==========================================================================
         st.markdown('<div class="section-header">📡 Étape 2 : Association des Boîtiers GPS aux Joueurs et aux Postes</div>', unsafe_allow_html=True)
 
-        if not st.session_state.get("step2_validated", False):
+        if not st.session_state.get("step2_validated", False) or st.session_state.get("edit_step2", False):
             st.info(
                 "📋 **Consignes de l'Étape 2 :**\n\n"
-                "1. Associez chaque numéro de boîtier GPS détecté au joueur correspondant.\n"
-                "2. Le poste détaillé et sa conversion automatique vers l'un des **3 grands groupes officiels du RCA** "
-                "(`5 de devant`, `3ème Ligne`, `Trois-quarts`) sont appliqués en direct.\n"
-                "3. **Créer un nouveau joueur :** Utilisez le bouton « ➕ Nouveau joueur » en haut du tableau ou sélectionnez l'option « ➕ [Créer un nouveau joueur...] » directement dans le menu déroulant d'un boîtier.\n"
-                "4. **Sécurité anti-doublon :** Il est strictement interdit d'attribuer un même joueur à plusieurs boîtiers sur la séance.\n"
-                "5. Cliquez sur **« ✅ Valider l'effectif et l'association GPS »** pour débloquer l'Étape 3."
+                "1. Associez chaque numéro de boîtier GPS détecté au joueur correspondant : son groupe de poste se met à jour instantanément.\n"
+                "2. Ajustez librement le **Groupe de poste** (`5 de devant`, `3ème ligne`, `Demi`, `Trois-quarts`) pour la séance si nécessaire.\n"
+                "3. Cochez **Mémoriser ce boîtier** pour conserver ces associations lors des prochains imports Catapult.\n"
+                "4. Cliquez sur **« ✅ Valider l'effectif et l'association GPS (pour débloquer l'Étape 3) »** pour générer les analyses."
             )
 
             ui_attribution_gps(df_raw=df_raw)
@@ -5768,30 +6287,8 @@ def main() -> None:
             # RÈGLE ABSOLUE : BLOQUE STRICTEMENT L'EXÉCUTION TANT QUE L'ÉTAPE 2 N'EST PAS VALIDÉE
             return
 
-        # Si l'Étape 2 est validée, afficher le récapitulatif avec possibilité de modification
-        mapping_gps = st.session_state.get("mapping_gps_joueurs") or st.session_state.get("gps_mapping", {})
-        with st.container():
-            c_val1, c_val2 = st.columns([4, 1.5])
-            with c_val1:
-                st.success(
-                    f"✅ **Étape 2 validée :** Effectif officiel verrouillé avec {len(set(mapping_gps.values()))} joueur(s) unique(s) associé(s) sans aucun doublon."
-                )
-            with c_val2:
-                if st.button("🔄 Modifier l'attribution GPS / Effectif", key="btn_reopen_step2", use_container_width=True):
-                    st.session_state["step2_validated"] = False
-                    st.session_state["gps_step"] = 2
-                    st.rerun()
-
-        with st.expander("👀 Voir le détail de l'association GPS validée", expanded=False):
-            c_exp1, c_exp2 = st.columns(2)
-            unique_keys = sorted(list({int(k) for k in mapping_gps if str(k).isdigit()}))
-            half = (len(unique_keys) + 1) // 2
-            for i_idx, k in enumerate(unique_keys):
-                col_target = c_exp1 if i_idx < half else c_exp2
-                nom_j = mapping_gps.get(k) or mapping_gps.get(str(k))
-                poste_j = joueurs_data.get(nom_j, "")
-                grp_j = mapper_poste_vers_groupe_rca(poste_j, nom_j)
-                col_target.markdown(f"• **Boîtier {k}** : {nom_j} (*{poste_j}* ➔ `{grp_j}`)")
+        st.session_state["edit_step2"] = False
+        st.rerun()
 
     # ==========================================================================
     # ÉTAPE 3 : GÉNÉRATION DES TABLEAUX, GRAPHIQUES, PODIUMS ET RAPPORTS OFFICIELS
