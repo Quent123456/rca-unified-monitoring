@@ -103,15 +103,12 @@ def normalize_player_name_key(name: Any) -> str:
 def parse_week_number(val: Any) -> Optional[int]:
     """
     Extrait le numéro de semaine (entier entre 1 et 53).
-    Gère: 45, '45', 'S45', 'Semaine 45', 'Semaine n° 45', etc.
     Gère: 45, 45.0, '45', 'S45', 'W43', '2026-W43', 'Semaine 45', 'Semaine n° 45', etc.
     """
     if val is None or pd.isna(val):
         return None
     if isinstance(val, (int, float)):
         try:
-            w = int(val)
-            if 1 <= w <= 53:
             w = int(round(float(val)))
             if 1 <= w <= 53 and abs(float(val) - w) < 0.01:
                 return w
