@@ -33,17 +33,86 @@ RUGBY_POSITIONS = [
 ]
 
 MOCK_PLAYERS = [
-    {"id": "J01", "nom": "DUPONT", "prenom": "Antoine", "poste": "Demi de mêlée", "groupe": "Équipe A"},
-    {"id": "J02", "nom": "ALLDRITT", "prenom": "Grégory", "poste": "Troisième ligne centre", "groupe": "Équipe A"},
-    {"id": "J03", "nom": "NTAMACK", "prenom": "Romain", "poste": "Demi d'ouverture", "groupe": "Équipe A"},
-    {"id": "J04", "nom": "ATONIO", "prenom": "Uini", "poste": "Pilier droit", "groupe": "Équipe A"},
-    {"id": "J05", "nom": "MARCHAND", "prenom": "Julien", "poste": "Talonneur", "groupe": "Équipe A"},
-    {"id": "J06", "nom": "FLAMENT", "prenom": "Thibaud", "poste": "Deuxième ligne", "groupe": "Équipe B"},
-    {"id": "J07", "nom": "PENAUD", "prenom": "Damian", "poste": "Ailier droit", "groupe": "Équipe B"},
-    {"id": "J08", "nom": "RAMOS", "prenom": "Thomas", "poste": "Arrière", "groupe": "Équipe B"},
-    {"id": "J09", "nom": "FICKOU", "prenom": "Gaël", "poste": "Premier centre", "groupe": "Équipe B"},
-    {"id": "J10", "nom": "OLLIVON", "prenom": "Charles", "poste": "Troisième ligne aile", "groupe": "Équipe B"},
+    {"id": "J01", "nom": "BAMIERE", "prenom": "Clément", "poste": "Demi de mêlée", "groupe": "Équipe A"},
+    {"id": "J02", "nom": "VASELLI", "prenom": "Enzo", "poste": "3ème ligne", "groupe": "Équipe A"},
+    {"id": "J03", "nom": "HARRY", "prenom": "Max", "poste": "Demi d'ouverture", "groupe": "Équipe A"},
+    {"id": "J04", "nom": "COZIC", "prenom": "Adrien", "poste": "Pilier", "groupe": "Équipe A"},
+    {"id": "J05", "nom": "LESUEUR", "prenom": "Jean-Étienne", "poste": "Talonneur", "groupe": "Équipe A"},
+    {"id": "J06", "nom": "WAEYAERT", "prenom": "Thomas", "poste": "2ème ligne", "groupe": "Équipe B"},
+    {"id": "J07", "nom": "SELTZER", "prenom": "Antoine", "poste": "Ailier", "groupe": "Équipe B"},
+    {"id": "J08", "nom": "PRÉVOST", "prenom": "Thomas", "poste": "Arrière", "groupe": "Équipe B"},
+    {"id": "J09", "nom": "VENIN", "prenom": "Benoît", "poste": "Centre", "groupe": "Équipe B"},
+    {"id": "J10", "nom": "MONTI", "prenom": "Ciro", "poste": "3ème ligne", "groupe": "Équipe B"},
 ]
+
+import unicodedata
+import re
+
+FICTIONAL_TEST_PLAYERS = {
+    ("alldritt", "gregory"),
+    ("atonio", "uini"),
+    ("baille", "cyril"),
+    ("bamba", "demba"),
+    ("barassi", "pierre louis"),
+    ("bielle biarrey", "louis"),
+    ("dupont", "antoine"),
+    ("fickou", "gael"),
+    ("flament", "thibaud"),
+    ("gros", "jean baptiste"),
+    ("haouas", "mohamed"),
+    ("jelonch", "anthony"),
+    ("marchand", "julien"),
+    ("mauvaka", "peato"),
+    ("meafou", "emmanuel"),
+    ("meafour", "emmanuel"),
+    ("ntamack", "romain"),
+    ("ollivon", "charles"),
+    ("penaud", "damian"),
+    ("ramos", "thomas"),
+    ("woki", "cameron"),
+}
+
+
+def _norm_identity_token(val: str) -> str:
+    txt = unicodedata.normalize("NFKD", str(val or "").strip())
+    txt = "".join(ch for ch in txt if not unicodedata.combining(ch))
+    txt = re.sub(r"[-_'’./,;]+", " ", txt.lower())
+    return " ".join(txt.split())
+
+
+FICTIONAL_FULLNAME_STRINGS = {
+    f"{n} {p}" for n, p in FICTIONAL_TEST_PLAYERS
+} | {
+    f"{p} {n}" for n, p in FICTIONAL_TEST_PLAYERS
+}
+
+
+def is_fictional_test_player(full_name: str = "", nom: str = "", prenom: str = "") -> bool:
+    """Retourne True si l'identité correspond à un joueur test fictif (XV de France / Top 14)."""
+    n_norm = _norm_identity_token(nom)
+    p_norm = _norm_identity_token(prenom)
+    if n_norm and p_norm:
+        if (n_norm, p_norm) in FICTIONAL_TEST_PLAYERS or (p_norm, n_norm) in FICTIONAL_TEST_PLAYERS:
+            return True
+    full_norm = _norm_identity_token(full_name or f"{n_norm} {p_norm}")
+    if not full_norm:
+        return False
+    return full_norm in FICTIONAL_FULLNAME_STRINGS
+
+
+def filter_out_test_players(df: pd.DataFrame) -> pd.DataFrame:
+    """Filtre tout DataFrame d'effectif pour exclure les joueurs fictifs/tests."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    def _keep(row: pd.Series) -> bool:
+        nom = row.get("nom", row.get("Nom", ""))
+        prenom = row.get("prenom", row.get("Prénom", row.get("Prenom", "")))
+        full = row.get("Nom ; Prénom", row.get("Nom / Prenom", row.get("Nom / Prénom", row.get("Athlete Name", row.get("Player Name", "")))))
+        return not is_fictional_test_player(full_name=str(full or ""), nom=str(nom or ""), prenom=str(prenom or ""))
+
+    mask = df.apply(_keep, axis=1)
+    return df.loc[mask].copy()
 
 
 def get_gsheet_client() -> Optional[gspread.Client]:
@@ -168,7 +237,8 @@ def get_players() -> pd.DataFrame:
         if expected_col not in df_clean.columns:
             df_clean[expected_col] = "Inconnu" if expected_col != "id" else ""
 
-    # Tri alphabétique NOM puis Prénom
+    # Tri alphabétique NOM puis Prénom et filtrage strict des joueurs fictifs/tests
+    df_clean = filter_out_test_players(df_clean)
     df_clean = df_clean.sort_values(
         by=["nom", "prenom"],
         key=lambda s: s.astype(str).str.upper()

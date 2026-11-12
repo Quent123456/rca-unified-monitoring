@@ -353,7 +353,10 @@ def charger_effectif_google_sheets() -> Dict[str, str]:
             prenom = str(row.get("prenom", "")).strip()
             poste = str(row.get("poste", "")).strip() or "Non spécifié"
             if nom and prenom and nom.lower() != "inconnu":
-                res[f"{nom} {prenom}"] = poste
+                full = f"{nom} {prenom}"
+                if hasattr(gsheet_sync, "is_fictional_test_player") and gsheet_sync.is_fictional_test_player(full, nom, prenom):
+                    continue
+                res[full] = poste
         return res
     except Exception:
         return {}
@@ -362,9 +365,25 @@ def charger_effectif_google_sheets() -> Dict[str, str]:
 def synchroniser_effectif_avec_custom() -> None:
     """Injecte les joueurs Google Sheets et personnalisés dans le dictionnaire global joueurs_data."""
     try:
+        try:
+            from modules import gsheet_sync
+        except (ImportError, ModuleNotFoundError):
+            import gsheet_sync
+        is_test_fn = getattr(gsheet_sync, "is_fictional_test_player", None)
+    except Exception:
+        is_test_fn = None
+
+    if is_test_fn:
+        for k in list(joueurs_data.keys()):
+            if is_test_fn(k):
+                joueurs_data.pop(k, None)
+
+    try:
         gs_players = charger_effectif_google_sheets()
         existing_lower = {k.strip().lower() for k in joueurs_data}
         for nom, poste in gs_players.items():
+            if is_test_fn and is_test_fn(nom):
+                continue
             if nom.strip().lower() not in existing_lower:
                 joueurs_data[nom] = poste
                 existing_lower.add(nom.strip().lower())
@@ -373,10 +392,18 @@ def synchroniser_effectif_avec_custom() -> None:
 
     custom = charger_joueurs_personnalises()
     for nom, info in custom.items():
+        if is_test_fn and is_test_fn(nom):
+            continue
         if isinstance(info, dict):
             joueurs_data[nom] = info.get("poste", "Non spécifié")
         elif isinstance(info, str):
             joueurs_data[nom] = info
+
+    try:
+        if hasattr(weekly_memory, "register_joueurs_lookup"):
+            weekly_memory.register_joueurs_lookup(joueurs_data)
+    except Exception:
+        pass
 
 
 # Synchronisation initiale au démarrage du module
@@ -1570,9 +1597,9 @@ def dialog_creer_nouveau_joueur(
         with col_nom:
             nouveau_nom = st.text_input(
                 "Nom et Prénom du joueur * :",
-                placeholder="Ex: DUPONT Antoine",
+                placeholder="Ex: VASELLI Enzo",
                 key="dlg_input_nom_joueur",
-                help="Saisissez le Nom de famille suivi du Prénom (ex: DUPONT Antoine).",
+                help="Saisissez le Nom de famille suivi du Prénom (ex: VASELLI Enzo).",
             )
         with col_poste:
             choix_poste = st.selectbox(
@@ -3555,131 +3582,32 @@ def calculer_metriques_jauges(
 
 
 def generer_podium_dynamique(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """Génère le Podium des 3 tops à partir des données réelles avec photos Base64 et postes."""
-    def _make_player_entry(rank: int, name: Any, stat_str: Any, poste: Any = "") -> Dict[str, Any]:
-        p_name = str(name).strip() if pd.notna(name) and name is not None else "-"
-        if p_name in ["nan", "None", ""]:
-            p_name = "-"
-        p_poste = str(poste).strip() if pd.notna(poste) and poste is not None else ""
-        if p_poste in ["nan", "None"]:
-            p_poste = ""
-        if not p_poste and p_name and p_name != "-":
-            p_poste = joueurs_data.get(p_name, "")
-            if not p_poste:
-                p_poste = JOUEURS_CUSTOM_CACHE.get(p_name, {}).get("poste", "")
-            if not p_poste:
-                parts = p_name.split()
-                if len(parts) >= 2:
-                    inv1 = f"{parts[-1]} {' '.join(parts[:-1])}"
-                    p_poste = joueurs_data.get(inv1, "")
-                    if not p_poste:
-                        inv2 = f"{' '.join(parts[1:])} {parts[0]}"
-                        p_poste = joueurs_data.get(inv2, "")
-        return {
-            "rank": rank,
-            "name": p_name,
-            "poste": p_poste if p_poste else "RCA",
-            "stat": str(stat_str) if stat_str is not None else "-",
-            "avatar_src": get_player_image_b64(p_name, size=80 if rank == 1 else 65) if p_name != "-" else get_player_image_b64("", size=80 if rank == 1 else 65),
-        }
-
-    def _placeholder(rank: int) -> Dict[str, Any]:
-        return {
-            "rank": rank,
-            "name": "-",
-            "poste": "",
-            "stat": "-",
-            "avatar_src": get_player_image_b64("", size=80 if rank == 1 else 65),
-        }
-
+    """Génère les Podiums Top 3 et Flop 3 à partir des données réelles avec photos Base64 et postes."""
     if df_subset is None or not isinstance(df_subset, pd.DataFrame) or len(df_subset) == 0:
-        return {
-            "Top speed (km/h)": {"icon": "⚡", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-            "% de marche": {"icon": "🚶", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-            "Haute intensité (m)": {"icon": "🔥", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-        }
-
-    podium_result: Dict[str, Dict[str, Any]] = {}
-
-    # 1. TOP SPEED
-    ts_col = "Top Speed (km/h)"
-    if ts_col in df_subset.columns:
-        s_ts = pd.to_numeric(df_subset[ts_col], errors="coerce").fillna(0.0)
-        df_sorted_ts = df_subset.assign(_ts_sort=s_ts).sort_values(by="_ts_sort", ascending=False)
+        podium_res = weekly_memory.calculer_podiums_seance(pd.DataFrame())
     else:
-        df_sorted_ts = df_subset
-    players_ts = []
-    for rank, (_, row) in enumerate(df_sorted_ts.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(ts_col, 0.0)
-        val = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val):
-            val = 0.0
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_ts.append(_make_player_entry(rank, name, f"{val:.1f} km/h", poste))
-    while len(players_ts) < 3:
-        players_ts.append(_placeholder(len(players_ts) + 1))
+        podium_res = weekly_memory.calculer_podiums_seance(df_subset)
 
-    podium_result["Top speed (km/h)"] = {
-        "icon": "⚡",
-        "players": players_ts,
-    }
+    for cat_data in podium_res.values():
+        if not isinstance(cat_data, dict):
+            continue
+        for list_key in ("players", "flop_players"):
+            entries = cat_data.get(list_key, [])
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                p_name = str(entry.get("name", "-")).strip()
+                rk = int(entry.get("rank", 2) or 2)
+                if p_name and p_name != "-":
+                    if not entry.get("poste") or entry.get("poste") == "RCA":
+                        p_found = joueurs_data.get(p_name) or JOUEURS_CUSTOM_CACHE.get(p_name, {}).get("poste", "")
+                        if p_found:
+                            entry["poste"] = p_found
+                    entry["avatar_src"] = get_player_image_b64(p_name, size=80 if rk == 1 else 65)
+                else:
+                    entry["avatar_src"] = get_player_image_b64("", size=80 if rk == 1 else 65)
 
-    # 2. % DE MARCHE (Les 3 plus bas : ceux qui ont le moins marché, > 0%)
-    walk_col = "%Marche "
-    if walk_col in df_subset.columns:
-        s_walk = pd.to_numeric(df_subset[walk_col], errors="coerce").fillna(0.0)
-        df_valid_walk = df_subset[s_walk > 0.0]
-        if not df_valid_walk.empty:
-            df_sorted_walk = df_valid_walk.sort_values(by=walk_col, ascending=True)
-        else:
-            df_sorted_walk = df_subset.sort_values(by=walk_col, ascending=True)
-    else:
-        df_sorted_walk = df_subset
-    players_walk = []
-    for rank, (_, row) in enumerate(df_sorted_walk.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(walk_col, 0.0)
-        val_float = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val_float):
-            val_float = 0.0
-        val_pct = val_float * 100.0 if val_float <= 1.0 else val_float
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_walk.append(_make_player_entry(rank, name, f"{val_pct:.1f} %", poste))
-    while len(players_walk) < 3:
-        players_walk.append(_placeholder(len(players_walk) + 1))
-
-    podium_result["% de marche"] = {
-        "icon": "🚶",
-        "players": players_walk,
-    }
-
-    # 3. HAUTE INTENSITÉ (m) - ALIGNEMENT SUR LA MÉTHODE STAFF RCA (Cumul Zones 3, 4 et 5 > 14.4 km/h)
-    hi_col = "Haute intensité Podium (m)" if "Haute intensité Podium (m)" in df_subset.columns else " Distance haute intensité (m)"
-    if hi_col in df_subset.columns:
-        s_hi = pd.to_numeric(df_subset[hi_col], errors="coerce").fillna(0.0)
-        df_sorted_hi = df_subset.assign(_hi_sort=s_hi).sort_values(by="_hi_sort", ascending=False)
-    else:
-        df_sorted_hi = df_subset
-    players_hi = []
-    for rank, (_, row) in enumerate(df_sorted_hi.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(hi_col, 0.0)
-        val_m = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val_m):
-            val_m = 0.0
-        hi_int = int(round(val_m))
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_hi.append(_make_player_entry(rank, name, f"{hi_int:,d} m".replace(",", " "), poste))
-    while len(players_hi) < 3:
-        players_hi.append(_placeholder(len(players_hi) + 1))
-
-    podium_result["Haute intensité (m)"] = {
-        "icon": "🔥",
-        "players": players_hi,
-    }
-
-    return podium_result
+    return podium_res
 
 
 # ==============================================================================
@@ -4218,21 +4146,43 @@ def generer_rapport_pdf_coachs(
     nb_comparatif: int = 4,
     adversaire: str = "",
     rpe_stats: Optional[Dict[str, Any]] = None,
+    granularity_mode: str = "Par ligne de poste",
+    **kwargs: Any,
 ) -> bytes:
     """
-    Génère un rapport PDF multi-pages complet et aéré de 7 pages au format Paysage (Landscape),
-    calqué fidèlement sur le modèle officiel de la préparatrice physique du RCA :
+    Génère le rapport PDF multi-pages officiel RCA au format Paysage (A4) :
+    - Mode 'Par ligne de poste' (7 pages, ou 8 avec comparatif)
+    - Mode 'Détaillé par poste' (2 pages par poste actif parmi les 9 postes + triptyques)
     """
-    # Garantie absolue d'enrichissement RPE dans le flux du PDF
-    if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
+    if df_indiv is None:
+        df_indiv = pd.DataFrame()
+    df_indiv = df_indiv.copy()
+
+    # Exclusion préventive des joueurs fictifs / tests
+    try:
+        try:
+            from modules import gsheet_sync
+        except (ImportError, ModuleNotFoundError):
+            import gsheet_sync
+        if hasattr(gsheet_sync, "filter_out_test_players") and not df_indiv.empty:
+            df_indiv = gsheet_sync.filter_out_test_players(df_indiv)
+    except Exception:
+        pass
+
+    # Garantie d'enrichissement RPE correspondant strictement à la date / semaine de séance
+    if not df_indiv.empty and ("RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty):
         try:
             try:
                 from modules.rpe_connector import enrich_gps_dataframe_with_rpe
             except (ImportError, ModuleNotFoundError):
                 from rpe_connector import enrich_gps_dataframe_with_rpe
-            s_dt = weekly_memory.parse_session_date(date_seance) or datetime.date(2026, 11, 6)
-            w_n = s_dt.isocalendar()[1] if hasattr(s_dt, "isocalendar") else 45
-            w_d = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][s_dt.weekday()] if hasattr(s_dt, "weekday") else "Vendredi"
+            s_dt = weekly_memory.parse_session_date(date_seance)
+            if s_dt is not None:
+                w_n = s_dt.isocalendar()[1]
+                w_d = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][s_dt.weekday()]
+            else:
+                w_n = None
+                w_d = weekly_memory.detect_day_of_week(date_seance) or "Vendredi"
             m_gps = None
             if hasattr(st, "session_state"):
                 m_gps = st.session_state.get("mapping_gps") or st.session_state.get("mapping_gps_joueurs")
@@ -4240,31 +4190,38 @@ def generer_rapport_pdf_coachs(
                 df_gps=df_indiv,
                 session_date=s_dt,
                 mapping_gps=m_gps,
-                week_number=w_n or 45,
-                weekday=w_d or "Vendredi",
+                week_number=w_n,
+                weekday=w_d,
             )
-            if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
-                df_indiv = enrich_gps_dataframe_with_rpe(
-                    df_gps=df_indiv,
-                    session_date=datetime.date(2026, 11, 6),
-                    mapping_gps=m_gps,
-                    week_number=45,
-                    weekday="Vendredi",
-                )
             if not rpe_stats or rpe_stats.get("equipe") is None:
                 rpe_stats = rpe_connector.calculate_rpe_group_metrics(df_indiv)
         except Exception:
             pass
 
+    if not df_indiv.empty and hasattr(weekly_memory, "normaliser_poste_specifique"):
+        name_col = "Nom ; Prénom" if "Nom ; Prénom" in df_indiv.columns else ("Nom" if "Nom" in df_indiv.columns else None)
+        pos_col = "Poste_Detaille" if "Poste_Detaille" in df_indiv.columns else ("Poste" if "Poste" in df_indiv.columns else None)
+        df_indiv["Poste_Detaille"] = [
+            weekly_memory.normaliser_poste_specifique(
+                r.get(pos_col, "") if pos_col else "",
+                player_name=str(r.get(name_col, "")) if name_col else "",
+                joueurs_lookup=joueurs_data,
+            ) or (str(r.get(pos_col, "")).strip() if pos_col else "")
+            for _, r in df_indiv.iterrows()
+        ]
+
+    granularity_mode = str(kwargs.get("granularity_mode", granularity_mode) or "Par ligne de poste")
+    g_low = weekly_memory._strip_accents_lower(granularity_mode) if hasattr(weekly_memory, "_strip_accents_lower") else granularity_mode.lower()
+    is_detailed = ("detaille" in g_low) or ("9 poste" in g_low)
+
     date_texte = safe_latin1(formater_date_seance_fr(date_seance))
-    total_pages = 8 if inclure_comparatif else 7
 
     class RCACoachPDF(FPDF):
-        def __init__(self, *args, total_pages: int = 7, **kwargs):
-            super().__init__(*args, **kwargs)
+        def __init__(self, *args, **kwargs_pdf):
+            super().__init__(*args, **kwargs_pdf)
             self.date_texte = ""
             self.current_subtitle = ""
-            self.total_pages = total_pages
+            self.alias_nb_pages()
 
         def header(self):
             # 1. Bandeau supérieur Bleu nuit RCA (#1F4E79)
@@ -4277,6 +4234,8 @@ def generer_rapport_pdf_coachs(
 
             # 3. Logo officiel du RCA
             logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_rca.png")
+            if not os.path.exists(logo_path):
+                logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logo_rca.png")
             if not os.path.exists(logo_path):
                 logo_path = "logo_rca.png"
             x_title = 12
@@ -4296,7 +4255,7 @@ def generer_rapport_pdf_coachs(
 
                 self.set_xy(x_title, 8.2)
                 self.set_font("Helvetica", "B", 9.0)
-                self.set_text_color(212, 175, 55)  # Doré RCA (#D4AF37)
+                self.set_text_color(212, 175, 55)
                 self.cell(145, 6, safe_latin1(self.current_subtitle), align="L")
             else:
                 self.set_xy(x_title, 3.2)
@@ -4317,9 +4276,9 @@ def generer_rapport_pdf_coachs(
             self.set_y(-10)
             self.set_font("Helvetica", "I", 8)
             self.set_text_color(148, 163, 184)
-            self.cell(0, 8, f"Document Staff Technique RCA - Page {self.page_no()}/{self.total_pages}", align="C")
+            self.cell(0, 8, "Document Staff Technique RCA - Page {0}/{{nb}}".format(self.page_no()), align="C")
 
-    pdf = RCACoachPDF(orientation="L", unit="mm", format="A4", total_pages=total_pages)
+    pdf = RCACoachPDF(orientation="L", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=False)
     pdf.set_margins(left=12, top=20, right=12)
     pdf.date_texte = date_texte
@@ -4448,7 +4407,7 @@ def generer_rapport_pdf_coachs(
     chart_h = 142
     pdf.image(buf1, x=12, y=chart_y, w=chart_w, h=chart_h)
 
-    # 4. Colonne de Droite : Podium Général de la Séance (Top 3 tous postes confondus)
+    # 4. Colonne de Droite : Podium Général de la Séance (Top 3 + Flop 3)
     podium_general = generer_podium_dynamique(df_indiv)
     sub_map_gen = calculer_sous_titres_podium(df_indiv, label_prefix="Moy. séance")
     _render_podium_section_pdf(
@@ -4459,70 +4418,99 @@ def generer_rapport_pdf_coachs(
         w_pod=136,
         title_header="PODIUMS DE LA SÉANCE",
         subtitle_map=sub_map_gen,
+        include_flop=True,
     )
 
     # =========================================================================
-    # PAGES 2 À 7 : 2 PAGES DÉDIÉES PAR LIGNE DE POSTE (RETOUR JOURNÉE + PODIUMS)
+    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (3 GROUPES OU 9 POSTES ACTIFS)
     # =========================================================================
-    groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    if is_detailed:
+        groupes_pages = weekly_memory.get_active_positions(df_indiv, joueurs_data)
+        if not groupes_pages:
+            groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    else:
+        groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
     for grp in groupes_pages:
-        # ---------------------------------------------------------------------
-        # PAGE A (Pages 2, 4, 6) : RETOUR JOURNÉE (TABLEAU + 4 GRAPHIQUES WIDE)
-        # ---------------------------------------------------------------------
         pdf.current_subtitle = f"RETOUR JOURNÉE — {grp.upper()}"
         pdf.add_page()
 
-        # Récupération des objectifs et des valeurs réalisées par le groupe
         if config_objectifs is None:
             config_objectifs = get_active_objectifs_config()
-        cfg_targets = config_objectifs.get(grp, config_objectifs.get("Tous les groupes", OBJECTIFS_CONFIG["Tous les groupes"]))
-        if moyennes_groupes and grp in moyennes_groupes:
+        cfg_targets = weekly_memory.get_objectifs_for_category(config_objectifs, grp)
+        df_sub = weekly_memory._filter_df_by_group(df_indiv, grp)
+
+        if (not is_detailed) and moyennes_groupes and grp in moyennes_groupes:
             grp_stats = moyennes_groupes[grp]
+        elif not df_sub.empty:
+            hsr_m_val = (
+                float(pd.to_numeric(df_sub["Distance in Speed Zone 3  (km)"], errors="coerce").mean() * 1000.0)
+                if "Distance in Speed Zone 3  (km)" in df_sub.columns
+                else (
+                    float(pd.to_numeric(df_sub["HSR Z3 (m)"], errors="coerce").mean())
+                    if "HSR Z3 (m)" in df_sub.columns
+                    else (
+                        float(pd.to_numeric(df_sub[" Distance haute intensité (m)"], errors="coerce").mean())
+                        if " Distance haute intensité (m)" in df_sub.columns
+                        else 0.0
+                    )
+                )
+            )
+            vhsr_val = (
+                float(pd.to_numeric(df_sub["VHSR (m)"], errors="coerce").mean())
+                if "VHSR (m)" in df_sub.columns
+                else (
+                    float((pd.to_numeric(df_sub["Distance in Speed Zone 4  (km)"], errors="coerce").fillna(0.0) + pd.to_numeric(df_sub["Distance in Speed Zone 5  (km)"], errors="coerce").fillna(0.0)).mean() * 1000.0)
+                    if "Distance in Speed Zone 4  (km)" in df_sub.columns and "Distance in Speed Zone 5  (km)" in df_sub.columns
+                    else 0.0
+                )
+            )
+            dpm_val = (
+                float(pd.to_numeric(df_sub["Distance Per Min (m/min)"], errors="coerce").mean())
+                if "Distance Per Min (m/min)" in df_sub.columns
+                else (float(pd.to_numeric(df_sub["Distance/min (m/min)"], errors="coerce").mean()) if "Distance/min (m/min)" in df_sub.columns else 0.0)
+            )
+            grp_stats = {
+                "Dist_m": float(pd.to_numeric(df_sub["Distance (km)"], errors="coerce").mean() * 1000.0) if "Distance (km)" in df_sub.columns else 0.0,
+                "HSR_m": 0.0 if np.isnan(hsr_m_val) else hsr_m_val,
+                "VHSR_m": 0.0 if np.isnan(vhsr_val) else vhsr_val,
+                "Dpm": 0.0 if np.isnan(dpm_val) else dpm_val,
+                "Acc_Dec": float(pd.to_numeric(df_sub["Accel/Dec"], errors="coerce").mean()) if "Accel/Dec" in df_sub.columns else 0.0,
+            }
         else:
-            df_sub = df_indiv[df_indiv["Groupe"] == grp]
-            if not df_sub.empty:
-                grp_stats = {
-                    "Dist_m": float(df_sub["Distance (km)"].mean() * 1000.0) if "Distance (km)" in df_sub.columns else 0.0,
-                    "HSR_m": float(df_sub["Distance in Speed Zone 3  (km)"].mean() * 1000.0) if "Distance in Speed Zone 3  (km)" in df_sub.columns else (float(df_sub["HSR Z3 (m)"].mean()) if "HSR Z3 (m)" in df_sub.columns else 0.0),
-                    "VHSR_m": float(df_sub["VHSR (m)"].mean()) if "VHSR (m)" in df_sub.columns else 0.0,
-                    "Dpm": float(df_sub["Distance Per Min (m/min)"].mean()) if "Distance Per Min (m/min)" in df_sub.columns else 0.0,
-                    "Acc_Dec": float(df_sub["Accel/Dec"].mean()) if "Accel/Dec" in df_sub.columns else 0.0,
-                }
-            else:
-                grp_stats = {"Dist_m": 0.0, "HSR_m": 0.0, "VHSR_m": 0.0, "Dpm": 0.0, "Acc_Dec": 0.0}
+            grp_stats = {"Dist_m": 0.0, "HSR_m": 0.0, "VHSR_m": 0.0, "Dpm": 0.0, "Acc_Dec": 0.0}
 
         obj_dist = cfg_targets["Objectif Distance (m)"]
         obj_hsr = cfg_targets["Obj. HSR"]
         obj_vhsr = cfg_targets["Obj. VHSR"]
         obj_acc = cfg_targets["Obj. ACC/DEC"]
 
-        real_dist = float(grp_stats.get("Dist_m", 0.0))
-        real_hsr = float(grp_stats.get("HSR_m", 0.0))
-        real_vhsr = float(grp_stats.get("VHSR_m", 0.0))
-        real_dpm = float(grp_stats.get("Dpm", 0.0))
-        real_acc = float(grp_stats.get("Acc_Dec", 0.0))
+        real_dist = float(grp_stats.get("Dist_m", 0.0) or 0.0)
+        real_hsr = float(grp_stats.get("HSR_m", 0.0) or 0.0)
+        real_vhsr = float(grp_stats.get("VHSR_m", 0.0) or 0.0)
+        real_dpm = float(grp_stats.get("Dpm", 0.0) or 0.0)
+        real_acc = float(grp_stats.get("Acc_Dec", 0.0) or 0.0)
 
         pct_dist = (real_dist / obj_dist * 100.0) if obj_dist > 0 else 0.0
         pct_hsr = (real_hsr / obj_hsr * 100.0) if obj_hsr > 0 else 0.0
         pct_vhsr = (real_vhsr / obj_vhsr * 100.0) if obj_vhsr > 0 else 0.0
         pct_acc = (real_acc / obj_acc * 100.0) if obj_acc > 0 else 0.0
 
-        # 1. Haut de page : Tableau « RETOUR JOURNÉE - Données par groupe »
+        # 1. Haut de page : Tableau « RETOUR JOURNÉE »
         table_x = 12.0
         table_y = 21.0
         col_w_grp = 45.0
         col_w_num = 38.0  # 45.0 + 6 * 38.0 = 273.0 mm
 
-        # Ligne d'en-tête
         pdf.set_xy(table_x, table_y)
         pdf.set_fill_color(31, 78, 121)
         pdf.set_draw_color(31, 78, 121)
         pdf.set_font("Helvetica", "B", 8.0)
         pdf.set_text_color(255, 255, 255)
 
+        cat_prefix = "POSTE" if is_detailed else "GROUPE"
         headers = [
-            (col_w_grp, f"GROUPE : {grp.upper()}", "L"),
+            (col_w_grp, f"{cat_prefix} : {grp.upper()}", "L"),
             (col_w_num, "DISTANCE TOTALE", "C"),
             (col_w_num, "DISTANCE HSR (Z3)", "C"),
             (col_w_num, "DISTANCE VHSR (Sprint)", "C"),
@@ -4568,13 +4556,16 @@ def generer_rapport_pdf_coachs(
         pdf.cell(col_w_num, 6.8, f"{real_dpm:.1f} m/min", border=1, align="C", fill=True)
         pdf.cell(col_w_num, 6.8, f"{int(round(real_acc)):,d} ({pct_acc:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
 
-        # RPE Réalisé pour le groupe (Pages 2, 4, 6)
-        df_group = weekly_memory._filter_df_by_group(df_indiv, grp)
-        s_rpe = pd.to_numeric(df_group['RPE'], errors='coerce').dropna() if "RPE" in df_group.columns else pd.Series(dtype=float)
+        s_rpe = pd.to_numeric(df_sub['RPE'], errors='coerce').dropna() if "RPE" in df_sub.columns else pd.Series(dtype=float)
         rpe_moy_str = f"{s_rpe.mean():.1f}" if not s_rpe.empty else "NR"
 
         if rpe_moy_str == "NR" and rpe_stats:
-            v_grp = rpe_stats.get(grp) or rpe_stats.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+            by_p = rpe_stats.get("by_poste") if isinstance(rpe_stats, dict) else {}
+            v_grp = (
+                rpe_stats.get(grp)
+                or (by_p.get(grp) if isinstance(by_p, dict) else None)
+                or rpe_stats.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+            )
             if v_grp is not None:
                 try:
                     f_grp = float(v_grp)
@@ -4600,14 +4591,13 @@ def generer_rapport_pdf_coachs(
         pdf.image(buf_jauges, x=12.0, y=chart_y, w=chart_w, h=chart_h)
 
         # ---------------------------------------------------------------------
-        # PAGE B (Pages 3, 5, 7) : PODIUMS DE LA LIGNE DÉDIÉS ET AÉRÉS
+        # PAGE B : PODIUMS TOP 3 + FLOP 3 SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"PODIUMS DE LA LIGNE — {grp.upper()}"
+        pdf.current_subtitle = f"PODIUMS DE LA {'CATÉGORIE' if is_detailed else 'LIGNE'} — {grp.upper()}"
         pdf.add_page()
 
-        df_grp = df_indiv[df_indiv["Groupe"] == grp]
-        podium_grp = generer_podium_dynamique(df_grp)
-        sub_map = calculer_sous_titres_podium(df_grp, label_prefix="Moyenne")
+        podium_grp = generer_podium_dynamique(df_sub)
+        sub_map = calculer_sous_titres_podium(df_sub, label_prefix="Moyenne")
 
         _render_podium_page_aere(
             pdf=pdf,
@@ -4617,7 +4607,7 @@ def generer_rapport_pdf_coachs(
         )
 
     # -------------------------------------------------------------------------
-    # PAGE 8 (OPTIONNELLE) : RETOUR JOURNÉE — ANALYSE COMPARATIVE HISTORIQUE DU MÊME JOUR (TRIPTYQUE STAFF RCA)
+    # DERNIÈRE(S) PAGE(S) : ANALYSE COMPARATIVE HISTORIQUE DU MÊME JOUR (TRIPTYQUE)
     # -------------------------------------------------------------------------
     if inclure_comparatif:
         target_day = weekly_memory.detect_day_of_week(date_seance) or "Vendredi"
@@ -4630,19 +4620,25 @@ def generer_rapport_pdf_coachs(
             current_notes_or_tag=synthese_note or "",
             current_adversaire=adversaire,
             current_rpe_stats=rpe_stats,
+            categories=groupes_pages,
         )
 
-        # Forcer explicitement l'injection du RPE dans group_metrics pour la page 8
+        # Forcer la résolution complète du RPE dans group_metrics pour chaque séance
         for it in items_comp:
             it_g_metrics = it.setdefault("group_metrics", {})
             if it.get("is_current", False):
-                # Séance en cours : calcul direct depuis df_indiv
-                for grp in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+                for grp in groupes_pages:
                     df_group = weekly_memory._filter_df_by_group(df_indiv, grp)
                     s_rpe = pd.to_numeric(df_group['RPE'], errors='coerce').dropna() if "RPE" in df_group.columns else pd.Series(dtype=float)
-                    it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe.mean()), 1) if not s_rpe.empty else None
+                    if not s_rpe.empty:
+                        it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe.mean()), 1)
+                    elif it_g_metrics.get(grp, {}).get("rpe") is None and rpe_stats:
+                        by_p = rpe_stats.get("by_poste") if isinstance(rpe_stats, dict) else {}
+                        v_r = rpe_stats.get(grp) or (by_p.get(grp) if isinstance(by_p, dict) else None)
+                        if v_r is not None and float(v_r) > 0:
+                            it_g_metrics.setdefault(grp, {})["rpe"] = round(float(v_r), 1)
             else:
-                for grp in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+                for grp in groupes_pages:
                     if it_g_metrics.get(grp, {}).get("rpe") is None:
                         df_grp_hist = None
                         if "players_data" in it and it["players_data"]:
@@ -4654,15 +4650,20 @@ def generer_rapport_pdf_coachs(
                                 it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe_h.mean()), 1)
                         if it_g_metrics.get(grp, {}).get("rpe") is None:
                             r_stats_it = it.get("rpe_stats") or {}
-                            v_r = r_stats_it.get(grp) or r_stats_it.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+                            by_p_it = r_stats_it.get("by_poste") if isinstance(r_stats_it, dict) else {}
+                            v_r = (
+                                r_stats_it.get(grp)
+                                or (by_p_it.get(grp) if isinstance(by_p_it, dict) else None)
+                                or r_stats_it.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+                            )
                             if v_r is not None and float(v_r) > 0:
                                 it_g_metrics.setdefault(grp, {})["rpe"] = round(float(v_r), 1)
 
-        pdf.current_subtitle = f"RETOUR JOURNÉE — COMPARAISON AVEC LES DERNIERS {target_day.upper()}S (SEMAINE {curr_week})"
-        pdf.add_page()
-        weekly_memory.render_comparatif_triptyque_seances_pdf_page(
+        weekly_memory.render_comparatif_triptyque_pdf_pages(
             pdf=pdf,
             items_comparatif=items_comp,
+            subtitle_base=f"RETOUR JOURNÉE — COMPARAISON AVEC LES DERNIERS {target_day.upper()}S (SEMAINE {curr_week})",
+            categories_list=groupes_pages,
             target_day=target_day,
             week_num=curr_week,
             df_current=df_indiv,
@@ -5558,13 +5559,21 @@ def render_weekly_reports_view() -> None:
     st.divider()
     st.markdown("#### 📥 Télécharger le Rapport Hebdomadaire PDF pour les Coachs")
 
+    granularity_w = st.radio(
+        "Granularité du rapport PDF Hebdomadaire :",
+        options=["Par ligne de poste (3 groupes)", "Détaillé par poste (9 postes)"],
+        horizontal=True,
+        key="radio_granularity_weekly",
+        help="Par ligne de poste : 5 de devant, 3ème Ligne, Trois-quarts (7-8 pages). Détaillé par poste : 2 pages par poste actif parmi les 9 postes.",
+    )
+
     col_toggle_w, col_slider_w = st.columns([1.6, 2.0])
     with col_toggle_w:
         inclure_comp_w = st.checkbox(
             "Inclure la comparaison historique dans le rapport PDF",
             value=False,
             key="chk_comp_weekly",
-            help="Ajoute une page comparative multi-semaines (graphique d'évolution & tableau de synthèse) à la fin du document."
+            help="Ajoute une ou plusieurs pages comparatives multi-semaines (triptyque Staff RCA) à la fin du document."
         )
     nb_semaines_comp = 4
     if inclure_comp_w:
@@ -5580,6 +5589,13 @@ def render_weekly_reports_view() -> None:
             )
 
     selected_meta = [s for s_id, s in sessions.items() if s_id in selected_sids]
+    if "détaillé" in granularity_w.lower() or "9 postes" in granularity_w.lower():
+        cats_w = weekly_memory.get_active_positions(df_agg, joueurs_data) or ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    else:
+        cats_w = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    n_comp_w_pages = ((len(cats_w) + 2) // 3) if inclure_comp_w else 0
+    total_w_pages = 1 + 2 * len(cats_w) + n_comp_w_pages
+
     pdf_hebdo_bytes = weekly_memory.generate_weekly_pdf_report(
         df_hebdo=df_agg,
         year=year,
@@ -5590,15 +5606,16 @@ def render_weekly_reports_view() -> None:
         objectifs_config=get_active_objectifs_config(),
         inclure_comparatif=inclure_comp_w,
         nb_comparatif=nb_semaines_comp,
+        granularity_mode=granularity_w,
     )
 
-    pdf_w_pages_label = "5 pages" if inclure_comp_w else "4 pages"
+    pdf_w_pages_label = f"{total_w_pages} pages"
     st.download_button(
         label=f"📄 Télécharger le Bilan Hebdomadaire PDF ({pdf_w_pages_label} — Semaine {week_num:02d} — {year})",
         data=pdf_hebdo_bytes,
         file_name=f"Rapport_Hebdomadaire_RCA_Semaine_{week_num:02d}_{year}.pdf",
         mime="application/pdf",
-        help="Télécharge le rapport hebdomadaire PDF complet officiel avec podiums généraux et par poste, KPIs, comparatif journalier, jauges hebdo par groupe et tableaux détaillés par poste.",
+        help="Télécharge le rapport hebdomadaire PDF complet officiel avec podiums Top 3 & Flop 3, KPIs, bilans et comparatifs multi-semaines.",
         key="btn_download_weekly_pdf",
         type="primary",
     )
@@ -6954,13 +6971,21 @@ def main() -> None:
                 st.session_state["synthese_note_coachs"] = generer_synthese_llm(df_indiv)
                 st.rerun()
 
+        granularity_d = st.radio(
+            "Granularité du rapport PDF Journalier :",
+            options=["Par ligne de poste (3 groupes)", "Détaillé par poste (9 postes)"],
+            horizontal=True,
+            key="radio_granularity_daily",
+            help="Par ligne de poste : 5 de devant, 3ème Ligne, Trois-quarts (7-8 pages). Détaillé par poste : 2 pages par poste actif parmi les 9 postes.",
+        )
+
         col_toggle_d, col_slider_d = st.columns([1.6, 2.0])
         with col_toggle_d:
             inclure_comp_d = st.checkbox(
                 "Inclure la comparaison historique dans le rapport PDF",
                 value=False,
                 key="chk_comp_daily",
-                help="Ajoute une page comparative multi-séances du même jour de la semaine (triptyque Staff RCA par groupe de postes) à la fin du document.",
+                help="Ajoute une ou plusieurs pages comparatives multi-séances du même jour de la semaine (triptyque Staff RCA) à la fin du document.",
             )
         nb_seances_comp = 4
         if inclure_comp_d:
@@ -6977,35 +7002,33 @@ def main() -> None:
 
         adversaire_input = st.text_input("Adversaire du week-end (Optionnel, ex: RHEU, CAEN)", value="", key="adversaire_weekend_input")
 
-        # RPE garanti pour le PDF avec mapping à jour
+        # RPE garanti pour le PDF selon la date réelle de la séance
         try:
             from modules.rpe_connector import enrich_gps_dataframe_with_rpe
         except (ImportError, ModuleNotFoundError):
             from rpe_connector import enrich_gps_dataframe_with_rpe
         current_map_pdf = st.session_state.get("mapping_gps") or st.session_state.get("mapping_gps_joueurs") or mapping_gps
-        w_n_pdf = session_date_val.isocalendar()[1] if hasattr(session_date_val, "isocalendar") else 45
+        w_n_pdf = session_date_val.isocalendar()[1] if hasattr(session_date_val, "isocalendar") else None
         w_d_pdf = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][session_date_val.weekday()] if hasattr(session_date_val, "weekday") else "Vendredi"
         df_indiv_pdf = enrich_gps_dataframe_with_rpe(
             df_gps=st.session_state.get("df_indiv", df_indiv),
             session_date=session_date_val,
             mapping_gps=st.session_state.get("mapping_gps", current_map_pdf),
-            week_number=w_n_pdf or 45,
+            week_number=w_n_pdf,
             weekday=w_d_pdf or "Vendredi",
         )
         if "RPE" in df_indiv_pdf.columns and not df_indiv_pdf["RPE"].dropna().empty:
             df_indiv = df_indiv_pdf
-        elif "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
-            df_indiv = enrich_gps_dataframe_with_rpe(
-                df_gps=df_indiv,
-                session_date=datetime.date(2026, 11, 6),
-                mapping_gps=st.session_state.get("mapping_gps", current_map_pdf),
-                week_number=45,
-                weekday="Vendredi",
-            )
-        # Sauvegarde explicite du DataFrame enrichi dans l'état de session
         st.session_state["df_indiv"] = df_indiv
         st.session_state["df_indiv_enriched"] = df_indiv
         rpe_metrics_seance = rpe_connector.calculate_rpe_group_metrics(st.session_state["df_indiv"])
+
+        if "détaillé" in granularity_d.lower() or "9 postes" in granularity_d.lower():
+            cats_d = weekly_memory.get_active_positions(st.session_state["df_indiv"], joueurs_data) or ["5 de devant", "3ème Ligne", "Trois-quarts"]
+        else:
+            cats_d = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+        n_comp_d_pages = ((len(cats_d) + 2) // 3) if inclure_comp_d else 0
+        total_d_pages = 1 + 2 * len(cats_d) + n_comp_d_pages
 
         pdf_bytes = generer_rapport_pdf_coachs(
             df_indiv=st.session_state["df_indiv"],
@@ -7017,11 +7040,12 @@ def main() -> None:
             nb_comparatif=nb_seances_comp,
             adversaire=adversaire_input,
             rpe_stats=rpe_metrics_seance,
+            granularity_mode=granularity_d,
         )
         clean_date_tag = session_date_val.strftime("%d_%m_%Y") if isinstance(session_date_val, (datetime.date, datetime.datetime)) else re.sub(r"[^0-9a-zA-Z]", "_", str(session_date_val))
         pdf_filename = f"Rapport_Seance_GPS_RCA_{clean_date_tag}.pdf"
 
-        lbl_pages = "8 pages A4 Paysage" if inclure_comp_d else "7 pages A4 Paysage"
+        lbl_pages = f"{total_d_pages} pages A4 Paysage"
         st.download_button(
             label=f"📄 Télécharger le Rapport PDF Coachs ({lbl_pages})",
             data=pdf_bytes,

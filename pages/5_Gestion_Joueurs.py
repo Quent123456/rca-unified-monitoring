@@ -28,6 +28,11 @@ def load_players():
         df = conn.read(worksheet="Effectif")
         df = df.dropna(how="all")
         df['id'] = df['id'].astype(str)
+        try:
+            from modules.gsheet_sync import filter_out_test_players
+            df = filter_out_test_players(df)
+        except Exception:
+            pass
         return df
     except Exception:
         return pd.DataFrame(columns=["id", "nom", "prenom", "poste", "numero", "groupe"])
@@ -154,10 +159,10 @@ st.subheader("➕ Ajouter un joueur")
 with st.form("add_player_form"):
     col_a, col_b = st.columns(2)
     with col_a:
-        prenom = st.text_input("Prénom *", placeholder="Antoine")
+        prenom = st.text_input("Prénom *", placeholder="Enzo")
         poste  = st.selectbox("Poste *", POSTES_RUGBY)
     with col_b:
-        nom    = st.text_input("Nom *", placeholder="Dupont")
+        nom    = st.text_input("Nom *", placeholder="Vaselli")
         groupe = st.selectbox("Groupe", GROUPES, index=0)
 
     submitted = st.form_submit_button("➕ Ajouter le joueur", type="secondary")

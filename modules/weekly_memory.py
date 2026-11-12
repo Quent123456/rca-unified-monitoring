@@ -47,6 +47,14 @@ except ImportError:
     except Exception:
         rpe_connector = None
 
+try:
+    from modules import gsheet_sync
+except ImportError:
+    try:
+        import gsheet_sync
+    except Exception:
+        gsheet_sync = None
+
 PROJECT_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 DATA_DIR = PROJECT_ROOT / "data"
 WEEKLY_MEMORY_DIR = str(DATA_DIR / "weekly_memory")
@@ -582,13 +590,21 @@ def aggregate_weekly_sessions(
     grouped = df_all.groupby(p_col)
 
     agg_records = []
+    try:
+        from modules.gsheet_sync import is_fictional_test_player
+    except Exception:
+        is_fictional_test_player = None
+
     for name, group in grouped:
+        if is_fictional_test_player and is_fictional_test_player(str(name)):
+            continue
         nb_seances = len(group)
         jours_presence = ", ".join(group["_session_day"].unique().tolist())
 
-        # Groupe et poste de référence (mode / dernier)
-        poste_det = group["Poste_Detaille"].iloc[-1] if "Poste_Detaille" in group.columns else "Inconnu"
-        groupe_rca = group["Groupe"].iloc[-1] if "Groupe" in group.columns else "Trois-quarts"
+        # Groupe et poste de référence (normalisés avec lookup effectif si l'archive ne contenait que le groupe)
+        raw_poste_det = group["Poste_Detaille"].iloc[-1] if "Poste_Detaille" in group.columns else ""
+        poste_det = normaliser_poste_specifique(raw_poste_det, player_name=str(name)) or "Inconnu"
+        groupe_rca = POSTE_TO_GROUPE_MAP.get(poste_det) or (group["Groupe"].iloc[-1] if "Groupe" in group.columns else "Trois-quarts")
 
         # CUMULS (SOMMES HEBDOMADAIRES)
         tot_time = float(group["Temps de jeu "].sum()) if "Temps de jeu " in group.columns else 0.0
@@ -664,21 +680,25 @@ def aggregate_weekly_sessions(
 # GÉNÉRATION DES PODIUMS HEBDOMADAIRES (AVEC PHOTOS & HTML NETTOYÉ)
 # ==============================================================================
 
-def generer_podiums_hebdomadaires(
-    df_hebdo: pd.DataFrame,
-    groupe: Optional[str] = None,
-) -> Dict[str, Dict[str, Any]]:
+def _compute_top_and_flop_players_list(
+    df_src: pd.DataFrame,
+    metric_col: Optional[str],
+    ascending_best: bool,
+    fmt_fn: Any,
+    require_positive: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
     """
-    Génère les podiums de la semaine : Top Speed, % Marche, Haute Intensité.
-    Applique les mêmes critères de classement (top 3) et formules de calcul
-    que ceux utilisés pour les podiums des rapports journaliers.
-    Gère gracieusement le cas où un groupe positionnel compte strictement moins de 3 joueurs.
+    Moteur unique (Top 3 & Flop 3) partagé entre les rapports Journalier et Hebdomadaire.
+    - ascending_best=False -> Top 3 = plus grandes valeurs, Flop 3 = plus petites valeurs.
+    - ascending_best=True  -> Top 3 = plus petites valeurs (>0 si require_positive), Flop 3 = plus grandes valeurs.
+    - Si effectif valide < 6 : évite les doublons absurdes avec le Top 3 (affiche les joueurs restants
+      si 4 ou 5 joueurs, et placeholders si <= 3 joueurs).
     """
-    def _make_player_entry(rank: int, name: Any, stat_str: Any, poste: Any = "") -> Dict[str, Any]:
+    def _make_entry(rank: int, name: Any, stat_str: Any, poste: Any = "") -> Dict[str, Any]:
         p_name = str(name).strip() if pd.notna(name) and name is not None else "-"
         if p_name in ["nan", "None", ""]:
             p_name = "-"
-        p_poste = str(poste).strip() if pd.notna(poste) and poste is not None else ""
+        p_poste = normaliser_poste_specifique(poste, player_name=p_name) if p_name != "-" else ""
         if p_poste in ["nan", "None"]:
             p_poste = ""
         return {
@@ -686,7 +706,7 @@ def generer_podiums_hebdomadaires(
             "name": p_name,
             "poste": p_poste if p_poste else "RCA",
             "stat": str(stat_str) if stat_str is not None else "-",
-            "avatar_src": photo_manager.get_player_image_b64(p_name, size=80 if rank == 1 else 65) if p_name != "-" else photo_manager.get_player_image_b64("", size=80 if rank == 1 else 65),
+            "avatar_src": photo_manager.get_player_image_b64(p_name if p_name != "-" else "", size=80 if rank == 1 else 65),
         }
 
     def _placeholder(rank: int) -> Dict[str, Any]:
@@ -698,115 +718,114 @@ def generer_podiums_hebdomadaires(
             "avatar_src": photo_manager.get_player_image_b64("", size=80 if rank == 1 else 65),
         }
 
-    empty_podium = {
-        "Top speed (km/h)": {"icon": "⚡", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-        "% de marche": {"icon": "🚶", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-        "Haute intensité (m)": {"icon": "🔥", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-    }
+    if df_src is None or not isinstance(df_src, pd.DataFrame) or df_src.empty or not metric_col or metric_col not in df_src.columns:
+        return [_placeholder(1), _placeholder(2), _placeholder(3)], [], 0
 
-    if df_hebdo is None or not isinstance(df_hebdo, pd.DataFrame) or df_hebdo.empty:
-        return empty_podium
-
-    if groupe and str(groupe).strip().upper() not in ["ALL", "EFFECTIF GLOBAL", "TOUS LES JOUEURS", "TOUS LES GROUPES"]:
-        if "Groupe" in df_hebdo.columns:
-            df_subset = df_hebdo[df_hebdo["Groupe"] == groupe].copy()
-        else:
-            df_subset = pd.DataFrame()
+    df_work = df_src.copy()
+    vals = pd.to_numeric(df_work[metric_col], errors="coerce")
+    df_work = df_work.assign(_metric_val=vals).dropna(subset=["_metric_val"])
+    if require_positive:
+        df_pos = df_work[df_work["_metric_val"] > 0.0]
+        if not df_pos.empty:
+            df_work = df_pos
     else:
-        df_subset = df_hebdo.copy()
+        df_pos = df_work[df_work["_metric_val"] > 0.0]
+        if not df_pos.empty:
+            df_work = df_pos
 
-    if df_subset.empty:
-        return empty_podium
+    n_valid = len(df_work)
+    if n_valid == 0:
+        return [_placeholder(1), _placeholder(2), _placeholder(3)], [], 0
 
-    podium_result: Dict[str, Dict[str, Any]] = {}
+    df_top_sorted = df_work.sort_values(by="_metric_val", ascending=ascending_best)
+    df_top3 = df_top_sorted.head(3)
 
-    # 1. TOP SPEED (km/h) - Vitesse Maximale hebdomadaire (du plus rapide au moins rapide)
-    ts_col = "Top Speed (km/h)"
-    if ts_col in df_subset.columns:
-        s_ts = pd.to_numeric(df_subset[ts_col], errors="coerce").fillna(0.0)
-        df_sorted_ts = df_subset.assign(_ts_sort=s_ts).sort_values(by="_ts_sort", ascending=False)
-    else:
-        df_sorted_ts = df_subset
-
-    players_ts: List[Dict[str, Any]] = []
-    for rank, (_, row) in enumerate(df_sorted_ts.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(ts_col, 0.0)
-        val = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val):
-            val = 0.0
+    top_players: List[Dict[str, Any]] = []
+    for rank, (_, row) in enumerate(df_top3.iterrows(), start=1):
+        name = str(row.get("Nom ; Prénom", row.get("Player Name", "-"))).strip()
         poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_ts.append(_make_player_entry(rank, name, f"{val:.1f} km/h", poste))
-    while len(players_ts) < 3:
-        players_ts.append(_placeholder(len(players_ts) + 1))
+        top_players.append(_make_entry(rank, name, fmt_fn(float(row["_metric_val"])), poste))
+    while len(top_players) < 3:
+        top_players.append(_placeholder(len(top_players) + 1))
 
-    podium_result["Top speed (km/h)"] = {
-        "icon": "⚡",
-        "players": players_ts,
-    }
+    if n_valid <= 3:
+        flop_players: List[Dict[str, Any]] = []
+    else:
+        df_remaining = df_top_sorted.iloc[3:].copy()
+        df_flop_sorted = df_remaining.sort_values(by="_metric_val", ascending=(not ascending_best))
+        df_flop3 = df_flop_sorted.head(3)
+        flop_players = []
+        for rank, (_, row) in enumerate(df_flop3.iterrows(), start=1):
+            name = str(row.get("Nom ; Prénom", row.get("Player Name", "-"))).strip()
+            poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
+            flop_players.append(_make_entry(rank, name, fmt_fn(float(row["_metric_val"])), poste))
 
-    # 2. % DE MARCHE - Moins de marche (> 0% : ordre croissant)
+    return top_players, flop_players, n_valid
+
+
+def calculer_podiums_seance(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    """
+    Calcule les Podiums (Top 3 + Flop 3) d'une séance journalière ou d'un sous-groupe :
+    - Top speed (km/h) : Top 3 desc / Flop 3 asc
+    - % de marche : Top 3 asc (>0%) / Flop 3 desc
+    - Haute intensité (m) : Top 3 desc / Flop 3 asc
+    """
+    if df_subset is None or not isinstance(df_subset, pd.DataFrame) or df_subset.empty:
+        t_e, f_e, _ = _compute_top_and_flop_players_list(pd.DataFrame(), None, False, lambda v: "-")
+        return {
+            "Top speed (km/h)": {"icon": "⚡", "players": list(t_e), "flop_players": list(f_e), "total_valid": 0},
+            "% de marche": {"icon": "🚶", "players": list(t_e), "flop_players": list(f_e), "total_valid": 0},
+            "Haute intensité (m)": {"icon": "🔥", "players": list(t_e), "flop_players": list(f_e), "total_valid": 0},
+        }
+
+    ts_col = "Top Speed (km/h)" if "Top Speed (km/h)" in df_subset.columns else None
+    t_ts, f_ts, n_ts = _compute_top_and_flop_players_list(
+        df_subset, ts_col, ascending_best=False, fmt_fn=lambda v: f"{v:.1f} km/h"
+    )
+
     walk_col = "%Marche " if "%Marche " in df_subset.columns else ("% de marche moyen" if "% de marche moyen" in df_subset.columns else None)
-    if walk_col and walk_col in df_subset.columns:
-        s_walk = pd.to_numeric(df_subset[walk_col], errors="coerce").fillna(0.0)
-        df_valid_walk = df_subset[s_walk > 0.0]
-        if not df_valid_walk.empty:
-            df_sorted_walk = df_valid_walk.sort_values(by=walk_col, ascending=True)
-        else:
-            df_sorted_walk = df_subset.sort_values(by=walk_col, ascending=True)
-    else:
-        df_sorted_walk = df_subset
+    def _fmt_walk(v: float) -> str:
+        pct = v * 100.0 if v <= 1.0 else v
+        return f"{pct:.1f} %"
+    t_wk, f_wk, n_wk = _compute_top_and_flop_players_list(
+        df_subset, walk_col, ascending_best=True, fmt_fn=_fmt_walk, require_positive=True
+    )
 
-    players_walk: List[Dict[str, Any]] = []
-    for rank, (_, row) in enumerate(df_sorted_walk.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(walk_col, 0.0) if walk_col else 0.0
-        val_float = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val_float):
-            val_float = 0.0
-        val_pct = val_float * 100.0 if val_float <= 1.0 else val_float
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_walk.append(_make_player_entry(rank, name, f"{val_pct:.1f} %", poste))
-    while len(players_walk) < 3:
-        players_walk.append(_placeholder(len(players_walk) + 1))
-
-    podium_result["% de marche"] = {
-        "icon": "🚶",
-        "players": players_walk,
-    }
-
-    # 3. HAUTE INTENSITÉ (m) - Cumul total Zones 3+4+5 (> 14.4 km/h) (ordre décroissant)
     hi_col = None
     for c in ["Haute intensité Podium (m)", " Distance haute intensité (m)", "Haute intensité (m)"]:
         if c in df_subset.columns:
             hi_col = c
             break
+    t_hi, f_hi, n_hi = _compute_top_and_flop_players_list(
+        df_subset, hi_col, ascending_best=False, fmt_fn=lambda v: f"{int(round(v)):,d} m".replace(",", " ")
+    )
 
-    if hi_col and hi_col in df_subset.columns:
-        s_hi = pd.to_numeric(df_subset[hi_col], errors="coerce").fillna(0.0)
-        df_sorted_hi = df_subset.assign(_hi_sort=s_hi).sort_values(by="_hi_sort", ascending=False)
-    else:
-        df_sorted_hi = df_subset
-
-    players_hi: List[Dict[str, Any]] = []
-    for rank, (_, row) in enumerate(df_sorted_hi.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(hi_col, 0.0) if hi_col else 0.0
-        val_m = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val_m):
-            val_m = 0.0
-        hi_int = int(round(val_m))
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_hi.append(_make_player_entry(rank, name, f"{hi_int:,d} m".replace(",", " "), poste))
-    while len(players_hi) < 3:
-        players_hi.append(_placeholder(len(players_hi) + 1))
-
-    podium_result["Haute intensité (m)"] = {
-        "icon": "🔥",
-        "players": players_hi,
+    return {
+        "Top speed (km/h)": {"icon": "⚡", "players": t_ts, "flop_players": f_ts, "total_valid": n_ts},
+        "% de marche": {"icon": "🚶", "players": t_wk, "flop_players": f_wk, "total_valid": n_wk},
+        "Haute intensité (m)": {"icon": "🔥", "players": t_hi, "flop_players": f_hi, "total_valid": n_hi},
     }
 
-    return podium_result
+
+def generer_podiums_hebdomadaires(
+    df_hebdo: pd.DataFrame,
+    groupe: Optional[str] = None,
+    poste_specifique: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Génère les podiums de la semaine (Top 3 & Flop 3) : Top Speed, % Marche, Haute Intensité.
+    Supporte le filtrage par ligne de poste (groupe) ou par poste spécifique (9 postes).
+    """
+    filter_cat = poste_specifique or groupe
+    if df_hebdo is None or not isinstance(df_hebdo, pd.DataFrame) or df_hebdo.empty:
+        return calculer_podiums_seance(pd.DataFrame())
+
+    if filter_cat and str(filter_cat).strip().upper() not in ["ALL", "EFFECTIF GLOBAL", "TOUS LES JOUEURS", "TOUS LES GROUPES"]:
+        df_subset = _filter_df_by_group(df_hebdo, str(filter_cat).strip())
+    else:
+        df_subset = df_hebdo.copy()
+
+    return calculer_podiums_seance(df_subset)
 
 
 # ==============================================================================
@@ -1234,17 +1253,18 @@ def generer_graphique_hebdo_jauges_matplotlib(
     df_grp: pd.DataFrame,
     nb_seances: int = 3,
     objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
+    layout: str = "1x4",
 ) -> io.BytesIO:
     """
-    Génère une figure 2x2 propre regroupant les 4 duels de barres 'Objectif Hebdomadaire vs Réalisé Cumulé'
-    pour une ligne de poste RCA (5 de devant, 3ème Ligne, Trois-quarts) :
-    1. Distance Totale (km ou m)
+    Génère une figure propre (1x4 ou 2x2) regroupant les 4 duels de barres
+    'Objectif Hebdomadaire vs Réalisé Cumulé' pour une ligne de poste ou un poste spécifique RCA :
+    1. Distance Totale (m)
     2. HSR Z3 (m)
     3. VHSR Sprint (m)
     4. ACC / DEC (> 3 m/s²)
     """
     active_cfg = objectifs_config or charger_objectifs_config()
-    targets_daily = active_cfg.get(group_name, active_cfg.get("Tous les groupes", DEFAULT_OBJECTIFS_CONFIG["Tous les groupes"]))
+    targets_daily = get_objectifs_for_category(active_cfg, group_name)
 
     multiplier = max(nb_seances, 1)
 
@@ -1284,7 +1304,11 @@ def generer_graphique_hebdo_jauges_matplotlib(
         ("ACC / DEC (> 3 m/s²)", targets_daily["Obj. ACC/DEC"] * multiplier, val_acc, ""),
     ]
 
-    fig, axes = plt.subplots(1, 4, figsize=(11.5, 2.5), dpi=180)
+    if layout == "2x2":
+        fig, axes_grid = plt.subplots(2, 2, figsize=(11.5, 4.0), dpi=180)
+        axes = axes_grid.flatten()
+    else:
+        fig, axes = plt.subplots(1, 4, figsize=(11.5, 2.5), dpi=180)
     fig.patch.set_facecolor("#FFFFFF")
 
     for idx, (title, obj_val, real_val, unit) in enumerate(cards_def):
@@ -1655,12 +1679,174 @@ def formater_libelle_seance_x(
     return f"{j_str} {d_str}".strip()
 
 
+CANONICAL_9_POSTES: List[str] = [
+    "Pilier", "Talonneur", "2ème ligne", "3ème ligne",
+    "Demi de mêlée", "Demi d'ouverture", "Centre", "Ailier", "Arrière",
+]
+
+POSTE_TO_GROUPE_MAP: Dict[str, str] = {
+    "Pilier": "5 de devant",
+    "Talonneur": "5 de devant",
+    "2ème ligne": "5 de devant",
+    "3ème ligne": "3ème Ligne",
+    "Demi de mêlée": "Trois-quarts",
+    "Demi d'ouverture": "Trois-quarts",
+    "Centre": "Trois-quarts",
+    "Ailier": "Trois-quarts",
+    "Arrière": "Trois-quarts",
+}
+
+_REGISTERED_JOUEURS_LOOKUP: Dict[str, str] = {}
+
+
+def register_joueurs_lookup(mapping: Optional[Dict[str, str]]) -> None:
+    """Enregistre le dictionnaire {Nom joueur: Poste} de l'effectif pour la normalisation."""
+    global _REGISTERED_JOUEURS_LOOKUP
+    if isinstance(mapping, dict):
+        _REGISTERED_JOUEURS_LOOKUP = dict(mapping)
+
+
+def _get_effective_joueurs_lookup() -> Dict[str, str]:
+    """Retourne le référentiel effectif enregistré ou charge celui de gps_processing."""
+    if _REGISTERED_JOUEURS_LOOKUP:
+        return _REGISTERED_JOUEURS_LOOKUP
+    try:
+        try:
+            from modules import gps_processing
+        except (ImportError, ModuleNotFoundError):
+            import gps_processing
+        j_data = getattr(gps_processing, "joueurs_data", None)
+        if isinstance(j_data, dict) and j_data:
+            return j_data
+    except Exception:
+        pass
+    return {}
+
+
+def _strip_accents_lower(val: Any) -> str:
+    import unicodedata
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    s = unicodedata.normalize("NFKD", str(val).strip().lower())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[-_'’./,;()]+", " ", s)
+    return " ".join(s.split())
+
+
+def normaliser_poste_specifique(
+    poste_raw: Any,
+    player_name: str = "",
+    joueurs_lookup: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    Normalise un libellé de poste (y compris fautes/variantes : 'Allier', 'Demi de mélée',
+    '2eme ligne', 'Pilier droit', etc.) vers l'un des 9 postes canoniques RCA.
+    Si poste_raw est générique ('5 de devant', 'Trois-quarts') ou vide, résout via joueurs_lookup.
+    """
+    def _map_token(txt: Any) -> str:
+        k = _strip_accents_lower(txt)
+        if not k or k in ("5 de devant", "trois quarts", "3 4", "arrieres", "avants", "non specifie", "inconnu", "-"):
+            return ""
+        if any(w in k for w in ("pilier", "1ere ligne", "premiere ligne", "prop")):
+            return "Pilier"
+        if any(w in k for w in ("talonneur", "talon", "hooker")):
+            return "Talonneur"
+        if any(w in k for w in ("2eme ligne", "2e ligne", "deuxieme ligne", "seconde ligne", "lock")):
+            return "2ème ligne"
+        if any(w in k for w in ("3eme ligne", "3e ligne", "troisieme ligne", "flanker", "numero 8", "n8")):
+            return "3ème ligne"
+        if any(w in k for w in ("demi de melee", "demi de mele", "demi melee", "melee", "scrum half")):
+            return "Demi de mêlée"
+        if any(w in k for w in ("ouverture", "ouvreur", "fly half")):
+            return "Demi d'ouverture"
+        if "centre" in k:
+            return "Centre"
+        if any(w in k for w in ("ailier", "allier", "wing")):
+            return "Ailier"
+        if any(w in k for w in ("arriere", "fullback")):
+            return "Arrière"
+        return ""
+
+    canon = _map_token(poste_raw)
+    if canon:
+        return canon
+
+    lookup = joueurs_lookup if isinstance(joueurs_lookup, dict) else _get_effective_joueurs_lookup()
+    if player_name and lookup:
+        p_norm = _strip_accents_lower(player_name)
+        p_tokens = set(p_norm.split())
+        for k_ref, v_ref in lookup.items():
+            k_norm = _strip_accents_lower(k_ref)
+            if p_norm == k_norm or (p_tokens and p_tokens == set(k_norm.split())):
+                c2 = _map_token(v_ref)
+                if c2:
+                    return c2
+
+    return str(poste_raw).strip() if poste_raw is not None and not pd.isna(poste_raw) else ""
+
+
+def get_active_positions(
+    df: pd.DataFrame,
+    joueurs_lookup: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """
+    Retourne la liste ordonnée des postes parmi CANONICAL_9_POSTES effectivement
+    représentés (> 0 joueur) dans df.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+    lookup = joueurs_lookup if isinstance(joueurs_lookup, dict) else _get_effective_joueurs_lookup()
+    active_set = set()
+    for _, row in df.iterrows():
+        p_name = str(row.get("Nom ; Prénom", row.get("Player Name", row.get("Nom", ""))) or "")
+        p_raw = row.get("Poste_Detaille", row.get("Poste", row.get("Groupe", "")))
+        canon = normaliser_poste_specifique(p_raw, player_name=p_name, joueurs_lookup=lookup)
+        if canon in CANONICAL_9_POSTES:
+            active_set.add(canon)
+    return [p for p in CANONICAL_9_POSTES if p in active_set]
+
+
+def get_objectifs_for_category(
+    config_objectifs: Optional[Dict[str, Dict[str, float]]],
+    category_name: str,
+) -> Dict[str, float]:
+    """
+    Retourne les objectifs athlétiques pour un groupe (5 de devant, 3ème Ligne, Trois-quarts)
+    ou un poste spécifique (en héritant de son groupe parent).
+    """
+    cfg = config_objectifs or DEFAULT_OBJECTIFS_CONFIG
+    if category_name in cfg:
+        return cfg[category_name]
+    parent_grp = POSTE_TO_GROUPE_MAP.get(category_name)
+    if parent_grp and parent_grp in cfg:
+        return cfg[parent_grp]
+    return cfg.get("Tous les groupes", DEFAULT_OBJECTIFS_CONFIG["Tous les groupes"])
+
+
 def _filter_df_by_group(df: pd.DataFrame, grp: str) -> pd.DataFrame:
-    """Filtre un DataFrame de séance par groupe de poste (5 de devant, 3ème Ligne, Trois-quarts)."""
+    """
+    Filtre un DataFrame de séance/semaine par groupe de poste ('5 de devant', '3ème Ligne',
+    'Trois-quarts') OU par poste spécifique ('Pilier', 'Ailier', etc.).
+    """
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame()
 
-    grp_clean = grp.strip().lower()
+    grp_str = str(grp or "").strip()
+    if grp_str in CANONICAL_9_POSTES:
+        lookup = _get_effective_joueurs_lookup()
+        col_pd = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
+        col_nm = "Nom ; Prénom" if "Nom ; Prénom" in df.columns else ("Player Name" if "Player Name" in df.columns else ("Nom" if "Nom" in df.columns else None))
+        mask = df.apply(
+            lambda r: normaliser_poste_specifique(
+                r.get(col_pd, "") if col_pd else "",
+                player_name=str(r.get(col_nm, "")) if col_nm else "",
+                joueurs_lookup=lookup,
+            ) == grp_str,
+            axis=1,
+        )
+        return df[mask]
+
+    grp_clean = grp_str.lower()
     if "Groupe" in df.columns:
         if grp_clean in ["5 de devant", "devant"]:
             mask = df["Groupe"].astype(str).str.strip().str.lower().isin(["5 de devant", "devant", "cinq de devant", "avants (5)"])
@@ -1677,26 +1863,26 @@ def _filter_df_by_group(df: pd.DataFrame, grp: str) -> pd.DataFrame:
     col_p = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
     if col_p:
         if grp_clean in ["5 de devant", "devant"]:
-            kw = ["pilier", "talonneur", "2ème ligne", "deuxième ligne", "première ligne", "5 de devant"]
+            kw = ["pilier", "talonneur", "2ème ligne", "2eme ligne", "deuxième ligne", "première ligne", "5 de devant"]
         elif grp_clean in ["3ème ligne", "3eme ligne", "3e ligne"]:
-            kw = ["3ème ligne", "troisième ligne", "flanker", "n8", "numéro 8"]
+            kw = ["3ème ligne", "3eme ligne", "troisième ligne", "flanker", "n8", "numéro 8"]
         else:
-            kw = ["demi", "ouvreur", "mêlée", "centre", "ailier", "arrière", "trois-quarts"]
+            kw = ["demi", "ouvreur", "ouverture", "mêlée", "melee", "centre", "ailier", "allier", "arrière", "arriere", "trois-quarts"]
         mask = df[col_p].astype(str).str.strip().str.lower().apply(lambda s: any(k in s for k in kw))
         return df[mask]
 
     return pd.DataFrame()
 
 
-def calculer_metriques_groupes_seance(df_s: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+def calculer_metriques_groupes_seance(
+    df_s: pd.DataFrame,
+    categories: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
     """
-    Calcule les moyennes exactes par ligne de poste pour le triptyque :
-    - 5 de devant
-    - 3ème Ligne
-    - Trois-quarts
-    Retourne {groupe: {"volume": m, "hsr": m, "vhsr": m, "rpe": float, "num_players": n}}
+    Calcule les moyennes exactes par ligne de poste ou par poste spécifique pour le triptyque :
+    Retourne {categorie: {"volume": m, "hsr": m, "vhsr": m, "rpe": float, "num_players": n}}
     """
-    groupes = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    groupes = categories if categories else ["5 de devant", "3ème Ligne", "Trois-quarts"]
     res: Dict[str, Dict[str, Any]] = {
         g: {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0}
         for g in groupes
@@ -1921,13 +2107,18 @@ def recuperer_historique_seances_meme_jour(
     current_notes_or_tag: str = "",
     current_adversaire: str = "",
     current_rpe_stats: Optional[Dict[str, Any]] = None,
+    categories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extrait l'historique des N dernières séances enregistrées correspondant au même jour de la semaine
     (ex. si séance du vendredi -> les N derniers vendredis disponibles, séance du jour incluse).
-    Gère automatiquement les semaines creuses sans entraînement.
+    Rattrape automatiquement les données RPE manquantes sur les séances passées via Google Sheets.
+    Gère automatiquement les semaines creuses sans entraînement et les modes 3 groupes / 9 postes.
     Ne dépend JAMAIS de la date système du jour.
     """
+    target_cats = list(categories) if categories else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    all_cats = list(dict.fromkeys(["5 de devant", "3ème Ligne", "Trois-quarts"] + target_cats))
+
     dt_curr = parse_session_date(session_date_or_day)
     target_day = detect_day_of_week(session_date_or_day)
 
@@ -1938,7 +2129,6 @@ def recuperer_historique_seances_meme_jour(
             target_day = JOURS[target_weekday]
         curr_iso_year, curr_iso_week, _ = dt_curr.isocalendar()
     else:
-        # Si session_date_or_day est un nom de jour textuel (ex: "Vendredi")
         JOURS_MAP = {"lundi": 0, "mardi": 1, "mercredi": 2, "jeudi": 3, "vendredi": 4, "samedi": 5, "dimanche": 6}
         target_weekday = JOURS_MAP.get(str(target_day or "").strip().lower(), 4)
         if not target_day:
@@ -1951,10 +2141,66 @@ def recuperer_historique_seances_meme_jour(
     matched_sessions: Dict[str, Dict[str, Any]] = {}
     saved_weeks = list_saved_weeks()
 
+    df_rpe_cache: Optional[pd.DataFrame] = None
+    rpe_fetched = False
+
+    def _get_rpe_sheet_df() -> Optional[pd.DataFrame]:
+        nonlocal df_rpe_cache, rpe_fetched
+        if not rpe_fetched:
+            rpe_fetched = True
+            if rpe_connector and hasattr(rpe_connector, "fetch_raw_rpe_data"):
+                try:
+                    df_rpe_cache = rpe_connector.fetch_raw_rpe_data()
+                except Exception:
+                    df_rpe_cache = None
+        return df_rpe_cache
+
+    j_lookup = _get_effective_joueurs_lookup()
+
     for w_info in saved_weeks:
         y = w_info["year"]
         w = w_info["week_num"]
         w_data = load_week_data(y, w)
+
+        # Rattrapage préventif des RPE manquants sur cette semaine historique
+        if rpe_connector and hasattr(rpe_connector, "enrich_historical_week_data_with_rpe"):
+            sessions_map = w_data.get("sessions", {}) if isinstance(w_data, dict) else {}
+            needs_rpe = False
+            for s in sessions_map.values():
+                if not isinstance(s, dict):
+                    continue
+                s_day_raw = s.get("day_type", "") + " " + s.get("date", "")
+                s_day = detect_day_of_week(s_day_raw)
+                s_dt = _parse_date_to_obj(s.get("date"), fallback_year=y, fallback_week=w, fallback_day_name=s_day or target_day)
+                if s_dt is None:
+                    continue
+                if (s_dt.weekday() == target_weekday) or (s_day and s_day.lower() == target_day.lower()):
+                    p_list_tmp = s.get("players_data", [])
+                    has_rpe = any(
+                        isinstance(p, dict) and p.get("RPE") not in (None, "", "NR")
+                        and not (isinstance(p.get("RPE"), float) and np.isnan(p.get("RPE")))
+                        for p in p_list_tmp
+                    )
+                    if not has_rpe:
+                        needs_rpe = True
+                        break
+            if needs_rpe:
+                try:
+                    df_rpe_raw = _get_rpe_sheet_df()
+                    if df_rpe_raw is not None and not df_rpe_raw.empty:
+                        w_data, changed = rpe_connector.enrich_historical_week_data_with_rpe(
+                            w_data, df_rpe=df_rpe_raw, joueurs_lookup=j_lookup
+                        )
+                        if changed:
+                            fpath = get_week_file_path(y, w)
+                            try:
+                                with open(fpath, "w", encoding="utf-8") as fw:
+                                    json.dump(w_data, fw, indent=2, ensure_ascii=False, default=str)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
         for s_id, s in w_data.get("sessions", {}).items():
             if not isinstance(s, dict):
                 continue
@@ -1964,7 +2210,6 @@ def recuperer_historique_seances_meme_jour(
             if s_dt is None:
                 continue
 
-            # Filtrage strict sur le même jour de la semaine
             is_same_weekday = (s_dt.weekday() == target_weekday)
             is_same_dayname = bool(s_day and s_day.lower() == target_day.lower())
 
@@ -1973,6 +2218,8 @@ def recuperer_historique_seances_meme_jour(
                 p_list = s.get("players_data", [])
                 if p_list:
                     df_s = pd.DataFrame(p_list)
+                    if gsheet_sync and hasattr(gsheet_sync, "filter_out_test_players"):
+                        df_s = gsheet_sync.filter_out_test_players(df_s)
                     label_str = f"{target_day} {s_dt.strftime('%d/%m')}"
                     short_str = f"{s_dt.strftime('%d/%m')}"
                     adv_s = s.get("Adversaire") or s.get("adversaire") or s.get("opponent") or ""
@@ -1984,9 +2231,10 @@ def recuperer_historique_seances_meme_jour(
                         week_num=w,
                     )
 
-                    g_metrics = calculer_metriques_groupes_seance(df_s)
-                    r_stats_s = s.get("rpe_stats", {})
-                    for grp_key in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+                    g_metrics = calculer_metriques_groupes_seance(df_s, categories=all_cats)
+                    r_stats_s = s.get("rpe_stats", {}) or {}
+                    by_p_s = r_stats_s.get("by_poste") if isinstance(r_stats_s, dict) else {}
+                    for grp_key in all_cats:
                         df_group = _filter_df_by_group(df_s, grp_key)
                         rpe_moyen = None
                         if not df_group.empty and "RPE" in df_group.columns:
@@ -1994,13 +2242,26 @@ def recuperer_historique_seances_meme_jour(
                             s_rpe = s_rpe[(s_rpe >= 1.0) & (s_rpe <= 10.0)]
                             if not s_rpe.empty:
                                 rpe_moyen = round(float(s_rpe.mean()), 1)
-                        if rpe_moyen is None and r_stats_s and isinstance(r_stats_s, dict):
-                            r_val = r_stats_s.get(grp_key) or r_stats_s.get(f"rpe_moyen_{grp_key.lower().replace(' ', '_').replace('è', 'e')}")
+                        if rpe_moyen is None and isinstance(r_stats_s, dict):
+                            r_val = (
+                                r_stats_s.get(grp_key)
+                                or (by_p_s.get(grp_key) if isinstance(by_p_s, dict) else None)
+                                or r_stats_s.get(f"rpe_moyen_{grp_key.lower().replace(' ', '_').replace('è', 'e')}")
+                            )
                             if r_val is not None:
                                 try:
                                     f_r = float(r_val)
                                     if f_r > 0:
                                         rpe_moyen = round(f_r, 1)
+                                except Exception:
+                                    pass
+                        if rpe_moyen is None and isinstance(w_data.get("rpe_summary"), dict):
+                            r_w_val = w_data["rpe_summary"].get(grp_key)
+                            if r_w_val is not None:
+                                try:
+                                    f_rw = float(r_w_val)
+                                    if f_rw > 0:
+                                        rpe_moyen = round(f_rw, 1)
                                 except Exception:
                                     pass
                         g_metrics[grp_key]["rpe"] = rpe_moyen
@@ -2014,11 +2275,13 @@ def recuperer_historique_seances_meme_jour(
                         "full_date": s_dt.strftime("%d/%m/%Y"),
                         "is_current": False,
                         "num_players": len(df_s),
+                        "players_data": p_list,
+                        "rpe_stats": r_stats_s,
                         "metrics": calculer_moyennes_seance(df_s),
                         "group_metrics": g_metrics,
                     }
 
-    # Intégration de la séance actuelle (exclue ou écrasant l'historique du même jour)
+    # Intégration de la séance actuelle
     curr_date_key = dt_curr.strftime("%Y-%m-%d")
     curr_label = f"{target_day} {dt_curr.strftime('%d/%m')}"
     curr_short = f"{dt_curr.strftime('%d/%m')}"
@@ -2030,14 +2293,22 @@ def recuperer_historique_seances_meme_jour(
         week_num=curr_iso_week,
     )
 
-    curr_g_metrics = calculer_metriques_groupes_seance(df_current)
-    for grp_key in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+    curr_g_metrics = calculer_metriques_groupes_seance(df_current, categories=all_cats)
+    curr_by_p = current_rpe_stats.get("by_poste") if isinstance(current_rpe_stats, dict) else {}
+    for grp_key in all_cats:
         df_group = _filter_df_by_group(df_current, grp_key)
         rpe_moyen = None
         if not df_group.empty and "RPE" in df_group.columns:
-            rpe_moyen = df_group['RPE'].dropna().mean()
+            s_r = pd.to_numeric(df_group["RPE"], errors="coerce").dropna()
+            s_r = s_r[(s_r >= 1.0) & (s_r <= 10.0)]
+            if not s_r.empty:
+                rpe_moyen = float(s_r.mean())
         if (rpe_moyen is None or pd.isna(rpe_moyen)) and current_rpe_stats and isinstance(current_rpe_stats, dict):
-            r_val = current_rpe_stats.get(grp_key) or current_rpe_stats.get(f"rpe_moyen_{grp_key.lower().replace(' ', '_').replace('è', 'e')}")
+            r_val = (
+                current_rpe_stats.get(grp_key)
+                or (curr_by_p.get(grp_key) if isinstance(curr_by_p, dict) else None)
+                or current_rpe_stats.get(f"rpe_moyen_{grp_key.lower().replace(' ', '_').replace('è', 'e')}")
+            )
             if r_val is not None:
                 try:
                     f_r = float(r_val)
@@ -2045,7 +2316,7 @@ def recuperer_historique_seances_meme_jour(
                         rpe_moyen = f_r
                 except Exception:
                     pass
-        curr_g_metrics[grp_key]["rpe"] = round(rpe_moyen, 1) if pd.notna(rpe_moyen) else None
+        curr_g_metrics[grp_key]["rpe"] = round(rpe_moyen, 1) if (rpe_moyen is not None and not pd.isna(rpe_moyen)) else None
 
     matched_sessions[curr_date_key] = {
         "date_key": curr_date_key,
@@ -2061,7 +2332,6 @@ def recuperer_historique_seances_meme_jour(
     }
 
     sorted_sessions = sorted(matched_sessions.values(), key=lambda x: x["sort_date"])
-    # Conserver les 3 ou 4 dernières séances (séance actuelle incluse)
     n_clamped = max(1, min(4, n_max))
     final_sessions = sorted_sessions[-n_clamped:]
 
@@ -2076,15 +2346,25 @@ def recuperer_historique_seances_meme_jour(
 def _calculate_rpe_groups_for_week(
     df_week: pd.DataFrame,
     sessions_dict: Optional[Dict[str, Any]] = None,
+    week_data: Optional[Dict[str, Any]] = None,
+    categories: Optional[List[str]] = None,
 ) -> Dict[str, Optional[float]]:
-    """Calcule les moyennes RPE de la semaine pour l'équipe et les 3 groupes de postes."""
+    """
+    Calcule les moyennes RPE de la semaine pour l'équipe, les 3 groupes de postes
+    et éventuellement les 9 postes spécifiques. Jamais de faux 'NR' si des données
+    Google Sheets / session / cache existent pour cette semaine.
+    """
+    cats_extra = [c for c in (categories or CANONICAL_9_POSTES) if c not in ("5 de devant", "3ème Ligne", "Trois-quarts")]
     res: Dict[str, Optional[float]] = {
         "Total": None,
         "5 de devant": None,
         "3ème Ligne": None,
         "Trois-quarts": None,
     }
-    # 1. Depuis les sessions via rpe_connector
+    for c in cats_extra:
+        res[c] = None
+
+    # 1. Collecte directe depuis les séances enregistrées (joueurs + rpe_stats)
     if sessions_dict and rpe_connector:
         try:
             w_rpe = rpe_connector.calculate_weekly_rpe_from_sessions(sessions_dict)
@@ -2096,23 +2376,48 @@ def _calculate_rpe_groups_for_week(
         except Exception:
             pass
 
-    # 2. Complément depuis df_week si présent
+    # 2. Complément depuis df_week (colonnes RPE individuelles normalisées par groupe / poste)
     if df_week is not None and not df_week.empty and "RPE" in df_week.columns:
         r_all = pd.to_numeric(df_week["RPE"], errors="coerce").dropna()
         if not r_all.empty and res["Total"] is None:
             res["Total"] = round(float(r_all.mean()), 1)
-        for g_k, g_aliases in [
-            ("5 de devant", ["5 de devant", "devant"]),
-            ("3ème Ligne", ["3ème ligne", "3eme ligne"]),
-            ("Trois-quarts", ["trois-quarts", "trois quarts", "3/4"]),
-        ]:
-            if res[g_k] is None and "Groupe" in df_week.columns:
-                m_g = df_week["Groupe"].astype(str).str.strip().str.lower().apply(
-                    lambda s: any(a in s for a in g_aliases)
-                )
-                sub_r = pd.to_numeric(df_week.loc[m_g, "RPE"], errors="coerce").dropna()
-                if not sub_r.empty:
-                    res[g_k] = round(float(sub_r.mean()), 1)
+        for cat_k in ["5 de devant", "3ème Ligne", "Trois-quarts"] + cats_extra:
+            if res.get(cat_k) is None:
+                df_sub = _filter_df_by_group(df_week, cat_k)
+                if not df_sub.empty and "RPE" in df_sub.columns:
+                    sub_r = pd.to_numeric(df_sub["RPE"], errors="coerce").dropna()
+                    if not sub_r.empty:
+                        res[cat_k] = round(float(sub_r.mean()), 1)
+
+    # 3. Complément depuis rpe_stats / by_poste par séance si toujours manquant
+    if sessions_dict:
+        poste_vals: Dict[str, List[float]] = {c: [] for c in cats_extra}
+        for s_info in sessions_dict.values():
+            if not isinstance(s_info, dict):
+                continue
+            r_st = s_info.get("rpe_stats") or {}
+            by_p = r_st.get("by_poste") if isinstance(r_st, dict) else None
+            if isinstance(by_p, dict):
+                for c in cats_extra:
+                    if by_p.get(c) is not None:
+                        try:
+                            poste_vals[c].append(float(by_p[c]))
+                        except Exception:
+                            pass
+        for c, vals in poste_vals.items():
+            if res.get(c) is None and vals:
+                res[c] = round(float(np.mean(vals)), 1)
+
+    # 4. Complément final depuis week_data["rpe_summary"] (agrégation directe Google Sheets de la semaine ISO)
+    if isinstance(week_data, dict):
+        r_sum = week_data.get("rpe_summary")
+        if isinstance(r_sum, dict):
+            for k in list(res.keys()):
+                if res[k] is None and r_sum.get(k) is not None:
+                    try:
+                        res[k] = round(float(r_sum[k]), 1)
+                    except Exception:
+                        pass
 
     return res
 
@@ -2122,12 +2427,35 @@ def recuperer_historique_semaines(
     week_curr: int,
     df_curr_hebdo: pd.DataFrame,
     n_max: int = 4,
+    categories: Optional[List[str]] = None,
+    synthese_curr: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extrait l'historique des N dernières semaines enregistrées (semaine en cours incluse).
+    Rattrape automatiquement les données RPE manquantes (ex: S43) via Google Sheets
+    et prépare `group_metrics` (Volume, HSR, VHSR, RPE) pour le comparatif triptyque.
     """
+    target_cats = list(categories) if categories else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    all_cats = list(dict.fromkeys(["5 de devant", "3ème Ligne", "Trois-quarts"] + target_cats))
+
     saved_weeks = list_saved_weeks()
     saved_weeks_chrono = sorted(saved_weeks, key=lambda x: (x["year"], x["week_num"]))
+
+    # Cache unique des saisies Google Sheets RPE pour rattraper les semaines historiques avec 'NR'
+    df_rpe_cache: Optional[pd.DataFrame] = None
+    lookup_ref = _get_effective_joueurs_lookup()
+
+    def _get_rpe_sheet_once() -> pd.DataFrame:
+        nonlocal df_rpe_cache
+        if df_rpe_cache is None:
+            if rpe_connector and hasattr(rpe_connector, "fetch_raw_rpe_data"):
+                try:
+                    df_rpe_cache = rpe_connector.fetch_raw_rpe_data()
+                except Exception:
+                    df_rpe_cache = pd.DataFrame()
+            else:
+                df_rpe_cache = pd.DataFrame()
+        return df_rpe_cache
 
     weeks_dict: Dict[str, Dict[str, Any]] = {}
     for w_info in saved_weeks_chrono:
@@ -2136,13 +2464,48 @@ def recuperer_historique_semaines(
         if (y < year_curr) or (y == year_curr and w <= week_curr):
             w_key = f"{y}-W{w:02d}"
             w_data = load_week_data(y, w)
+
+            # Rattrapage dynamique des RPE historiques manquants (S43, etc.)
+            if rpe_connector and hasattr(rpe_connector, "enrich_historical_week_data_with_rpe"):
+                try:
+                    sessions_w = w_data.get("sessions", {})
+                    needs_rpe = (
+                        not isinstance(w_data.get("rpe_summary"), dict)
+                        or w_data["rpe_summary"].get("Total") is None
+                        or any(
+                            not isinstance(s.get("rpe_stats"), dict) or s["rpe_stats"].get("equipe") is None
+                            for s in sessions_w.values() if isinstance(s, dict)
+                        )
+                    )
+                    if needs_rpe:
+                        df_sheet = _get_rpe_sheet_once()
+                        if not df_sheet.empty:
+                            w_data, modified = rpe_connector.enrich_historical_week_data_with_rpe(
+                                w_data, df_rpe=df_sheet, joueurs_lookup=lookup_ref
+                            )
+                            if modified:
+                                try:
+                                    w_path = get_week_file_path(y, w)
+                                    with open(w_path, "w", encoding="utf-8") as fw:
+                                        json.dump(w_data, fw, ensure_ascii=False, indent=2)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
             df_w, _ = aggregate_weekly_sessions(w_data)
             label_str = f"Semaine {w:02d}"
             short_str = f"S{w:02d}"
             metrics_w = calculer_moyennes_seance(df_w)
-            rpe_grp_w = _calculate_rpe_groups_for_week(df_w, w_data.get("sessions", {}))
-            
-            # Enrichissement des métriques de RPE par groupe pour le tableau comparatif
+            rpe_grp_w = _calculate_rpe_groups_for_week(
+                df_w, w_data.get("sessions", {}), week_data=w_data, categories=all_cats
+            )
+            g_metrics_w = calculer_metriques_groupes_seance(df_w, categories=all_cats)
+            for cat_k in all_cats:
+                if g_metrics_w.get(cat_k, {}).get("rpe") is None and rpe_grp_w.get(cat_k) is not None:
+                    g_metrics_w.setdefault(cat_k, {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0})
+                    g_metrics_w[cat_k]["rpe"] = rpe_grp_w[cat_k]
+
             r_av = [v for v in [rpe_grp_w.get("5 de devant"), rpe_grp_w.get("3ème Ligne")] if v is not None]
             metrics_w["RPE Moyen (1-10)"] = {
                 "Total": rpe_grp_w.get("Total") or 0.0,
@@ -2159,17 +2522,47 @@ def recuperer_historique_semaines(
                 "week_num": w,
                 "label": label_str,
                 "short_label": short_str,
+                "label_x": short_str,
                 "is_current": False,
                 "num_players": len(df_w),
                 "metrics": metrics_w,
                 "rpe_groups": rpe_grp_w,
+                "group_metrics": g_metrics_w,
             }
 
     curr_key = f"{year_curr}-W{week_curr:02d}"
+    curr_w_data = load_week_data(year_curr, week_curr)
+    if rpe_connector and hasattr(rpe_connector, "enrich_historical_week_data_with_rpe") and curr_w_data.get("sessions"):
+        try:
+            df_sheet = _get_rpe_sheet_once()
+            if not df_sheet.empty:
+                curr_w_data, mod_c = rpe_connector.enrich_historical_week_data_with_rpe(
+                    curr_w_data, df_rpe=df_sheet, joueurs_lookup=lookup_ref
+                )
+                if mod_c:
+                    try:
+                        with open(get_week_file_path(year_curr, week_curr), "w", encoding="utf-8") as fw:
+                            json.dump(curr_w_data, fw, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     curr_label = f"Semaine {week_curr:02d}"
     curr_short = f"S{week_curr:02d}"
     curr_metrics = calculer_moyennes_seance(df_curr_hebdo)
-    curr_rpe_grp = _calculate_rpe_groups_for_week(df_curr_hebdo, None)
+    curr_rpe_grp = _calculate_rpe_groups_for_week(
+        df_curr_hebdo,
+        synthese_curr if isinstance(synthese_curr, dict) else curr_w_data.get("sessions", {}),
+        week_data=curr_w_data,
+        categories=all_cats,
+    )
+    curr_g_metrics = calculer_metriques_groupes_seance(df_curr_hebdo, categories=all_cats)
+    for cat_k in all_cats:
+        if curr_g_metrics.get(cat_k, {}).get("rpe") is None and curr_rpe_grp.get(cat_k) is not None:
+            curr_g_metrics.setdefault(cat_k, {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0})
+            curr_g_metrics[cat_k]["rpe"] = curr_rpe_grp[cat_k]
+
     curr_r_av = [v for v in [curr_rpe_grp.get("5 de devant"), curr_rpe_grp.get("3ème Ligne")] if v is not None]
     curr_metrics["RPE Moyen (1-10)"] = {
         "Total": curr_rpe_grp.get("Total") or 0.0,
@@ -2186,10 +2579,12 @@ def recuperer_historique_semaines(
         "week_num": week_curr,
         "label": curr_label,
         "short_label": curr_short,
+        "label_x": curr_short,
         "is_current": True,
         "num_players": len(df_curr_hebdo) if df_curr_hebdo is not None else 0,
         "metrics": curr_metrics,
         "rpe_groups": curr_rpe_grp,
+        "group_metrics": curr_g_metrics,
     }
 
     sorted_weeks = sorted(weeks_dict.values(), key=lambda x: (x["year"], x["week_num"]))
@@ -2198,8 +2593,8 @@ def recuperer_historique_semaines(
 
     if final_weeks:
         final_weeks[-1]["is_current"] = True
-        for it in final_weeks[:-1]:
-            it["is_current"] = False
+        for w_it in final_weeks[:-1]:
+            w_it["is_current"] = False
 
     return final_weeks
 
@@ -2336,36 +2731,41 @@ def generer_graphique_comparatif_historique_matplotlib(
 def generer_graphique_comparatif_triptyque_postes_matplotlib(
     items_comparatif: List[Dict[str, Any]],
     target_day: str = "Vendredi",
+    categories_list: Optional[List[str]] = None,
 ) -> io.BytesIO:
     """
-    Génère le triptyque graphique officiel Staff RCA (3 colonnes côte à côte) :
-    - Colonne 1 : 5 de devant
-    - Colonne 2 : 3ème Ligne
-    - Colonne 3 : Trois-quarts (3/4)
-    Histogramme à barres groupées pour chaque séance historique :
-    - Barre Bleue (#3498db / Bleu roi) : Volume / Distance totale (m) (Axe Y gauche)
-    - Barre Rouge / Bordeaux (#c0392b) : HSR (> 20 km/h ou Z3) (m) (Axe Y gauche)
-    - Barre Verte (#2ecc71 / Vert flash) : VHSR / Sprint (> 25 km/h ou Z5) (m) (Axe Y gauche)
-    - Barre Orange / Ambre (#E67E22) : RPE Moyen de séance (Axe Y secondaire droit twinx, échelle 1-10)
-    Étiquettes exactes de valeurs en gras au-dessus de chaque barre (ex: 2238, 188, 119, 7.2).
-    Axe X avec date et adversaire (ex: vendredi 10/10 (RHEU), vendredi 06/11 (VERSAILLES)).
-    Légende commune en haut : ● Volume  ● HSR  ● VHSR  ■ RPE.
+    Génère un triptyque graphique (jusqu'à 3 panneaux côte à côte) officiel Staff RCA :
+    - Par défaut : 5 de devant | 3ème Ligne | Trois-quarts (3/4)
+    - En mode détaillé par poste : tout lot de 1 à 3 postes (ex: Pilier | Talonneur | 2ème ligne).
+    Histogramme à barres groupées :
+    - Volume (m) : Bleu (#1E88E5) sur axe Y gauche
+    - HSR (> 20 km/h) (m) : Rouge (#C62828) sur axe Y gauche
+    - VHSR (> 25 km/h) (m) : Vert (#2ECC71) sur axe Y gauche
+    - RPE (1-10) : Orange (#E67E22) sur axe Y droit twinx (échelle 1-10), ou 'NR' gris uniquement si absent.
+    Une seule légende horizontale centrée en haut sous le bandeau.
     """
+    default_titles = {
+        "5 de devant": "5 DE DEVANT",
+        "3ème Ligne": "3ÈME LIGNE",
+        "Trois-quarts": "TROIS-QUARTS (3/4)",
+    }
+    cats = list(categories_list) if categories_list else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    cats = cats[:3]
+    group_defs = [(c, default_titles.get(c, str(c).upper())) for c in cats]
+
     fig, axes = plt.subplots(1, 3, figsize=(14.5, 6.8), dpi=200)
     fig.patch.set_facecolor("#FFFFFF")
-
-    group_defs = [
-        ("5 de devant", "5 DE DEVANT"),
-        ("3ème Ligne", "3ÈME LIGNE"),
-        ("Trois-quarts", "TROIS-QUARTS (3/4)"),
-    ]
 
     K = len(items_comparatif)
     x = np.arange(K)
     w = 0.18 if K >= 4 else (0.19 if K == 3 else 0.20)
 
-    for idx, (grp_key, grp_title) in enumerate(group_defs):
+    for idx in range(3):
         ax = axes[idx]
+        if idx >= len(group_defs):
+            ax.axis("off")
+            continue
+        grp_key, grp_title = group_defs[idx]
         ax.set_facecolor("#FAFAFA")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -2391,10 +2791,10 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
         v_vhsr = [it.get("group_metrics", {}).get(grp_key, {}).get("vhsr", 0.0) for it in items_comparatif]
         v_rpe = [it.get("group_metrics", {}).get(grp_key, {}).get("rpe") for it in items_comparatif]
 
-        # 3 barres de charge externe sur l'axe Y principal (mètres)
-        b_vol = ax.bar(x - 1.5 * w, v_vol, width=w, color="#3498db", edgecolor="none", zorder=3)
-        b_hsr = ax.bar(x - 0.5 * w, v_hsr, width=w, color="#c0392b", edgecolor="none", zorder=3)
-        b_vhsr = ax.bar(x + 0.5 * w, v_vhsr, width=w, color="#2ecc71", edgecolor="none", zorder=3)
+        # 3 barres de charge externe sur l'axe Y principal (mètres) — Charte exacte RCA / Comparatif
+        b_vol = ax.bar(x - 1.5 * w, v_vol, width=w, color="#1E88E5", edgecolor="none", zorder=3)
+        b_hsr = ax.bar(x - 0.5 * w, v_hsr, width=w, color="#C62828", edgecolor="none", zorder=3)
+        b_vhsr = ax.bar(x + 0.5 * w, v_vhsr, width=w, color="#2ECC71", edgecolor="none", zorder=3)
 
         # 1 barre de charge interne RPE sur l'axe Y secondaire (1 à 10)
         rpe_bar_heights = [float(v) if (v is not None and pd.notna(v) and float(v) > 0) else 0.0 for v in v_rpe]
@@ -2405,7 +2805,7 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
             color="#E67E22",
             edgecolor="#C2410C",
             linewidth=0.8,
-            alpha=0.92,
+            alpha=0.95,
             zorder=4,
         )
 
@@ -2421,7 +2821,7 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
                         textcoords="offset points",
                         ha="center",
                         va="bottom",
-                        fontsize=7.5,
+                        fontsize=7.3,
                         fontweight="bold",
                         color="#1E293B",
                     )
@@ -2459,22 +2859,22 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
                     zorder=6,
                 )
 
-        ax.set_title(grp_title, fontsize=11.5, fontweight="bold", color="#1F4E79", pad=12)
+        ax.set_title(grp_title, fontsize=11.5, fontweight="bold", color="#0C2340", pad=12)
         ax.set_xticks(x)
-        x_labels = [it.get("label_x", it.get("label", "")) for it in items_comparatif]
-        ax.set_xticklabels([lbl.replace(" (", "\n(") for lbl in x_labels], fontsize=8.2, fontweight="bold", color="#334155")
+        x_labels = [it.get("label_x", it.get("short_label", it.get("label", ""))) for it in items_comparatif]
+        ax.set_xticklabels([str(lbl).replace(" (", "\n(") for lbl in x_labels], fontsize=8.2, fontweight="bold", color="#334155")
         ax.set_xlim(-0.55, max(float(K) - 0.45, 0.55))
 
         max_v = max(max(v_vol or [100.0]), 100.0)
         ax.set_ylim(0, max_v * 1.25)
-        ax.set_ylabel("Mètres (m)", fontsize=7.8, fontweight="bold", color="#1F4E79")
+        ax.set_ylabel("Mètres (m)", fontsize=7.8, fontweight="bold", color="#0C2340")
         ax.tick_params(axis="x", length=0)
         ax.tick_params(axis="y", labelsize=7.5, color="#94A3B8")
 
     leg_elements = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#3498db", markersize=9, label="Volume (m)"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#c0392b", markersize=9, label="HSR (> 20 km/h) (m)"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#2ecc71", markersize=9, label="VHSR (> 25 km/h) (m)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#1E88E5", markersize=9, label="Volume (m)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#C62828", markersize=9, label="HSR (> 20 km/h) (m)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="#2ECC71", markersize=9, label="VHSR (> 25 km/h) (m)"),
         Line2D([0], [0], marker="s", color="w", markerfacecolor="#E67E22", markeredgecolor="#C2410C", markersize=8, label="RPE (1-10)"),
     ]
     fig.legend(
@@ -2500,26 +2900,27 @@ def render_comparatif_triptyque_seances_pdf_page(
     target_day: str = "Vendredi",
     week_num: Optional[int] = None,
     df_current: Optional[pd.DataFrame] = None,
+    categories_list: Optional[List[str]] = None,
+    info_banner_text: Optional[str] = None,
 ) -> None:
     """
-    Rend la page de comparaison historique multi-séances au format triptyque Staff RCA :
-    - En-tête de section (Titre + Sous-titre dynamique)
-    - 3 colonnes graphiques côte à côte (5 de devant, 3ème Ligne, Trois-quarts)
-    - Histogrammes groupés Volume, HSR, VHSR
-    - Barre orange RPE découplée (échelle 1 à 10)
-    - Pleine largeur A4 Paysage sans tableau compact
+    Rend une page de comparaison historique au format triptyque Staff RCA (3 panneaux côte à côte) :
+    - Applicable autant en comparatif journalier qu'en comparatif hebdomadaire.
+    - Supporte les 3 groupes ou un lot de 1 à 3 postes spécifiques.
     """
     if not items_comparatif:
         pdf.set_xy(12.0, 30.0)
         pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(273.0, 10.0, safe_latin1("Aucune donnée comparative disponible pour ce jour."), align="C")
+        pdf.cell(273.0, 10.0, safe_latin1("Aucune donnée comparative disponible."), align="C")
         return
 
-    # Garantie absolue d'injection du RPE par groupe
+    cats = list(categories_list) if categories_list else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    # Garantie absolue d'injection du RPE par catégorie
     for it in items_comparatif:
         g_metrics = it.setdefault("group_metrics", {})
         is_curr = it.get("is_current", False)
-        for grp in ["5 de devant", "3ème Ligne", "Trois-quarts"]:
+        for grp in cats:
             grp_dict = g_metrics.setdefault(grp, {})
             if grp_dict.get("rpe") is None or pd.isna(grp_dict.get("rpe")):
                 df_src = None
@@ -2533,7 +2934,7 @@ def render_comparatif_triptyque_seances_pdf_page(
                     if not df_group.empty and "RPE" in df_group.columns:
                         s_rpe = pd.to_numeric(df_group["RPE"], errors="coerce").dropna()
                         rpe_moyen = s_rpe.mean() if not s_rpe.empty else None
-                        grp_dict["rpe"] = round(rpe_moyen, 1) if pd.notna(rpe_moyen) else None
+                        grp_dict["rpe"] = round(float(rpe_moyen), 1) if pd.notna(rpe_moyen) else None
 
     y_top = 19.5
     has_priors = len(items_comparatif) >= 2
@@ -2544,7 +2945,7 @@ def render_comparatif_triptyque_seances_pdf_page(
         pdf.set_xy(12.0, y_top)
         pdf.set_font("Helvetica", "B", 7.5)
         pdf.set_text_color(146, 64, 14)
-        info_txt = f"HISTORIQUE : Aucune séance antérieure enregistrée pour un {target_day.lower()}. Données de la séance affichées seules."
+        info_txt = info_banner_text or f"HISTORIQUE : Aucun élément antérieur enregistré pour un {target_day.lower()}. Données actuelles affichées seules."
         pdf.cell(273.0, 5.5, safe_latin1(info_txt), align="C")
         y_chart = y_top + 7.0
         h_chart = 168.0
@@ -2556,185 +2957,71 @@ def render_comparatif_triptyque_seances_pdf_page(
         buf_chart = generer_graphique_comparatif_triptyque_postes_matplotlib(
             items_comparatif=items_comparatif,
             target_day=target_day,
+            categories_list=cats,
         )
         pdf.image(buf_chart, x=12.0, y=y_chart, w=273.0, h=h_chart)
     except Exception as e:
         print(f"Erreur graphique triptyque comparatif PDF : {e}")
 
 
+def render_comparatif_triptyque_pdf_pages(
+    pdf: Any,
+    items_comparatif: List[Dict[str, Any]],
+    subtitle_base: str,
+    categories_list: Optional[List[str]] = None,
+    target_day: str = "Vendredi",
+    week_num: Optional[int] = None,
+    df_current: Optional[pd.DataFrame] = None,
+    info_banner_text: Optional[str] = None,
+) -> None:
+    """
+    Pagine automatiquement la section comparative en triptyques de 3 panneaux par page
+    (1 page en mode Lignes, jusqu'à 3 pages en mode 9 Postes).
+    """
+    cats = list(categories_list) if categories_list else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    chunks = [cats[i : i + 3] for i in range(0, len(cats), 3)]
+    for ch_idx, chunk in enumerate(chunks):
+        if len(chunks) > 1:
+            chunk_lbl = " / ".join(c.upper() for c in chunk)
+            pdf.current_subtitle = f"{subtitle_base} ({ch_idx + 1}/{len(chunks)} — {chunk_lbl})"
+        else:
+            pdf.current_subtitle = subtitle_base
+        pdf.add_page()
+        render_comparatif_triptyque_seances_pdf_page(
+            pdf=pdf,
+            items_comparatif=items_comparatif,
+            target_day=target_day,
+            week_num=week_num,
+            df_current=df_current,
+            categories_list=chunk,
+            info_banner_text=info_banner_text,
+        )
+
+
 def render_comparatif_historique_pdf_page(
     pdf: Any,
     items_comparatif: List[Dict[str, Any]],
-    type_label: str = "Séance",
+    type_label: str = "Semaine",
     target_day: str = "",
+    categories_list: Optional[List[str]] = None,
+    df_current: Optional[pd.DataFrame] = None,
 ) -> None:
     """
-    Rend la page dédiée 'Comparatif Historique' au format A4 Paysage :
-    - En-tête / Bannière informative si historique insuffisant (< 2 éléments).
-    - Haut de page : Graphique d'évolution Matplotlib (Player Load & HSR).
-    - Bas de page : Tableau de synthèse comparative multi-séances / multi-semaines avec colonnes dynamiques (2 à 8)
-      et calcul du Delta (%) de la séance actuelle par rapport à la moyenne des séances antérieures.
+    Rend la page comparative multi-semaines avec le nouveau triptyque visuel unifié
+    (Volume bleu, HSR rouge, VHSR vert sur axe gauche + RPE orange sur axe droit).
     """
-    if not items_comparatif:
-        pdf.set_xy(12.0, 30.0)
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(273.0, 10.0, safe_latin1("Aucune donnee comparative disponible."), align="C")
-        return
-
-    y_top = 19.5
-    has_priors = len(items_comparatif) >= 2
-    if not has_priors:
-        pdf.set_fill_color(254, 243, 199)
-        pdf.set_draw_color(245, 158, 11)
-        pdf.rect(12.0, y_top, 273.0, 5.0, style="FD")
-        pdf.set_xy(12.0, y_top)
-        pdf.set_font("Helvetica", "B", 7.2)
-        pdf.set_text_color(146, 64, 14)
-        info_txt = f"HISTORIQUE INSUFFISANT : Aucune {type_label.lower()} anterieure enregistree{f' pour un {target_day}' if target_day else ''}. Données actuelles affichées sans delta."
-        pdf.cell(273.0, 5.0, safe_latin1(info_txt), align="C")
-        y_chart_start = y_top + 6.0
-    else:
-        y_chart_start = y_top
-
-    # 1. Section 1 : Graphique d'évolution Matplotlib
-    pdf.set_xy(12.0, y_chart_start)
-    pdf.set_font("Helvetica", "B", 8.8)
-    pdf.set_text_color(11, 25, 44)
-    pdf.cell(273.0, 4.0, safe_latin1("1. ÉVOLUTION DE LA CHARGE (PLAYER LOAD), HAUTE INTENSITÉ (HSR) ET FATIGUE RPE :"), align="L")
-
-    try:
-        buf_chart = generer_graphique_comparatif_historique_matplotlib(items_comparatif, type_label=type_label)
-        chart_h = 65.0
-        pdf.image(buf_chart, x=12.0, y=y_chart_start + 4.5, w=273.0, h=chart_h)
-    except Exception as e:
-        print(f"Erreur graphique comparatif historique PDF : {e}")
-        chart_h = 20.0
-
-    # 2. Section 2 : Tableau de synthèse comparative
-    y_table_sec = y_chart_start + 4.5 + chart_h + 2.0
-    pdf.set_xy(12.0, y_table_sec)
-    pdf.set_font("Helvetica", "B", 8.8)
-    pdf.set_text_color(11, 25, 44)
-    pdf.cell(273.0, 4.0, safe_latin1("2. TABLEAU DE SYNTHÈSE COMPARATIVE (MOYENNES COLLECTIVES & PAR LIGNE) :"), align="L")
-
-    num_items = len(items_comparatif)
-    w_label = 55.0
-    w_delta = 28.0
-    w_col = (273.0 - w_label - w_delta) / max(num_items, 1)
-
-    y_tbl_hdr = y_table_sec + 4.2
-    pdf.set_xy(12.0, y_tbl_hdr)
-    pdf.set_fill_color(31, 78, 121)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 7.5)
-    pdf.cell(w_label, 5.0, safe_latin1("Métrique & Groupe"), 1, 0, "L", fill=True)
-
-    for it in items_comparatif:
-        is_curr = it.get("is_current", False)
-        if is_curr:
-            pdf.set_fill_color(21, 52, 82)
-            pdf.set_text_color(212, 175, 55)
-            h_text = f"{it.get('short_label', '')} (Act.)"
-        else:
-            pdf.set_fill_color(31, 78, 121)
-            pdf.set_text_color(255, 255, 255)
-            h_text = it.get("short_label", it.get("label", ""))
-        pdf.set_font("Helvetica", "B", 7.0 if w_col < 30 else 7.5)
-        pdf.cell(w_col, 5.0, safe_latin1(h_text[:14]), 1, 0, "C", fill=True)
-
-    pdf.set_fill_color(31, 78, 121)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 7.2)
-    pdf.cell(w_delta, 5.0, safe_latin1("Écart vs Moy."), 1, 1, "C", fill=True)
-
-    metric_blocks = [
-        {
-            "title": "1. DISTANCE TOTALE (m)",
-            "key": "Distance Totale (m)",
-            "fmt": lambda v: f"{int(round(v)):,d} m".replace(",", " "),
-        },
-        {
-            "title": "2. HIGH SPEED RUNNING (> 20 km/h) (m)",
-            "key": "HSR (> 20 km/h) (m)",
-            "fmt": lambda v: f"{int(round(v)):,d} m".replace(",", " "),
-        },
-        {
-            "title": "3. ACCÉLÉRATIONS & DÉCÉLÉRATIONS INTENSES (> 3 m/s²)",
-            "key": "Acc/Dec (> 3 m/s²)",
-            "fmt": lambda v: f"{v:.1f}",
-        },
-        {
-            "title": "4. INTENSITÉ RELATIVE (m/min)",
-            "key": "m/min",
-            "fmt": lambda v: f"{v:.1f} m/min",
-        },
-        {
-            "title": "5. PLAYER LOAD (CHARGE GLOBALE)",
-            "key": "Player Load",
-            "fmt": lambda v: f"{v:.1f}",
-        },
-        {
-            "title": "6. CHARGE INTERNE & FATIGUE (RPE 1-10)",
-            "key": "RPE Moyen (1-10)",
-            "fmt": lambda v: f"{v:.1f}/10" if (v is not None and v > 0) else "NR",
-        },
-    ]
-
-    row_h = 3.2
-    sub_levels = [
-        ("Total (Collectif)", "Total"),
-        ("Avants (Pack)", "Avants"),
-        ("Arrières (Trois-quarts)", "Arrières"),
-    ]
-
-    for block in metric_blocks:
-        pdf.set_x(12.0)
-        pdf.set_fill_color(241, 245, 249)
-        pdf.set_text_color(31, 78, 121)
-        pdf.set_font("Helvetica", "B", 6.8)
-        pdf.cell(273.0, 3.4, safe_latin1(block["title"]), 1, 1, "L", fill=True)
-
-        for sub_label, sub_key in sub_levels:
-            pdf.set_x(12.0)
-            pdf.set_fill_color(255, 255, 255)
-            pdf.set_draw_color(226, 232, 240)
-            pdf.set_font("Helvetica", "", 6.6)
-            pdf.set_text_color(30, 41, 59)
-            pdf.cell(w_label, row_h, safe_latin1(f"   {sub_label}"), 1, 0, "L", fill=True)
-
-            curr_val = items_comparatif[-1]["metrics"][block["key"]][sub_key] if items_comparatif else 0.0
-            prior_vals = [it["metrics"][block["key"]][sub_key] for it in items_comparatif[:-1]] if len(items_comparatif) > 1 else []
-
-            for it in items_comparatif:
-                is_curr = it.get("is_current", False)
-                v = it["metrics"][block["key"]][sub_key]
-                v_txt = block["fmt"](v)
-                pdf.set_fill_color(248, 250, 252) if is_curr else (255, 255, 255)
-                pdf.set_font("Helvetica", "B" if is_curr else "", 6.6 if w_col < 30 else 7.0)
-                pdf.set_text_color(31, 78, 121) if is_curr else (30, 41, 59)
-                pdf.cell(w_col, row_h, safe_latin1(v_txt), 1, 0, "C", fill=True)
-
-            if prior_vals:
-                valid_priors = [pv for pv in prior_vals if pv is not None and pv > 0]
-                if valid_priors and curr_val is not None and curr_val > 0:
-                    moy_prior = sum(valid_priors) / len(valid_priors)
-                    delta_pct = ((curr_val - moy_prior) / moy_prior) * 100.0
-                    delta_txt = f"{delta_pct:+.1f} %"
-                    d_color = (22, 101, 52) if delta_pct >= 0 else (153, 27, 27)
-                elif curr_val is not None and curr_val > 0 and not valid_priors:
-                    delta_txt = "-"
-                    d_color = (100, 116, 139)
-                else:
-                    delta_txt = "-"
-                    d_color = (100, 116, 139)
-            else:
-                delta_txt = "-"
-                d_color = (100, 116, 139)
-
-            pdf.set_font("Helvetica", "B", 6.6)
-            pdf.set_text_color(*d_color)
-            pdf.set_fill_color(255, 255, 255)
-            pdf.cell(w_delta, row_h, safe_latin1(delta_txt), 1, 1, "C", fill=True)
+    info_txt = (
+        "HISTORIQUE : Moins de 2 semaines enregistrées dans la mémoire hebdomadaire. Données de la semaine affichées seules."
+        if len(items_comparatif) < 2 else None
+    )
+    render_comparatif_triptyque_seances_pdf_page(
+        pdf=pdf,
+        items_comparatif=items_comparatif,
+        target_day=target_day or type_label,
+        df_current=df_current,
+        categories_list=categories_list,
+        info_banner_text=info_txt,
+    )
 
 
 def _render_podium_section_pdf(
@@ -2745,145 +3032,241 @@ def _render_podium_section_pdf(
     w_pod: float,
     title_header: str,
     subtitle_map: Optional[Dict[str, str]] = None,
+    include_flop: bool = True,
 ) -> None:
-    """Rend un bloc podium élégant de 3 catégories (Top Speed, % Marche, Haute Intensité)."""
-    pdf.set_fill_color(22, 43, 76)
-    pdf.rect(x_pod, y_pod, w_pod, 6.0, style="F")
-    pdf.set_fill_color(243, 195, 0)  # Liseré doré officiel RCA #F3C300
-    pdf.rect(x_pod, y_pod + 5.5, w_pod, 0.5, style="F")
-
-    pdf.set_xy(x_pod, y_pod)
-    pdf.set_font("Helvetica", "B", 9.0)
-    pdf.set_text_color(255, 255, 255)
-    pdf.cell(w_pod, 5.5, safe_latin1(title_header), align="C")
-
+    """Rend le bloc podium Top 3 (et Flop 3 juste en dessous) de 3 catégories sur la colonne droite."""
     categories_config = [
         {
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
+            "flop_sub": "Vitesse Minimale",
             "color": (22, 43, 76),
+            "flop_color": (153, 27, 27),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
+            "flop_sub": "Plus de marche (%)",
             "color": (43, 108, 176),
+            "flop_color": (180, 83, 9),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3 + Z4 + Z5 > 14.4 km/h",
+            "flop_sub": "Moins haute intensité",
             "color": (243, 195, 0),
+            "flop_color": (194, 65, 12),
         },
     ]
 
-    rank_badges = {
+    top_badges = {
         1: {"label": "1er", "bg": (243, 195, 0), "fg": (22, 43, 76)},
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
+    flop_badges = {
+        1: {"label": "Dern.", "bg": (153, 27, 27), "fg": (255, 255, 255)},
+        2: {"label": "Av-D.", "bg": (194, 65, 12), "fg": (255, 255, 255)},
+        3: {"label": "3e D.", "bg": (217, 119, 6), "fg": (255, 255, 255)},
+    }
 
-    y_card_start = y_pod + 6.0 + 2.0
-    card_h = 42.0
-    card_gap = 2.5
+    def _draw_block(
+        y_start_blk: float,
+        blk_title: str,
+        is_flop: bool,
+        compact_half: bool,
+    ) -> float:
+        hdr_h = 5.0 if compact_half else 6.0
+        hdr_bg = (139, 30, 36) if is_flop else (22, 43, 76)
+        pdf.set_fill_color(*hdr_bg)
+        pdf.rect(x_pod, y_start_blk, w_pod, hdr_h, style="F")
+        pdf.set_fill_color(243, 195, 0)
+        pdf.rect(x_pod, y_start_blk + hdr_h - 0.5, w_pod, 0.5, style="F")
 
-    for i, cat_cfg in enumerate(categories_config):
-        y_card = y_card_start + i * (card_h + card_gap)
+        pdf.set_xy(x_pod, y_start_blk)
+        pdf.set_font("Helvetica", "B", 8.0 if compact_half else 9.0)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(w_pod, hdr_h - 0.5, safe_latin1(blk_title), align="C")
 
-        pdf.set_fill_color(248, 250, 252)
-        pdf.set_draw_color(203, 213, 225)
-        pdf.rect(x_pod, y_card, w_pod, card_h, style="FD")
+        card_h = 20.6 if compact_half else 42.0
+        card_gap = 1.2 if compact_half else 2.5
+        cat_hdr_h = 4.6 if compact_half else 5.8
+        row_h = 4.8 if compact_half else 10.0
+        row_gap = 0.35 if compact_half else 1.3
+        y_card_start = y_start_blk + hdr_h + (1.2 if compact_half else 2.0)
 
-        accent_color = cat_cfg["color"]
-        pdf.set_fill_color(*accent_color)
-        pdf.rect(x_pod, y_card, w_pod, 5.8, style="F")
+        badges_map = flop_badges if is_flop else top_badges
+        list_field = "flop_players" if is_flop else "players"
 
-        # Si le bandeau est Jaune Or (#F3C300) comme pour Haute Intensité, forcer la couleur en Bleu Marine RCA (#162B4C) gras
-        is_gold_banner = (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat_cfg.get("title", "")).upper())
-        if is_gold_banner:
-            title_text_color = (22, 43, 76)
-            sub_text_color = (22, 43, 76)
-            sub_font_style = "B"
-        else:
-            title_text_color = (255, 255, 255)
-            sub_text_color = (226, 232, 240)
-            sub_font_style = "I"
+        for i, cat_cfg in enumerate(categories_config):
+            y_card = y_card_start + i * (card_h + card_gap)
 
-        pdf.set_xy(x_pod + 3.5, y_card)
-        pdf.set_font("Helvetica", "B", 8.5)
-        pdf.set_text_color(*title_text_color)
-        pdf.cell(65, 5.8, safe_latin1(cat_cfg["title"]), align="L")
+            pdf.set_fill_color(248, 250, 252)
+            pdf.set_draw_color(203, 213, 225)
+            pdf.rect(x_pod, y_card, w_pod, card_h, style="FD")
 
-        sub_val = subtitle_map.get(cat_cfg["key"]) if isinstance(subtitle_map, dict) else None
-        sub_txt = str(sub_val).strip() if sub_val is not None else cat_cfg["def_sub"]
-        pdf.set_xy(x_pod + 65, y_card)
-        pdf.set_font("Helvetica", sub_font_style, 7.5)
-        pdf.set_text_color(*sub_text_color)
-        pdf.cell(w_pod - 69, 5.8, safe_latin1(sub_txt), align="R")
+            accent_color = cat_cfg["flop_color"] if is_flop else cat_cfg["color"]
+            pdf.set_fill_color(*accent_color)
+            pdf.rect(x_pod, y_card, w_pod, cat_hdr_h, style="F")
 
-        cat_data = podium_data.get(cat_cfg["key"], {}) if isinstance(podium_data, dict) else {}
-        players = cat_data.get("players", []) if isinstance(cat_data, dict) else []
-
-        row_w = w_pod - 4
-        row_h = 10.0
-        row_gap = 1.3
-        y_rows_start = y_card + 5.8 + 1.2
-
-        for rank_idx in range(1, 4):
-            y_row = y_rows_start + (rank_idx - 1) * (row_h + row_gap)
-            x_row = x_pod + 2
-
-            p_entry = players[rank_idx - 1] if len(players) >= rank_idx and isinstance(players[rank_idx - 1], dict) else {}
-            p_name = safe_latin1(p_entry.get("name", "-"))
-            p_stat = safe_latin1(p_entry.get("stat", "-"))
-
-            pdf.set_fill_color(255, 255, 255)
-            pdf.set_draw_color(226, 232, 240)
-            pdf.rect(x_row, y_row, row_w, row_h, style="FD")
-
-            badge_info = rank_badges.get(rank_idx, {"label": f"{rank_idx}e", "bg": (100, 116, 139), "fg": (255, 255, 255)})
-            photo_path = photo_manager.get_player_photo_path(p_name) if p_name and p_name != "-" else None
-            has_photo = bool(photo_path and os.path.isfile(photo_path) and os.path.basename(photo_path) not in ["avatar_par_defaut.jpg", "avatar_par_defaut.png"])
-
-            if has_photo:
-                pdf.set_fill_color(*badge_info["bg"])
-                pdf.rect(x_row + 2, y_row + 1.3, 10.0, 7.4, style="F")
-                pdf.set_xy(x_row + 2, y_row + 1.3)
-                pdf.set_font("Helvetica", "B", 7)
-                pdf.set_text_color(*badge_info["fg"])
-                pdf.cell(10.0, 7.4, badge_info["label"], align="C")
-
-                try:
-                    pdf.image(photo_path, x=x_row + 13.5, y=y_row + 1.0, w=8.0, h=8.0)
-                    pdf.set_draw_color(203, 213, 225)
-                    pdf.rect(x_row + 13.5, y_row + 1.0, 8.0, 8.0, style="D")
-                except Exception:
-                    has_photo = False
-
-                name_disp = p_name if len(p_name) <= 24 else p_name[:22] + ".."
-                pdf.set_xy(x_row + 24.0, y_row)
-                pdf.set_font("Helvetica", "B", 8)
-                pdf.set_text_color(30, 41, 59)
-                pdf.cell(66.0, row_h, safe_latin1(name_disp), align="L")
+            is_gold_banner = (not is_flop) and (
+                (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat_cfg.get("title", "")).upper())
+            )
+            if is_gold_banner:
+                title_text_color = (22, 43, 76)
+                sub_text_color = (22, 43, 76)
+                sub_font_style = "B"
             else:
-                pdf.set_fill_color(*badge_info["bg"])
-                pdf.rect(x_row + 2, y_row + 1.3, 12.0, 7.4, style="F")
-                pdf.set_xy(x_row + 2, y_row + 1.3)
-                pdf.set_font("Helvetica", "B", 7.5)
-                pdf.set_text_color(*badge_info["fg"])
-                pdf.cell(12.0, 7.4, badge_info["label"], align="C")
+                title_text_color = (255, 255, 255)
+                sub_text_color = (226, 232, 240)
+                sub_font_style = "I"
 
-                name_disp = p_name if len(p_name) <= 28 else p_name[:26] + ".."
-                pdf.set_xy(x_row + 16.5, y_row)
-                pdf.set_font("Helvetica", "B", 8.5)
-                pdf.set_text_color(30, 41, 59)
-                pdf.cell(73.5, row_h, safe_latin1(name_disp), align="L")
+            pdf.set_xy(x_pod + 3.0, y_card)
+            pdf.set_font("Helvetica", "B", 7.4 if compact_half else 8.5)
+            pdf.set_text_color(*title_text_color)
+            pdf.cell(62, cat_hdr_h, safe_latin1(cat_cfg["title"]), align="L")
 
-            pdf.set_xy(x_row + 90.0, y_row)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(*accent_color)
-            pdf.cell(40.0, row_h, safe_latin1(p_stat), align="R")
+            if is_flop:
+                sub_txt = cat_cfg["flop_sub"]
+            else:
+                sub_val = subtitle_map.get(cat_cfg["key"]) if isinstance(subtitle_map, dict) else None
+                sub_txt = str(sub_val).strip() if sub_val is not None else cat_cfg["def_sub"]
+            pdf.set_xy(x_pod + 62, y_card)
+            pdf.set_font("Helvetica", sub_font_style, 6.5 if compact_half else 7.5)
+            pdf.set_text_color(*sub_text_color)
+            pdf.cell(w_pod - 65, cat_hdr_h, safe_latin1(sub_txt), align="R")
+
+            cat_data = podium_data.get(cat_cfg["key"], {}) if isinstance(podium_data, dict) else {}
+            players = cat_data.get(list_field, []) if isinstance(cat_data, dict) else []
+            total_valid = int(cat_data.get("total_valid", len(players)) or 0) if isinstance(cat_data, dict) else len(players)
+
+            row_w = w_pod - 4
+            y_rows_start = y_card + cat_hdr_h + (0.4 if compact_half else 1.2)
+
+            if is_flop and len(players) == 0:
+                msg = (
+                    "Effectif <= 3 : déjà classé dans le Top 3"
+                    if total_valid > 0
+                    else "Aucune donnée valide pour ce critère"
+                )
+                pdf.set_xy(x_pod + 3, y_rows_start + (row_h * 0.8))
+                pdf.set_font("Helvetica", "I", 7.0)
+                pdf.set_text_color(100, 116, 139)
+                pdf.cell(w_pod - 6, row_h, safe_latin1(msg), align="C")
+                continue
+
+            for rank_idx in range(1, 4):
+                y_row = y_rows_start + (rank_idx - 1) * (row_h + row_gap)
+                x_row = x_pod + 2
+
+                p_entry = players[rank_idx - 1] if len(players) >= rank_idx and isinstance(players[rank_idx - 1], dict) else {}
+                p_name = safe_latin1(p_entry.get("name", "-"))
+                p_stat = safe_latin1(p_entry.get("stat", "-"))
+
+                pdf.set_fill_color(255, 255, 255)
+                pdf.set_draw_color(226, 232, 240)
+                pdf.rect(x_row, y_row, row_w, row_h, style="FD")
+
+                badge_info = badges_map.get(rank_idx, {"label": f"{rank_idx}e", "bg": (100, 116, 139), "fg": (255, 255, 255)})
+                photo_path = photo_manager.get_player_photo_path(p_name) if p_name and p_name != "-" else None
+                has_photo = bool(photo_path and os.path.isfile(photo_path) and os.path.basename(photo_path) not in ["avatar_par_defaut.jpg", "avatar_par_defaut.png"])
+
+                if compact_half:
+                    badge_w = 10.5
+                    badge_h = row_h - 1.0
+                    pdf.set_fill_color(*badge_info["bg"])
+                    pdf.rect(x_row + 1.5, y_row + 0.5, badge_w, badge_h, style="F")
+                    pdf.set_xy(x_row + 1.5, y_row + 0.5)
+                    pdf.set_font("Helvetica", "B", 6.0)
+                    pdf.set_text_color(*badge_info["fg"])
+                    pdf.cell(badge_w, badge_h, badge_info["label"], align="C")
+
+                    text_x = x_row + 13.5
+                    if has_photo:
+                        try:
+                            img_s = row_h - 0.8
+                            pdf.image(photo_path, x=text_x, y=y_row + 0.4, w=img_s, h=img_s)
+                            text_x += img_s + 1.5
+                        except Exception:
+                            pass
+
+                    stat_w = 34.0
+                    name_w = (x_row + row_w - stat_w - 2.0) - text_x
+                    name_disp = p_name if len(p_name) <= 26 else p_name[:24] + ".."
+                    pdf.set_xy(text_x, y_row)
+                    pdf.set_font("Helvetica", "B", 7.0)
+                    pdf.set_text_color(30, 41, 59)
+                    pdf.cell(max(name_w, 20.0), row_h, safe_latin1(name_disp), align="L")
+
+                    pdf.set_xy(x_row + row_w - stat_w - 1.5, y_row)
+                    pdf.set_font("Helvetica", "B", 7.5)
+                    pdf.set_text_color(*accent_color)
+                    pdf.cell(stat_w, row_h, safe_latin1(p_stat), align="R")
+                else:
+                    if has_photo:
+                        pdf.set_fill_color(*badge_info["bg"])
+                        pdf.rect(x_row + 2, y_row + 1.3, 10.0, 7.4, style="F")
+                        pdf.set_xy(x_row + 2, y_row + 1.3)
+                        pdf.set_font("Helvetica", "B", 7)
+                        pdf.set_text_color(*badge_info["fg"])
+                        pdf.cell(10.0, 7.4, badge_info["label"], align="C")
+
+                        try:
+                            pdf.image(photo_path, x=x_row + 13.5, y=y_row + 1.0, w=8.0, h=8.0)
+                            pdf.set_draw_color(203, 213, 225)
+                            pdf.rect(x_row + 13.5, y_row + 1.0, 8.0, 8.0, style="D")
+                        except Exception:
+                            has_photo = False
+
+                        name_disp = p_name if len(p_name) <= 24 else p_name[:22] + ".."
+                        pdf.set_xy(x_row + 24.0, y_row)
+                        pdf.set_font("Helvetica", "B", 8)
+                        pdf.set_text_color(30, 41, 59)
+                        pdf.cell(66.0, row_h, safe_latin1(name_disp), align="L")
+                    else:
+                        pdf.set_fill_color(*badge_info["bg"])
+                        pdf.rect(x_row + 2, y_row + 1.3, 12.0, 7.4, style="F")
+                        pdf.set_xy(x_row + 2, y_row + 1.3)
+                        pdf.set_font("Helvetica", "B", 7.5)
+                        pdf.set_text_color(*badge_info["fg"])
+                        pdf.cell(12.0, 7.4, badge_info["label"], align="C")
+
+                        name_disp = p_name if len(p_name) <= 28 else p_name[:26] + ".."
+                        pdf.set_xy(x_row + 16.5, y_row)
+                        pdf.set_font("Helvetica", "B", 8.5)
+                        pdf.set_text_color(30, 41, 59)
+                        pdf.cell(73.5, row_h, safe_latin1(name_disp), align="L")
+
+                    pdf.set_xy(x_row + 90.0, y_row)
+                    pdf.set_font("Helvetica", "B", 9)
+                    pdf.set_text_color(*accent_color)
+                    pdf.cell(40.0, row_h, safe_latin1(p_stat), align="R")
+
+        return y_card_start + 3 * card_h + 2 * card_gap
+
+    if include_flop:
+        y_after_top = _draw_block(
+            y_start_blk=y_pod,
+            blk_title="TOP 3 — 3 PREMIERS DE LA SÉANCE",
+            is_flop=False,
+            compact_half=True,
+        )
+        _draw_block(
+            y_start_blk=y_after_top + 2.0,
+            blk_title="FLOP 3 — 3 DERNIERS (VIGILANCE)",
+            is_flop=True,
+            compact_half=True,
+        )
+    else:
+        _draw_block(
+            y_start_blk=y_pod,
+            blk_title=title_header,
+            is_flop=False,
+            compact_half=False,
+        )
 
 
 def _render_podium_page_aere(
@@ -2893,150 +3276,220 @@ def _render_podium_page_aere(
     subtitle_map: Optional[Dict[str, str]] = None,
 ) -> None:
     """
-    Rend une page podium dédiée, ultra-aérée et prestigieuse pour le RCA (Général ou par ligne de poste).
-    Organise les 3 catégories (Top Speed, % Marche, Haute Intensité) en 3 grandes colonnes verticales
-    côte-à-côte avec bandeau supérieur, badges de podium, photos de profil et statistiques en grand format.
-    Gère gracieusement le cas où un groupe positionnel compte strictement moins de 3 joueurs.
+    Rend une page podium complète pour une ligne de poste ou un poste spécifique RCA :
+    - Moitié supérieure : PODIUM DES 3 PREMIERS (TOP 3)
+    - Moitié inférieure : PODIUM DES 3 DERNIERS (FLOP 3 — VIGILANCE)
+    Affiche côte-à-côte les 3 critères (Top Speed, % de Marche, Haute Intensité),
+    avec gestion gracieuse des petits groupes (<= 3 ou < 6 joueurs, sans doublons).
     """
     categories_config = [
         {
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
+            "flop_sub": "Vitesse Minimale",
             "color": (31, 78, 121),
+            "flop_color": (153, 27, 27),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
+            "flop_sub": "Plus de marche (%)",
             "color": (43, 108, 176),
+            "flop_color": (180, 83, 9),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3 + Z4 + Z5 > 14.4 km/h",
+            "flop_sub": "Moins haute intensité (m)",
             "color": (243, 195, 0),
+            "flop_color": (194, 65, 12),
         },
     ]
 
-    rank_badges = {
+    top_badges = {
         1: {"label": "1er", "bg": (243, 195, 0), "fg": (22, 43, 76)},
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
+    }
+    flop_badges = {
+        1: {"label": "Dern.", "bg": (153, 27, 27), "fg": (255, 255, 255)},
+        2: {"label": "Av-D.", "bg": (194, 65, 12), "fg": (255, 255, 255)},
+        3: {"label": "3e D.", "bg": (217, 119, 6), "fg": (255, 255, 255)},
     }
 
     col_w = 87.0
     col_gap = 6.0
     x_start = 12.0
-    y_start = 23.0
-    banner_h = 14.0
-    card_h = 47.0
-    card_gap = 3.5
 
-    for c_idx, cat in enumerate(categories_config):
-        x_c = x_start + c_idx * (col_w + col_gap)
-        accent_color = cat["color"]
+    def _draw_podium_half(
+        y_section: float,
+        section_title: str,
+        is_flop: bool,
+    ) -> float:
+        # 1. Bandeau de section (Top 3 vs Flop 3)
+        sec_banner_h = 5.6
+        pdf.set_fill_color(*(139, 30, 36) if is_flop else (22, 43, 76))
+        pdf.rect(x_start, y_section, 273.0, sec_banner_h, style="F")
+        pdf.set_fill_color(243, 195, 0)
+        pdf.rect(x_start, y_section + sec_banner_h - 0.5, 273.0, 0.5, style="F")
 
-        # 1. En-tête de catégorie
-        pdf.set_fill_color(*accent_color)
-        pdf.rect(x_c, y_start, col_w, banner_h, style="F")
+        pdf.set_xy(x_start + 3.0, y_section)
+        pdf.set_font("Helvetica", "B", 8.8)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(267.0, sec_banner_h - 0.5, safe_latin1(section_title), align="C")
 
-        # Si le bandeau est Jaune Or (#F3C300) comme pour Haute Intensité, forcer la police en Bleu Marine RCA (#162B4C) gras
-        is_gold_banner = (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
-        if is_gold_banner:
-            title_text_color = (22, 43, 76)
-            sub_text_color = (22, 43, 76)
-            sub_font_style = "B"
-            lisere_color = (22, 43, 76)
-        else:
-            title_text_color = (255, 255, 255)
-            sub_text_color = (226, 232, 240)
-            sub_font_style = "I"
-            lisere_color = (243, 195, 0)
+        y_start = y_section + sec_banner_h + 1.4
+        banner_h = 9.0
+        card_h = 22.0
+        card_gap = 1.2
+        badges_map = flop_badges if is_flop else top_badges
+        list_field = "flop_players" if is_flop else "players"
 
-        # Liseré décoratif
-        pdf.set_fill_color(*lisere_color)
-        pdf.rect(x_c, y_start + banner_h - 1.0, col_w, 1.0, style="F")
+        for c_idx, cat in enumerate(categories_config):
+            x_c = x_start + c_idx * (col_w + col_gap)
+            accent_color = cat["flop_color"] if is_flop else cat["color"]
 
-        pdf.set_xy(x_c + 2.0, y_start + 1.2)
-        pdf.set_font("Helvetica", "B", 11.0)
-        pdf.set_text_color(*title_text_color)
-        pdf.cell(col_w - 4.0, 5.5, safe_latin1(cat["title"]), align="C")
-
-        sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
-        sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
-        pdf.set_xy(x_c + 2.0, y_start + 7.2)
-        pdf.set_font("Helvetica", sub_font_style, 8.5)
-        pdf.set_text_color(*sub_text_color)
-        pdf.cell(col_w - 4.0, 4.8, safe_latin1(sub_txt), align="C")
-
-        # 2. Les 3 fiches joueurs
-        cat_data = podium_data.get(cat["key"], {}) if isinstance(podium_data, dict) else {}
-        players = cat_data.get("players", []) if isinstance(cat_data, dict) else []
-
-        y_cards_start = y_start + banner_h + 3.0
-
-        for r_idx in range(1, 4):
-            y_card = y_cards_start + (r_idx - 1) * (card_h + card_gap)
-            p_entry = players[r_idx - 1] if len(players) >= r_idx and isinstance(players[r_idx - 1], dict) else {}
-            p_name = safe_latin1(p_entry.get("name", "-"))
-            p_stat = safe_latin1(p_entry.get("stat", "-"))
-
-            # Carte fond blanc avec contour fin
-            pdf.set_fill_color(255, 255, 255)
-            pdf.set_draw_color(203, 213, 225)
-            pdf.rect(x_c, y_card, col_w, card_h, style="FD")
-
-            # Petit liseré d'accent à gauche de la carte
+            # En-tête de catégorie
             pdf.set_fill_color(*accent_color)
-            pdf.rect(x_c, y_card, 2.5, card_h, style="F")
+            pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-            # Badge de rang (1er, 2e, 3e) en haut à gauche
-            badge = rank_badges.get(r_idx, {"label": f"{r_idx}e", "bg": (100, 116, 139), "fg": (255, 255, 255)})
-            pdf.set_fill_color(*badge["bg"])
-            pdf.rect(x_c + 5.0, y_card + 3.0, 15.0, 7.5, style="F")
-            pdf.set_xy(x_c + 5.0, y_card + 3.0)
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.set_text_color(*badge["fg"])
-            pdf.cell(15.0, 7.5, badge["label"], align="C")
+            is_gold_banner = (not is_flop) and (
+                (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
+            )
+            if is_gold_banner:
+                title_text_color = (22, 43, 76)
+                sub_text_color = (22, 43, 76)
+                sub_font_style = "B"
+                lisere_color = (22, 43, 76)
+            else:
+                title_text_color = (255, 255, 255)
+                sub_text_color = (226, 232, 240)
+                sub_font_style = "I"
+                lisere_color = (243, 195, 0)
 
-            # Statistique en haut à droite
-            pdf.set_xy(x_c + 22.0, y_card + 3.0)
-            pdf.set_font("Helvetica", "B", 10.0)
-            pdf.set_text_color(*accent_color)
-            pdf.cell(col_w - 26.0, 7.5, safe_latin1(p_stat), align="R")
+            pdf.set_fill_color(*lisere_color)
+            pdf.rect(x_c, y_start + banner_h - 0.8, col_w, 0.8, style="F")
 
-            # Photo du joueur au centre
-            photo_path = photo_manager.get_player_photo_path(p_name) if p_name and p_name != "-" else None
-            has_photo = bool(photo_path and os.path.isfile(photo_path) and os.path.basename(photo_path) not in ["avatar_par_defaut.jpg", "avatar_par_defaut.png"])
-            photo_size = 24.0
-            photo_x = x_c + (col_w - photo_size) / 2.0
-            photo_y = y_card + 11.5
+            pdf.set_xy(x_c + 2.0, y_start + 0.6)
+            pdf.set_font("Helvetica", "B", 9.0)
+            pdf.set_text_color(*title_text_color)
+            pdf.cell(col_w - 4.0, 4.0, safe_latin1(cat["title"]), align="C")
 
-            if has_photo:
-                try:
-                    pdf.image(photo_path, x=photo_x, y=photo_y, w=photo_size, h=photo_size)
-                    pdf.set_draw_color(203, 213, 225)
-                    pdf.rect(photo_x, photo_y, photo_size, photo_size, style="D")
-                except Exception:
-                    has_photo = False
+            if is_flop:
+                sub_txt = cat["flop_sub"]
+            else:
+                sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
+                sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
+            pdf.set_xy(x_c + 2.0, y_start + 4.5)
+            pdf.set_font("Helvetica", sub_font_style, 7.2)
+            pdf.set_text_color(*sub_text_color)
+            pdf.cell(col_w - 4.0, 3.6, safe_latin1(sub_txt), align="C")
 
-            if not has_photo:
-                # Avatar placeholder propre
-                pdf.set_fill_color(241, 245, 249)
+            cat_data = podium_data.get(cat["key"], {}) if isinstance(podium_data, dict) else {}
+            players = cat_data.get(list_field, []) if isinstance(cat_data, dict) else []
+            total_valid = int(cat_data.get("total_valid", len(players)) or 0) if isinstance(cat_data, dict) else len(players)
+
+            y_cards_start = y_start + banner_h + 1.2
+
+            if is_flop and len(players) == 0:
+                pdf.set_fill_color(248, 250, 252)
                 pdf.set_draw_color(203, 213, 225)
-                pdf.rect(photo_x, photo_y, photo_size, photo_size, style="FD")
-                pdf.set_xy(photo_x, photo_y + 6.0)
-                pdf.set_font("Helvetica", "B", 12)
-                pdf.set_text_color(148, 163, 184)
-                pdf.cell(photo_size, 10, "?", align="C")
+                pdf.rect(x_c, y_cards_start, col_w, 26.0, style="FD")
+                msg_empty = (
+                    "Effectif <= 3 joueurs :\nclassement complet affiché dans le Top 3."
+                    if total_valid > 0
+                    else "Aucune donnée valide enregistrée\npour ce groupe sur cette catégorie."
+                )
+                pdf.set_xy(x_c + 3.0, y_cards_start + 7.5)
+                pdf.set_font("Helvetica", "I", 7.8)
+                pdf.set_text_color(100, 116, 139)
+                pdf.multi_cell(col_w - 6.0, 4.5, safe_latin1(msg_empty), align="C")
+                continue
 
-            # Nom du joueur en bas
-            name_disp = p_name if len(p_name) <= 22 else p_name[:20] + ".."
-            pdf.set_xy(x_c + 3.0, y_card + 37.0)
-            pdf.set_font("Helvetica", "B", 9.5)
-            pdf.set_text_color(30, 41, 59)
-            pdf.cell(col_w - 6.0, 7.0, safe_latin1(name_disp), align="C")
+            max_slots = 3 if not is_flop else max(len(players), 0)
+            for r_idx in range(1, max_slots + 1):
+                y_card = y_cards_start + (r_idx - 1) * (card_h + card_gap)
+                p_entry = players[r_idx - 1] if len(players) >= r_idx and isinstance(players[r_idx - 1], dict) else {}
+                p_name = safe_latin1(p_entry.get("name", "-"))
+                p_stat = safe_latin1(p_entry.get("stat", "-"))
+
+                pdf.set_fill_color(255, 255, 255)
+                pdf.set_draw_color(203, 213, 225)
+                pdf.rect(x_c, y_card, col_w, card_h, style="FD")
+
+                # Liseré gauche
+                pdf.set_fill_color(*accent_color)
+                pdf.rect(x_c, y_card, 2.2, card_h, style="F")
+
+                # Photo à gauche (17x17 mm)
+                photo_size = 17.0
+                photo_x = x_c + 4.0
+                photo_y = y_card + (card_h - photo_size) / 2.0
+                photo_path = photo_manager.get_player_photo_path(p_name) if p_name and p_name != "-" else None
+                has_photo = bool(photo_path and os.path.isfile(photo_path) and os.path.basename(photo_path) not in ["avatar_par_defaut.jpg", "avatar_par_defaut.png"])
+
+                if has_photo:
+                    try:
+                        pdf.image(photo_path, x=photo_x, y=photo_y, w=photo_size, h=photo_size)
+                        pdf.set_draw_color(203, 213, 225)
+                        pdf.rect(photo_x, photo_y, photo_size, photo_size, style="D")
+                    except Exception:
+                        has_photo = False
+
+                if not has_photo:
+                    pdf.set_fill_color(241, 245, 249)
+                    pdf.set_draw_color(203, 213, 225)
+                    pdf.rect(photo_x, photo_y, photo_size, photo_size, style="FD")
+                    pdf.set_xy(photo_x, photo_y)
+                    pdf.set_font("Helvetica", "B", 9.0)
+                    pdf.set_text_color(148, 163, 184)
+                    initials = "".join([part[0].upper() for part in p_name.split() if part])[:2] if (p_name and p_name != "-") else "?"
+                    pdf.cell(photo_size, photo_size, safe_latin1(initials), align="C")
+
+                # Zone droite : Badge + Statistique en haut, Nom du joueur en bas
+                x_right = photo_x + photo_size + 2.5
+                w_right = (x_c + col_w) - x_right - 2.0
+
+                badge = badges_map.get(r_idx, {"label": f"{r_idx}e", "bg": (100, 116, 139), "fg": (255, 255, 255)})
+                pdf.set_fill_color(*badge["bg"])
+                pdf.rect(x_right, y_card + 2.2, 13.5, 6.0, style="F")
+                pdf.set_xy(x_right, y_card + 2.2)
+                pdf.set_font("Helvetica", "B", 7.8)
+                pdf.set_text_color(*badge["fg"])
+                pdf.cell(13.5, 6.0, badge["label"], align="C")
+
+                pdf.set_xy(x_right + 14.5, y_card + 2.2)
+                pdf.set_font("Helvetica", "B", 9.5)
+                pdf.set_text_color(*accent_color)
+                pdf.cell(w_right - 14.5, 6.0, safe_latin1(p_stat), align="R")
+
+                name_disp = p_name if len(p_name) <= 23 else p_name[:21] + ".."
+                pdf.set_xy(x_right, y_card + 11.0)
+                pdf.set_font("Helvetica", "B", 9.0)
+                pdf.set_text_color(30, 41, 59)
+                pdf.cell(w_right, 7.5, safe_latin1(name_disp), align="L")
+
+        return y_start + banner_h + 1.2 + 3 * card_h + 2 * card_gap
+
+    y_end_top = _draw_podium_half(
+        y_section=19.5,
+        section_title=f"PODIUM DES 3 PREMIERS (TOP 3) — {group_name.upper()}",
+        is_flop=False,
+    )
+
+    # Liseré doré séparateur entre Top 3 et Flop 3
+    y_sep = y_end_top + 1.4
+    pdf.set_fill_color(243, 195, 0)
+    pdf.rect(x_start, y_sep, 273.0, 0.5, style="F")
+
+    _draw_podium_half(
+        y_section=y_sep + 1.5,
+        section_title=f"PODIUM DES 3 DERNIERS (FLOP 3 — VIGILANCE) — {group_name.upper()}",
+        is_flop=True,
+    )
 
 
 def _render_podiums_compact_horizontal(
@@ -3048,6 +3501,8 @@ def _render_podiums_compact_horizontal(
     subtitle_map: Optional[Dict[str, str]] = None,
     is_large: bool = False,
     x_start: float = 12.0,
+    mode: str = "players",
+    row_h_override: Optional[float] = None,
 ) -> float:
     """
     Rend un bloc podium horizontal élégant de 3 catégories côte-à-côte :
@@ -3055,41 +3510,55 @@ def _render_podiums_compact_horizontal(
     - % de marche
     - Haute intensité (m)
 
-    Deux formats supportés :
-    - is_large=True (Page 1 - Podium Général) : cartes aérées avec photos 14x14 mm, nom, poste et stats grand format.
-    - is_large=False (Pages 2, 3, 4 - Lignes de poste) : format compact haute densité avec photos 8.4x8.4 mm.
-
-    Gère gracieusement le cas où un groupe compte strictement moins de 3 joueurs ou 0 joueur sans exception.
+    Supporte `mode="players"` (Top 3) et `mode="flop_players"` (Flop 3).
+    Gère gracieusement les petits effectifs (<= 3 joueurs ou < 6 joueurs) sans doublons ni exception.
     Retourne la hauteur totale occupée (mm).
     """
+    is_flop = (mode == "flop_players")
     categories_config = [
         {
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
-            "color": (31, 78, 121),
+            "flop_sub": "Vitesse Minimale",
+            "color": (153, 27, 27) if is_flop else (31, 78, 121),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
-            "color": (46, 90, 136),
+            "flop_sub": "Plus de marche (%)",
+            "color": (180, 83, 9) if is_flop else (46, 90, 136),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3+Z4+Z5 > 14.4 km/h",
-            "color": (163, 0, 0),
+            "flop_sub": "Moins haute intensité",
+            "color": (194, 65, 12) if is_flop else (163, 0, 0),
         },
     ]
 
-    rank_badges = {
+    top_badges = {
         1: {"label": "1er", "bg": (217, 119, 6), "fg": (255, 255, 255)},
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
+    flop_badges = {
+        1: {"label": "Dern.", "bg": (153, 27, 27), "fg": (255, 255, 255)},
+        2: {"label": "Av-D.", "bg": (194, 65, 12), "fg": (255, 255, 255)},
+        3: {"label": "3e D.", "bg": (217, 119, 6), "fg": (255, 255, 255)},
+    }
+    rank_badges = flop_badges if is_flop else top_badges
 
-    if is_large:
+    if row_h_override is not None:
+        banner_h = 4.8
+        row_h = float(row_h_override)
+        row_gap = 0.8
+        photo_size = min(9.5, max(7.0, row_h - 2.2))
+        title_font = 7.4
+        sub_font = 6.0
+    elif is_large:
         banner_h = 5.8
         row_h = 20.0
         row_gap = 1.6
@@ -3104,7 +3573,7 @@ def _render_podiums_compact_horizontal(
         title_font = 7.5
         sub_font = 6.2
 
-    y_rows_start = y_start + banner_h + (1.2 if is_large else 1.0)
+    y_rows_start = y_start + banner_h + (1.2 if is_large else 0.9)
 
     for c_idx, cat in enumerate(categories_config):
         x_c = x_start + c_idx * (col_w + col_gap)
@@ -3114,7 +3583,9 @@ def _render_podiums_compact_horizontal(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-        is_gold_banner = (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
+        is_gold_banner = (not is_flop) and (
+            (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
+        )
         if is_gold_banner:
             title_text_color = (22, 43, 76)
             sub_text_color = (22, 43, 76)
@@ -3126,25 +3597,44 @@ def _render_podiums_compact_horizontal(
             sub_font_style = "I"
             lisere_color = (243, 195, 0)
 
-        # Liseré décoratif RCA
         pdf.set_fill_color(*lisere_color)
         pdf.rect(x_c, y_start + banner_h - 0.5, col_w, 0.5, style="F")
 
         pdf.set_xy(x_c + 2.0, y_start)
         pdf.set_font("Helvetica", "B", title_font)
         pdf.set_text_color(*title_text_color)
-        pdf.cell(col_w * 0.55, banner_h - 0.5, safe_latin1(cat["title"]), align="L")
+        pdf.cell(col_w * 0.54, banner_h - 0.5, safe_latin1(cat["title"]), align="L")
 
-        sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
-        sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
-        pdf.set_xy(x_c + col_w * 0.55, y_start)
+        if is_flop:
+            sub_txt = cat["flop_sub"]
+        else:
+            sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
+            sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
+        pdf.set_xy(x_c + col_w * 0.54, y_start)
         pdf.set_font("Helvetica", sub_font_style, sub_font)
         pdf.set_text_color(*sub_text_color)
-        pdf.cell(col_w * 0.45 - 2.0, banner_h - 0.5, safe_latin1(sub_txt), align="R")
+        pdf.cell(col_w * 0.46 - 2.0, banner_h - 0.5, safe_latin1(sub_txt), align="R")
 
-        # 2. Les 3 lignes joueurs
+        # 2. Lignes joueurs
         cat_data = podium_data.get(cat["key"], {}) if isinstance(podium_data, dict) else {}
-        players = cat_data.get("players", []) if isinstance(cat_data, dict) else []
+        players = cat_data.get(mode, []) if isinstance(cat_data, dict) else []
+        total_valid = int(cat_data.get("total_valid", len(players)) or 0) if isinstance(cat_data, dict) else len(players)
+
+        if is_flop and len(players) == 0:
+            box_h = 3 * row_h + 2 * row_gap
+            pdf.set_fill_color(248, 250, 252)
+            pdf.set_draw_color(226, 232, 240)
+            pdf.rect(x_c, y_rows_start, col_w, box_h, style="FD")
+            msg_empty = (
+                "Effectif <= 3 : déjà classé dans le Top 3."
+                if total_valid > 0
+                else "Aucune donnée valide."
+            )
+            pdf.set_xy(x_c + 2.0, y_rows_start + box_h / 2.0 - 3.0)
+            pdf.set_font("Helvetica", "I", 7.0)
+            pdf.set_text_color(100, 116, 139)
+            pdf.cell(col_w - 4.0, 6.0, safe_latin1(msg_empty), align="C")
+            continue
 
         for r_idx in range(1, 4):
             y_row = y_rows_start + (r_idx - 1) * (row_h + row_gap)
@@ -3153,31 +3643,27 @@ def _render_podiums_compact_horizontal(
             p_poste = safe_latin1(p_entry.get("poste", "")).strip()
             p_stat = safe_latin1(p_entry.get("stat", "-")).strip()
 
-            # Fond de carte blanc
             pdf.set_fill_color(255, 255, 255)
             pdf.set_draw_color(226, 232, 240)
             pdf.rect(x_c, y_row, col_w, row_h, style="FD")
 
-            # Liseré d'accent vertical à gauche
             accent_w = 2.0 if is_large else 1.5
             pdf.set_fill_color(*accent_color)
             pdf.rect(x_c, y_row, accent_w, row_h, style="F")
 
-            # Badge de rang (1er, 2e, 3e)
             badge = rank_badges.get(r_idx, {"label": f"{r_idx}e", "bg": (100, 116, 139), "fg": (255, 255, 255)})
-            b_w = 10.0 if is_large else 7.5
-            b_h = 8.0 if is_large else 7.5
+            b_w = 10.0 if is_large else (9.5 if is_flop else 7.8)
+            b_h = min(8.0 if is_large else 7.5, row_h - 2.0)
             b_x = x_c + accent_w + 1.2
             b_y = y_row + (row_h - b_h) / 2.0
             pdf.set_fill_color(*badge["bg"])
             pdf.rect(b_x, b_y, b_w, b_h, style="F")
             pdf.set_xy(b_x, b_y)
-            pdf.set_font("Helvetica", "B", 7.0 if is_large else 6.0)
+            pdf.set_font("Helvetica", "B", 6.8 if is_large else (5.6 if is_flop else 6.0))
             pdf.set_text_color(*badge["fg"])
             pdf.cell(b_w, b_h, badge["label"], align="C")
 
-            # Photo / Avatar
-            photo_x = b_x + b_w + 1.5
+            photo_x = b_x + b_w + 1.4
             photo_y = y_row + (row_h - photo_size) / 2.0
             photo_path = photo_manager.get_player_photo_path(p_name) if p_name and p_name != "-" else None
             has_photo = bool(photo_path and os.path.isfile(photo_path) and os.path.basename(photo_path) not in ["avatar_par_defaut.jpg", "avatar_par_defaut.png"])
@@ -3200,7 +3686,6 @@ def _render_podiums_compact_horizontal(
                 initials = "".join([part[0].upper() for part in p_name.split() if part])[:2] if (p_name and p_name != "-") else "?"
                 pdf.cell(photo_size, photo_size, safe_latin1(initials), align="C")
 
-            # Textes et statistiques
             if is_large:
                 x_text = photo_x + photo_size + 2.5
                 w_text = (x_c + col_w) - x_text - 1.5
@@ -3224,30 +3709,30 @@ def _render_podiums_compact_horizontal(
                 pdf.set_text_color(*accent_color)
                 pdf.cell(w_text, 5.5, safe_latin1(p_stat), align="L")
             else:
-                x_text = photo_x + photo_size + 1.8
-                x_stat = x_c + col_w - 29.0
+                x_text = photo_x + photo_size + 1.6
+                x_stat = x_c + col_w - 28.5
                 w_name = x_stat - x_text - 1.0
 
                 disp_name = p_name if len(p_name) <= 18 else p_name[:16] + ".."
-                pdf.set_xy(x_text, y_row + 1.0)
-                pdf.set_font("Helvetica", "B", 6.8)
+                pdf.set_xy(x_text, y_row + (1.4 if row_h >= 11.5 else 1.0))
+                pdf.set_font("Helvetica", "B", 7.0 if row_h >= 11.5 else 6.8)
                 pdf.set_text_color(30, 41, 59)
                 pdf.cell(w_name, 4.2, safe_latin1(disp_name), align="L")
 
                 disp_poste = p_poste if p_poste else "RCA"
-                if len(disp_poste) > 15:
-                    disp_poste = disp_poste[:13] + ".."
-                pdf.set_xy(x_text, y_row + 5.2)
-                pdf.set_font("Helvetica", "", 5.8)
+                if len(disp_poste) > 16:
+                    disp_poste = disp_poste[:14] + ".."
+                pdf.set_xy(x_text, y_row + (6.0 if row_h >= 11.5 else 5.2))
+                pdf.set_font("Helvetica", "", 6.0 if row_h >= 11.5 else 5.8)
                 pdf.set_text_color(100, 116, 139)
                 pdf.cell(w_name, 3.8, safe_latin1(disp_poste), align="L")
 
                 pdf.set_xy(x_stat, y_row)
                 pdf.set_font("Helvetica", "B", 7.8)
                 pdf.set_text_color(*accent_color)
-                pdf.cell(27.5, row_h, safe_latin1(p_stat), align="R")
+                pdf.cell(27.0, row_h, safe_latin1(p_stat), align="R")
 
-    total_h = banner_h + (1.2 if is_large else 1.0) + 3 * row_h + 2 * row_gap
+    total_h = banner_h + (1.2 if is_large else 0.9) + 3 * row_h + 2 * row_gap
     return total_h
 
 
@@ -3328,7 +3813,7 @@ class RCAWeeklyPDFReport(FPDF):
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(100, 116, 139)
         self.cell(160, 6, safe_latin1("Document Staff Technique RCA — Pôle Préparation Physique"), align="L")
-        self.cell(113, 6, safe_latin1(f"Page {self.page_no()}/{self.total_pages}"), align="R")
+        self.cell(113, 6, safe_latin1(f"Page {self.page_no()}/{{nb}}"), align="R")
 
 
 def generate_weekly_pdf_report(
@@ -3340,11 +3825,34 @@ def generate_weekly_pdf_report(
     objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
     inclure_comparatif: bool = False,
     nb_comparatif: int = 4,
+    granularity_mode: str = "Par ligne de poste",
     **kwargs: Any,
 ) -> bytes:
-    """Génère le rapport hebdomadaire PDF complet officiel RCA au format Paysage (A4)."""
+    """
+    Génère le rapport hebdomadaire PDF complet officiel RCA au format Paysage (A4).
+    - Mode 'Par ligne de poste' (8 pages avec comparatif, 7 sans) :
+      Page 1 (Synthèse + Podiums Top 3 & Flop 3), puis 2 pages par ligne (5 de devant, 3ème Ligne, Trois-quarts),
+      puis Page 8 Comparative Multi-Semaines.
+    - Mode 'Détaillé par poste' (9 postes actifs) :
+      Page 1 + 2 pages par poste actif + pages comparatives triptyques (3 postes/page).
+    """
     if df_hebdo is None:
         df_hebdo = kwargs.get("df_agg", pd.DataFrame())
+    if df_hebdo is not None and isinstance(df_hebdo, pd.DataFrame) and not df_hebdo.empty:
+        df_hebdo = df_hebdo.copy()
+        if gsheet_sync and hasattr(gsheet_sync, "filter_out_test_players"):
+            df_hebdo = gsheet_sync.filter_out_test_players(df_hebdo)
+        j_lookup = _get_effective_joueurs_lookup()
+        name_col = "Nom ; Prénom" if "Nom ; Prénom" in df_hebdo.columns else ("Nom" if "Nom" in df_hebdo.columns else None)
+        pos_col = "Poste_Detaille" if "Poste_Detaille" in df_hebdo.columns else ("Poste" if "Poste" in df_hebdo.columns else None)
+        df_hebdo["Poste_Detaille"] = [
+            normaliser_poste_specifique(
+                r.get(pos_col, "") if pos_col else "",
+                player_name=str(r.get(name_col, "")) if name_col else "",
+                joueurs_lookup=j_lookup,
+            ) or (str(r.get(pos_col, "")).strip() if pos_col else "Non spécifié")
+            for _, r in df_hebdo.iterrows()
+        ]
 
     if synthese_jours is None:
         synthese_jours = kwargs.get("selected_sessions_meta", {})
@@ -3352,17 +3860,20 @@ def generate_weekly_pdf_report(
     if isinstance(synthese_jours, list):
         synthese_dict = {f"s_{i}": s for i, s in enumerate(synthese_jours) if isinstance(s, dict)}
     elif isinstance(synthese_jours, dict):
-        synthese_dict = synthese_jours
+        synthese_dict = dict(synthese_jours)
     else:
         synthese_dict = {}
+
+    granularity_mode = str(kwargs.get("granularity_mode", granularity_mode) or "Par ligne de poste")
+    g_low = _strip_accents_lower(granularity_mode)
+    is_detailed = ("detaille" in g_low) or ("9 poste" in g_low)
 
     week_label = f"Semaine {week_num:02d} - {year}"
     raw_dates = [format_readable_date(s.get("date", "")) for s in synthese_dict.values() if isinstance(s, dict) and s.get("date")]
     raw_dates = [d for d in raw_dates if d]
     dates_str = f"Du {raw_dates[0]} au {raw_dates[-1]}" if len(raw_dates) >= 2 else (raw_dates[0] if raw_dates else "")
 
-    total_pages = 5 if inclure_comparatif else 4
-    pdf = RCAWeeklyPDFReport(week_label=week_label, dates_label=dates_str, total_pages=total_pages)
+    pdf = RCAWeeklyPDFReport(week_label=week_label, dates_label=dates_str, total_pages=8 if inclure_comparatif else 7)
 
     if df_hebdo is None or df_hebdo.empty:
         pdf.add_page()
@@ -3370,26 +3881,78 @@ def generate_weekly_pdf_report(
         pdf.cell(0, 10, safe_latin1("Aucune donnee disponible pour cette semaine."), align="L")
         return bytes(pdf.output())
 
+    # Chargement + rattrapage RPE Google Sheets pour la semaine en cours (ex: S43)
+    w_data_curr = load_week_data(year, week_num)
+    if rpe_connector and hasattr(rpe_connector, "enrich_historical_week_data_with_rpe"):
+        sessions_curr = w_data_curr.get("sessions", {}) if isinstance(w_data_curr, dict) else {}
+        has_any_rpe_curr = ("RPE" in df_hebdo.columns) and pd.to_numeric(df_hebdo["RPE"], errors="coerce").notna().any()
+        if not has_any_rpe_curr or not w_data_curr.get("rpe_summary"):
+            try:
+                w_data_curr, changed_curr = rpe_connector.enrich_historical_week_data_with_rpe(
+                    w_data_curr, joueurs_lookup=_get_effective_joueurs_lookup()
+                )
+                if changed_curr:
+                    fpath_curr = get_week_file_path(year, week_num)
+                    try:
+                        with open(fpath_curr, "w", encoding="utf-8") as fw:
+                            json.dump(w_data_curr, fw, indent=2, ensure_ascii=False, default=str)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # Propager les RPE rattrapés sur df_hebdo si la colonne était absente ou vide
+        if isinstance(w_data_curr, dict) and w_data_curr.get("sessions"):
+            if not synthese_dict:
+                synthese_dict = w_data_curr["sessions"]
+            if ("RPE" not in df_hebdo.columns) or pd.to_numeric(df_hebdo["RPE"], errors="coerce").isna().all():
+                player_rpe_vals: Dict[str, List[float]] = {}
+                for s_info in w_data_curr["sessions"].values():
+                    if not isinstance(s_info, dict):
+                        continue
+                    for p in s_info.get("players_data", []):
+                        if not isinstance(p, dict):
+                            continue
+                        pname = str(p.get("Nom ; Prénom", p.get("Nom", ""))).strip()
+                        prpe = p.get("RPE")
+                        if pname and prpe is not None and str(prpe).upper() not in ("", "NR", "NONE", "NAN"):
+                            try:
+                                frpe = float(prpe)
+                                if 1.0 <= frpe <= 10.0:
+                                    player_rpe_vals.setdefault(pname, []).append(frpe)
+                            except Exception:
+                                pass
+                if player_rpe_vals and "Nom ; Prénom" in df_hebdo.columns:
+                    df_hebdo["RPE"] = df_hebdo["Nom ; Prénom"].map(
+                        lambda n: round(float(np.mean(player_rpe_vals[str(n).strip()])), 1)
+                        if str(n).strip() in player_rpe_vals else np.nan
+                    )
+
+    if is_detailed:
+        categories = get_active_positions(df_hebdo)
+        if not categories:
+            categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    else:
+        categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    rpe_groups = _calculate_rpe_groups_for_week(
+        df_hebdo,
+        sessions_dict=w_data_curr.get("sessions") if isinstance(w_data_curr, dict) and w_data_curr.get("sessions") else synthese_dict,
+        week_data=w_data_curr,
+        categories=categories,
+    )
+
     # =========================================================================
-    # PAGE 1 : SYNTHÈSE GLOBALE DU CLUB & PODIUM GÉNÉRAL (FORMAT STRICT 4 PAGES)
+    # PAGE 1 : SYNTHÈSE GLOBALE DU CLUB & PODIUMS GÉNÉRAUX (TOP 3 & FLOP 3)
     # =========================================================================
     pdf.current_subtitle = "SYNTHÈSE GLOBALE DU CLUB & CHARGE HEBDOMADAIRE"
     pdf.add_page()
-    pdf.set_y(20.0)
+    pdf.set_y(19.5)
 
-    # 1. KPIs Globaux
     tot_km = float(df_hebdo["Distance Totale (km)"].sum()) if not df_hebdo.empty and "Distance Totale (km)" in df_hebdo.columns else 0.0
     tot_hi = float(df_hebdo["Haute intensité (m)"].sum()) if not df_hebdo.empty and "Haute intensité (m)" in df_hebdo.columns else 0.0
     nb_joueurs_tot = len(df_hebdo)
     max_speed = float(df_hebdo["Top Speed (km/h)"].max()) if not df_hebdo.empty and "Top Speed (km/h)" in df_hebdo.columns else 0.0
     nb_seances = len(synthese_dict)
-
-    weekly_rpe = {}
-    if rpe_connector:
-        try:
-            weekly_rpe = rpe_connector.calculate_weekly_rpe_from_sessions(synthese_dict)
-        except Exception:
-            pass
 
     kpis = [
         ("Volume Cumulé Équipe", f"{tot_km:.1f} km"),
@@ -3398,153 +3961,240 @@ def generate_weekly_pdf_report(
         ("Vitesse Max Semaine", f"{max_speed:.1f} km/h"),
         ("Séances Fusionnées", f"{nb_seances} séances"),
     ]
-
-    if weekly_rpe.get("rpe_moyen_equipe") is not None:
-        kpis.append(("RPE Moyen Semaine", f"{weekly_rpe['rpe_moyen_equipe']:.1f}/10"))
-    elif "RPE" in df_hebdo.columns and pd.to_numeric(df_hebdo["RPE"], errors="coerce").notna().any():
-        r_mean = float(pd.to_numeric(df_hebdo["RPE"], errors="coerce").dropna().mean())
-        kpis.append(("RPE Moyen Semaine", f"{r_mean:.1f}/10"))
+    if rpe_groups.get("Total") is not None:
+        kpis.append(("RPE Moyen Semaine", f"{rpe_groups['Total']:.1f}/10"))
+    else:
+        kpis.append(("RPE Moyen Semaine", "NR"))
 
     col_w = (273.0 - (len(kpis) - 1) * 2.25) / len(kpis)
     for idx, (label, val) in enumerate(kpis):
         x = 12 + idx * (col_w + 2.25)
         pdf.set_fill_color(248, 250, 252)
         pdf.set_draw_color(226, 232, 240)
-        pdf.rect(x, 20.0, col_w, 13.0, "FD")
-        pdf.set_xy(x, 21.0)
-        pdf.set_font("Helvetica", "B", 7.0)
+        pdf.rect(x, 19.5, col_w, 11.5, "FD")
+        pdf.set_xy(x, 20.3)
+        pdf.set_font("Helvetica", "B", 6.8)
         pdf.set_text_color(100, 116, 139)
-        pdf.cell(col_w, 3.8, label.upper(), align="C")
-        pdf.set_xy(x, 25.0)
-        pdf.set_font("Helvetica", "B", 10.5)
+        pdf.cell(col_w, 3.5, safe_latin1(label.upper()), align="C")
+        pdf.set_xy(x, 24.0)
+        pdf.set_font("Helvetica", "B", 10.0)
         pdf.set_text_color(31, 78, 121)
-        pdf.cell(col_w, 6.5, val, align="C")
+        pdf.cell(col_w, 6.0, safe_latin1(val), align="C")
 
-    # 2. Section intermédiaire (Tableau des séances + Graphiques)
-    y_mid = 35.0
+    # 2. Section intermédiaire (Tableau des séances + Graphiques) — y=32.5..93.5
+    y_mid = 32.5
 
-    # Colonne Gauche : Tableau des séances + Graphique Répartition de charge
     pdf.set_xy(12, y_mid)
-    pdf.set_font("Helvetica", "B", 8.8)
+    pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(133, 4.0, safe_latin1("1. SÉANCES ENREGISTRÉES & RÉPARTITION DE CHARGE :"), align="L")
+    pdf.cell(133, 3.8, safe_latin1("1. SÉANCES ENREGISTRÉES & RÉPARTITION DE CHARGE :"), align="L")
 
-    y_table = y_mid + 4.5
+    y_table = y_mid + 4.0
     pdf.set_xy(12, y_table)
     pdf.set_fill_color(31, 78, 121)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 7.5)
-    pdf.cell(45, 4.8, "Séance / Type", 1, 0, "L", fill=True)
-    pdf.cell(24, 4.8, "Date", 1, 0, "C", fill=True)
-    pdf.cell(20, 4.8, "Effectif", 1, 0, "C", fill=True)
-    pdf.cell(22, 4.8, "Dist. (km)", 1, 0, "C", fill=True)
-    pdf.cell(22, 4.8, "H.I. (m)", 1, 1, "C", fill=True)
+    pdf.set_font("Helvetica", "B", 7.2)
+    pdf.cell(45, 4.4, "Séance / Type", 1, 0, "L", fill=True)
+    pdf.cell(24, 4.4, "Date", 1, 0, "C", fill=True)
+    pdf.cell(20, 4.4, "Effectif", 1, 0, "C", fill=True)
+    pdf.cell(22, 4.4, "Dist. (km)", 1, 0, "C", fill=True)
+    pdf.cell(22, 4.4, "H.I. (m)", 1, 1, "C", fill=True)
 
-    pdf.set_font("Helvetica", "", 7.2)
+    pdf.set_font("Helvetica", "", 6.9)
     pdf.set_text_color(15, 23, 42)
     sessions_to_show = list(synthese_dict.items())[:4]
-    for s_id, s in sessions_to_show:
+    for _, s in sessions_to_show:
         pdf.set_x(12)
-        pdf.cell(45, 4.2, safe_latin1(str(s.get("day_type", ""))[:20]), 1, 0, "L")
-        pdf.cell(24, 4.2, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C")
-        pdf.cell(20, 4.2, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C")
-        pdf.cell(22, 4.2, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C")
-        pdf.cell(22, 4.2, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C")
+        pdf.cell(45, 3.8, safe_latin1(str(s.get("day_type", ""))[:20]), 1, 0, "L")
+        pdf.cell(24, 3.8, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C")
+        pdf.cell(20, 3.8, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C")
+        pdf.cell(22, 3.8, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C")
+        pdf.cell(22, 3.8, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C")
 
-    # Graphique Répartition de charge par séance sous le tableau
-    y_chart_days = pdf.get_y() + 2.0
-    chart_days_h = min(46.0, max(24.0, 106.0 - y_chart_days))
+    y_chart_days = pdf.get_y() + 1.5
+    chart_days_h = min(40.0, max(22.0, 94.0 - y_chart_days))
     try:
         buf_days = generer_graphique_hebdo_repartition_jours_matplotlib(synthese_dict)
         pdf.image(buf_days, x=12, y=y_chart_days, w=133, h=chart_days_h)
     except Exception as e:
         print(f"Erreur graphique repartition jours PDF : {e}")
 
-    # Colonne Droite : Graphique Charge moyenne par Ligne
     pdf.set_xy(151, y_mid)
-    pdf.set_font("Helvetica", "B", 8.8)
+    pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(133, 4.0, safe_latin1("2. CHARGE MOYENNE PAR LIGNE DE POSTE (SEMAINE) :"), align="L")
+    pdf.cell(133, 3.8, safe_latin1("2. CHARGE MOYENNE PAR LIGNE DE POSTE (SEMAINE) :"), align="L")
 
     try:
         buf_groups = generer_graphique_hebdo_groupes_matplotlib(df_hebdo)
-        pdf.image(buf_groups, x=151, y=y_mid + 4.5, w=134, h=66.5)
+        pdf.image(buf_groups, x=151, y=y_mid + 4.0, w=134, h=57.0)
     except Exception as e:
         print(f"Erreur graphique groupes hebdo PDF : {e}")
 
-    # 3. Section 3 : Podium Général de l'effectif complet
-    y_pod_gen = 108.0
-    pdf.set_xy(12, y_pod_gen)
-    pdf.set_font("Helvetica", "B", 9.2)
-    pdf.set_text_color(11, 25, 44)
-    pdf.cell(273, 4.0, safe_latin1("3. PODIUM GÉNÉRAL HEBDOMADAIRE — EFFECTIF COMPLET :"), align="L")
-
+    # 3. Section Podium Général Top 3 + Flop 3 sur Page 1
     podium_general = generer_podiums_hebdomadaires(df_hebdo)
     sub_map_gen = calculer_sous_titres_podium(df_hebdo, label_prefix="Moy. semaine")
+
+    y_pod_top = 95.5
+    pdf.set_xy(12, y_pod_top)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_text_color(11, 25, 44)
+    pdf.cell(273, 3.8, safe_latin1("3. PODIUM GÉNÉRAL HEBDOMADAIRE — TOP 3 (3 PREMIERS) :"), align="L")
+    y_used_top = _render_podiums_compact_horizontal(
+        pdf=pdf,
+        podium_data=podium_general,
+        y_start=y_pod_top + 4.0,
+        subtitle_map=sub_map_gen,
+        is_large=False,
+        mode="players",
+        row_h_override=12.0,
+    )
+
+    y_pod_flop = y_pod_top + 4.0 + y_used_top + 1.8
+    pdf.set_xy(12, y_pod_flop)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_text_color(153, 27, 27)
+    pdf.cell(273, 3.8, safe_latin1("4. PODIUM GÉNÉRAL HEBDOMADAIRE — FLOP 3 (3 DERNIERS / VIGILANCE) :"), align="L")
     _render_podiums_compact_horizontal(
         pdf=pdf,
         podium_data=podium_general,
-        y_start=y_pod_gen + 4.8,
+        y_start=y_pod_flop + 4.0,
         subtitle_map=sub_map_gen,
-        is_large=True,
+        is_large=False,
+        mode="flop_players",
+        row_h_override=12.0,
     )
 
     # =========================================================================
-    # PAGES 2, 3 ET 4 : BILANS DÉTAILLÉS PAR LIGNE DE POSTE (STRICTEMENT 4 PAGES TOTAL)
-    # Page 2 : 5 de devant
-    # Page 3 : 3ème Ligne
-    # Page 4 : Trois-quarts
+    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (RETOUR HEBDO + PODIUMS TOP/FLOP)
     # =========================================================================
-    groupes_rca = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    def _safe_float(v: Any, default: float = 0.0) -> float:
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except (ValueError, TypeError):
+            return default
 
-    for grp in groupes_rca:
-        df_sub = df_hebdo[df_hebdo["Groupe"] == grp] if not df_hebdo.empty and "Groupe" in df_hebdo.columns else pd.DataFrame()
+    active_cfg = objectifs_config or charger_objectifs_config()
+    multiplier = max(nb_seances, 1)
+
+    for grp in categories:
+        df_sub = _filter_df_by_group(df_hebdo, grp)
         n_players_grp = len(df_sub)
 
-        pdf.current_subtitle = f"BILAN HEBDOMADAIRE — {grp.upper()} ({n_players_grp} JOUEUR{'S' if n_players_grp > 1 else ''})"
+        # ---------------------------------------------------------------------
+        # PAGE A : RETOUR HEBDOMADAIRE — OBJECTIFS, JAUGES & TABLEAU JOUEURS
+        # ---------------------------------------------------------------------
+        pdf.current_subtitle = f"RETOUR HEBDOMADAIRE — {grp.upper()} ({n_players_grp} JOUEUR{'S' if n_players_grp > 1 else ''})"
         pdf.add_page()
         pdf.set_y(19.5)
 
-        # 1. Objectifs Hebdomadaires vs Réalisé Cumulé
-        pdf.set_xy(12, 19.5)
-        pdf.set_font("Helvetica", "B", 9.0)
-        pdf.set_text_color(11, 25, 44)
-        pdf.cell(273, 4.0, safe_latin1(f"1. OBJECTIFS HEBDOMADAIRES VS RÉALISÉ DU GROUPE ({nb_seances} SÉANCES CUMULÉES) :"), align="L")
+        targets_daily = get_objectifs_for_category(active_cfg, grp)
+        obj_dist = targets_daily["Objectif Distance (m)"] * multiplier
+        obj_hsr = targets_daily["Obj. HSR"] * multiplier
+        obj_vhsr = targets_daily["Obj. VHSR"] * multiplier
+        obj_acc = targets_daily["Obj. ACC/DEC"] * multiplier
 
+        if not df_sub.empty:
+            real_dist = float(pd.to_numeric(df_sub.get("Distance Totale (m)", df_sub.get("Distance Totale (km)", 0) * 1000.0), errors="coerce").mean() or 0.0)
+            real_hsr = float(pd.to_numeric(df_sub.get("HSR Z3 (m)", df_sub.get("Haute intensité (m)", 0)), errors="coerce").mean() or 0.0)
+            real_vhsr = float(pd.to_numeric(df_sub.get("Distance Sprint VHSR (m)", df_sub.get("VHSR (m)", 0)), errors="coerce").mean() or 0.0)
+            real_dpm = float(pd.to_numeric(df_sub.get("Distance/min (m/min)", df_sub.get("Distance Per Min (m/min)", 0)), errors="coerce").mean() or 0.0)
+            real_acc = float(pd.to_numeric(df_sub.get("Accel/Dec total", df_sub.get("Accel/Dec", 0)), errors="coerce").mean() or 0.0)
+        else:
+            real_dist = real_hsr = real_vhsr = real_dpm = real_acc = 0.0
+
+        real_dist = 0.0 if np.isnan(real_dist) else real_dist
+        real_hsr = 0.0 if np.isnan(real_hsr) else real_hsr
+        real_vhsr = 0.0 if np.isnan(real_vhsr) else real_vhsr
+        real_dpm = 0.0 if np.isnan(real_dpm) else real_dpm
+        real_acc = 0.0 if np.isnan(real_acc) else real_acc
+
+        pct_dist = (real_dist / obj_dist * 100.0) if obj_dist > 0 else 0.0
+        pct_hsr = (real_hsr / obj_hsr * 100.0) if obj_hsr > 0 else 0.0
+        pct_vhsr = (real_vhsr / obj_vhsr * 100.0) if obj_vhsr > 0 else 0.0
+        pct_acc = (real_acc / obj_acc * 100.0) if obj_acc > 0 else 0.0
+
+        rpe_cat_val = rpe_groups.get(grp)
+        if rpe_cat_val is None and not df_sub.empty and "RPE" in df_sub.columns:
+            s_rpe_c = pd.to_numeric(df_sub["RPE"], errors="coerce").dropna()
+            if not s_rpe_c.empty:
+                rpe_cat_val = round(float(s_rpe_c.mean()), 1)
+        rpe_cat_str = f"{rpe_cat_val:.1f} / 10" if (rpe_cat_val is not None and rpe_cat_val > 0) else "NR"
+
+        # 1. Tableau Récapitulatif « RETOUR HEBDOMADAIRE — Objectif vs Réalisé »
+        table_x = 12.0
+        table_y = 19.8
+        col_w_grp = 45.0
+        col_w_num = 38.0  # 45 + 6*38 = 273 mm
+
+        pdf.set_xy(table_x, table_y)
+        pdf.set_fill_color(31, 78, 121)
+        pdf.set_draw_color(31, 78, 121)
+        pdf.set_font("Helvetica", "B", 7.8)
+        pdf.set_text_color(255, 255, 255)
+        cat_label_prefix = "POSTE" if is_detailed else "GROUPE"
+        headers_tbl = [
+            (col_w_grp, f"{cat_label_prefix} : {grp.upper()}", "L"),
+            (col_w_num, "DISTANCE TOTALE", "C"),
+            (col_w_num, "DISTANCE HSR (Z3)", "C"),
+            (col_w_num, "DISTANCE VHSR (Sprint)", "C"),
+            (col_w_num, "m/min", "C"),
+            (col_w_num, "ACC / DEC n°", "C"),
+            (col_w_num, "RPE MOYEN", "C"),
+        ]
+        for w, h_title, align in headers_tbl:
+            pdf.cell(w, 5.8, safe_latin1(h_title), border=1, align=align, fill=True)
+
+        pdf.set_xy(table_x, table_y + 5.8)
+        pdf.set_fill_color(241, 245, 249)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_text_color(71, 85, 105)
+        pdf.set_font("Helvetica", "B", 7.6)
+        pdf.cell(col_w_grp, 5.4, safe_latin1(f"  Objectif ({multiplier}x)"), border=1, align="L", fill=True)
+        pdf.set_font("Helvetica", "", 7.6)
+        pdf.set_text_color(31, 78, 121)
+        pdf.cell(col_w_num, 5.4, f"{int(round(obj_dist)):,d} m".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.4, f"{int(round(obj_hsr)):,d} m".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.4, f"{int(round(obj_vhsr)):,d} m".replace(",", " "), border=1, align="C", fill=True)
+        pdf.set_text_color(148, 163, 184)
+        pdf.cell(col_w_num, 5.4, "/", border=1, align="C", fill=True)
+        pdf.set_text_color(31, 78, 121)
+        pdf.cell(col_w_num, 5.4, f"{int(round(obj_acc)):,d}".replace(",", " "), border=1, align="C", fill=True)
+        pdf.set_text_color(148, 163, 184)
+        pdf.cell(col_w_num, 5.4, "/", border=1, align="C", fill=True)
+
+        pdf.set_xy(table_x, table_y + 11.2)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_text_color(163, 0, 0)
+        pdf.set_font("Helvetica", "B", 7.6)
+        pdf.cell(col_w_grp, 5.8, safe_latin1("  Réalisé Hebdo"), border=1, align="L", fill=True)
+        pdf.set_text_color(30, 41, 59)
+        pdf.cell(col_w_num, 5.8, f"{int(round(real_dist)):,d} m ({pct_dist:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.8, f"{int(round(real_hsr)):,d} m ({pct_hsr:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.8, f"{int(round(real_vhsr)):,d} m ({pct_vhsr:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.8, f"{real_dpm:.1f} m/min", border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.8, f"{int(round(real_acc)):,d} ({pct_acc:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 5.8, safe_latin1(rpe_cat_str), border=1, align="C", fill=True)
+
+        # 2. 4 Graphiques comparatifs 2x2
         try:
             buf_jauges = generer_graphique_hebdo_jauges_matplotlib(
-                grp, df_sub, nb_seances=nb_seances, objectifs_config=objectifs_config
+                grp, df_sub, nb_seances=nb_seances, objectifs_config=active_cfg, layout="2x2"
             )
-            pdf.image(buf_jauges, x=12, y=24.0, w=273, h=38.0)
+            pdf.image(buf_jauges, x=12, y=38.0, w=273, h=60.0)
         except Exception as e:
             print(f"Erreur graphique jauges hebdo PDF pour {grp} : {e}")
 
-        # 2. Podiums de la Ligne (Format Compact Horizontal)
-        y_sec_pod = 63.5
-        pdf.set_xy(12, y_sec_pod)
-        pdf.set_font("Helvetica", "B", 9.0)
-        pdf.set_text_color(11, 25, 44)
-        pdf.cell(273, 4.0, safe_latin1(f"2. PODIUMS DU GROUPE — {grp.upper()} :"), align="L")
-
-        podium_grp = generer_podiums_hebdomadaires(df_hebdo, groupe=grp)
-        sub_map_grp = calculer_sous_titres_podium(df_sub, label_prefix="Moyenne")
-        _render_podiums_compact_horizontal(
-            pdf=pdf,
-            podium_data=podium_grp,
-            y_start=y_sec_pod + 4.5,
-            subtitle_map=sub_map_grp,
-            is_large=False,
-        )
-
         # 3. Tableau individuel des statistiques cumulées
-        y_sec_tbl = 109.5
+        y_sec_tbl = 100.0
         pdf.set_xy(12, y_sec_tbl)
-        pdf.set_font("Helvetica", "B", 9.0)
+        pdf.set_font("Helvetica", "B", 8.8)
         pdf.set_text_color(11, 25, 44)
-        pdf.cell(273, 4.0, safe_latin1("3. STATISTIQUES INDIVIDUELLES CUMULÉES SUR LA SEMAINE :"), align="L")
+        pdf.cell(273, 4.0, safe_latin1(f"STATISTIQUES INDIVIDUELLES CUMULÉES SUR LA SEMAINE — {grp.upper()} :"), align="L")
 
-        # En-tête du tableau
-        y_tbl_hdr = y_sec_tbl + 4.5
+        y_tbl_hdr = y_sec_tbl + 4.4
         pdf.set_xy(12, y_tbl_hdr)
         pdf.set_fill_color(31, 78, 121)
         pdf.set_text_color(255, 255, 255)
@@ -3568,28 +4218,19 @@ def generate_weekly_pdf_report(
             pdf.cell(w, 5.0, safe_latin1(title), 1, 0, align, fill=True)
         pdf.ln(5.0)
 
-        # Lignes du tableau
         if df_sub.empty:
             pdf.set_x(12)
             pdf.set_fill_color(248, 250, 252)
             pdf.set_font("Helvetica", "I", 8.0)
             pdf.set_text_color(100, 116, 139)
-            pdf.cell(273, 7.0, safe_latin1("Aucun joueur enregistré pour ce groupe cette semaine."), 1, 1, "C", fill=True)
+            pdf.cell(273, 7.0, safe_latin1("Aucun joueur enregistré pour cette catégorie cette semaine."), 1, 1, "C", fill=True)
         else:
-            avail_h = 196.0 - (y_tbl_hdr + 5.0)  # ~ 72.5 mm
-            row_h = min(4.8, max(3.5, avail_h / max(n_players_grp, 1)))
-            font_sz = 7.5 if row_h >= 4.5 else 6.5
+            avail_h = 197.0 - (y_tbl_hdr + 5.0)
+            row_h = min(5.2, max(3.6, avail_h / max(n_players_grp, 1)))
+            font_sz = 7.5 if row_h >= 4.4 else 6.5
             pdf.set_font("Helvetica", "", font_sz)
             pdf.set_text_color(15, 23, 42)
             fill_row = False
-
-            def _safe_float(v: Any, default: float = 0.0) -> float:
-                try:
-                    if v is None or pd.isna(v):
-                        return default
-                    return float(v)
-                except (ValueError, TypeError):
-                    return default
 
             for _, row in df_sub.iterrows():
                 pdf.set_x(12)
@@ -3630,8 +4271,22 @@ def generate_weekly_pdf_report(
                 pdf.cell(22, row_h, safe_latin1(p_rpe), 1, 1, "C", fill=True)
                 fill_row = not fill_row
 
+        # ---------------------------------------------------------------------
+        # PAGE B : PODIUMS HEBDOMADAIRES — TOP 3 & FLOP 3 SUR LA MÊME PAGE
+        # ---------------------------------------------------------------------
+        pdf.current_subtitle = f"PODIUMS HEBDOMADAIRES — {grp.upper()}"
+        pdf.add_page()
+        podium_grp = generer_podiums_hebdomadaires(df_hebdo, groupe=grp)
+        sub_map_grp = calculer_sous_titres_podium(df_sub, label_prefix="Moyenne")
+        _render_podium_page_aere(
+            pdf=pdf,
+            podium_data=podium_grp,
+            group_name=grp,
+            subtitle_map=sub_map_grp,
+        )
+
     # =========================================================================
-    # PAGE 5 : ANALYSE COMPARATIVE HISTORIQUE (OPTIONNELLE)
+    # DERNIÈRE(S) PAGE(S) : ANALYSE COMPARATIVE HISTORIQUE (TRIPTYQUE)
     # =========================================================================
     if inclure_comparatif:
         items_comp = recuperer_historique_semaines(
@@ -3639,13 +4294,15 @@ def generate_weekly_pdf_report(
             week_curr=week_num,
             df_curr_hebdo=df_hebdo,
             n_max=nb_comparatif,
+            categories=categories,
+            synthese_curr=synthese_dict,
         )
-        pdf.current_subtitle = "ANALYSE COMPARATIVE HISTORIQUE — MULTI-SEMAINES"
-        pdf.add_page()
-        render_comparatif_historique_pdf_page(
+        render_comparatif_triptyque_pdf_pages(
             pdf=pdf,
             items_comparatif=items_comp,
-            type_label="Semaine",
+            subtitle_base="ANALYSE COMPARATIVE HISTORIQUE — MULTI-SEMAINES",
+            categories_list=categories,
+            df_current=df_hebdo,
         )
 
     return bytes(pdf.output())

@@ -61,8 +61,13 @@ if "saved_group" not in st.session_state:
 @st.cache_data(ttl=600)
 def load_players_data(_conn) -> pd.DataFrame:
     """Charge l'effectif depuis Google Sheets avec mise en cache (10 min)."""
-    df = _conn.read(worksheet="Effectif", ttl=600)
-    return df.dropna(how="all")
+    df = _conn.read(worksheet="Effectif", ttl=600).dropna(how="all")
+    try:
+        from modules.gsheet_sync import filter_out_test_players
+        df = filter_out_test_players(df)
+    except Exception:
+        pass
+    return df
 
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)

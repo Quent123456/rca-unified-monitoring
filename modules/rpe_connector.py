@@ -104,6 +104,7 @@ def parse_week_number(val: Any) -> Optional[int]:
     """
     Extrait le numéro de semaine (entier entre 1 et 53).
     Gère: 45, '45', 'S45', 'Semaine 45', 'Semaine n° 45', etc.
+    Gère: 45, 45.0, '45', 'S45', 'W43', '2026-W43', 'Semaine 45', 'Semaine n° 45', etc.
     """
     if val is None or pd.isna(val):
         return None
@@ -111,10 +112,24 @@ def parse_week_number(val: Any) -> Optional[int]:
         try:
             w = int(val)
             if 1 <= w <= 53:
+            w = int(round(float(val)))
+            if 1 <= w <= 53 and abs(float(val) - w) < 0.01:
                 return w
         except Exception:
             pass
     s = str(val).strip()
+    if not s or s.lower() in ("nan", "none", "nat"):
+        return None
+    m_iso = re.search(r"(?:19|20)\d{2}\s*[-_ ]?[WwSs]\s*(\d{1,2})\b", s)
+    if m_iso:
+        w = int(m_iso.group(1))
+        if 1 <= w <= 53:
+            return w
+    m_sw = re.search(r"\b(?:[WwSs]|semaine|sem\.?)\s*n?[°o]?\s*(\d{1,2})\b", s, flags=re.IGNORECASE)
+    if m_sw:
+        w = int(m_sw.group(1))
+        if 1 <= w <= 53:
+            return w
     m = re.search(r"\b(\d{1,2})\b", s) or re.search(r"(\d{1,2})", s)
     if m:
         try:
@@ -170,6 +185,7 @@ def are_player_names_matching(name_gps: str, name_rpe: str) -> bool:
     1. Égalité stricte après normalisation textuelle (sans accents, sans ponctuation, minuscules).
     2. Correspondance canonique d'alias RCA (ex: 'Jean-Étienne ( TIJ)' <-> 'LESUEUR Jean-Étienne').
     3. Permutation libre des tokens (ex: 'DUPONT Antoine' == 'Antoine DUPONT').
+    3. Permutation libre des tokens (ex: 'VASELLI Enzo' == 'Enzo VASELLI').
     4. Inclusion mutuelle de tokens (ex: 'PECQUERY Thomas' vs 'Pecquery').
     """
     norm_g = normalize_text_key(name_gps)
@@ -531,6 +547,10 @@ def identify_rpe_columns(df_rpe: pd.DataFrame) -> Dict[str, Optional[str]]:
     excl_prenom = excl_names + ([col_nom] if col_nom else [])
     col_prenom = find_column_by_aliases(df_rpe, ["Prénom", "Prenom"], exclude=excl_prenom)
 
+    # 8. Colonne Poste
+    excl_poste = excl_prenom + ([col_prenom] if col_prenom else [])
+    col_poste = find_column_by_aliases(df_rpe, ["Poste", "Position", "Poste_Detaille", "Ligne"], exclude=excl_poste)
+
     return {
         "col_week": col_week,
         "col_day": col_day,
@@ -540,6 +560,7 @@ def identify_rpe_columns(df_rpe: pd.DataFrame) -> Dict[str, Optional[str]]:
         "col_joueur_unique": col_joueur_unique,
         "col_rpe": col_rpe,
         "col_duration": col_duration,
+        "col_poste": col_poste,
     }
 
 
@@ -582,6 +603,7 @@ def enrich_gps_dataframe_with_rpe(
             target_weekday = normalize_weekday_str(session_date)
         if target_week is None:
             target_week = parse_week_number(session_date) or 45
+            target_week = parse_week_number(session_date)
 
     c_gps_player = find_column_by_aliases(df_out, ["Nom ; Prénom", "Player Name", "Athlete Name", "Joueur", "Nom"])
 
@@ -659,6 +681,10 @@ def enrich_gps_dataframe_with_rpe(
     # Construction de la liste des réponses RPE pour la séance cible
     # [(raw_player_name, (rpe_val, session_rpe, duration))]
     rpe_entries_for_date: List[Tuple[str, Tuple[float, float, float]]] = []
+    # Construction des listes de réponses RPE (Exact jour/date prioritaire, sinon même semaine)
+    rpe_entries_exact: List[Tuple[str, Tuple[float, float, float]]] = []
+    rpe_entries_week: List[Tuple[str, Tuple[float, float, float]]] = []
+    target_year = target_dt.year if target_dt is not None else None
 
     for _, r in df_rpe.iterrows():
         # 1. Extraction souple Semaine / Jour / Date
@@ -680,6 +706,10 @@ def enrich_gps_dataframe_with_rpe(
                 match_session = True
         else:
             match_session = True
+        # Exclure les lignes dont la date appartient clairement à une autre année
+        if target_year is not None and r_date is not None:
+            if abs(r_date.isocalendar()[0] - target_dt.isocalendar()[0]) > 0:
+                continue
 
         if not match_session:
             continue
@@ -699,14 +729,27 @@ def enrich_gps_dataframe_with_rpe(
             continue
 
         # 4. Extraction de la valeur RPE (castée en float) et de la durée
+        try:
+            from modules.gsheet_sync import is_fictional_test_player
+            if is_fictional_test_player(full_name_str):
+                continue
+        except Exception:
+            pass
+
         rpe_val = parse_rpe_value(r[col_rpe]) if col_rpe and col_rpe in r else None
         if rpe_val is None:
             continue
 
         dur_val = parse_duration_minutes(r[col_dur]) if col_dur and col_dur in r else 80.0
         session_rpe = round(float(rpe_val) * float(dur_val), 1)
+        payload = (float(rpe_val), session_rpe, float(dur_val))
 
         rpe_entries_for_date.append((full_name_str, (float(rpe_val), session_rpe, float(dur_val))))
+        is_same_week = (target_week is None) or (r_week is not None and int(r_week) == int(target_week))
+        if not is_same_week and target_dt is not None and r_date is not None and r_date == target_dt:
+            is_same_week = True
+        if not is_same_week:
+            continue
 
     # SÉCURITÉ ABSOLUE : Si toujours 0 entrée trouvée, on prend les 30 dernières lignes de la feuille brute
     if not rpe_entries_for_date and not df_rpe.empty:
@@ -718,6 +761,14 @@ def enrich_gps_dataframe_with_rpe(
                 full_name_str = f"{r[col_nom]} {r[col_prenom]}".strip()
             elif col_nom and col_nom in r and pd.notna(r[col_nom]):
                 full_name_str = str(r[col_nom]).strip()
+        is_exact_day = (
+            (target_dt is not None and r_date is not None and r_date == target_dt)
+            or (target_weekday is not None and r_day is not None and r_day == target_weekday)
+        )
+        if is_exact_day:
+            rpe_entries_exact.append((full_name_str, payload))
+        else:
+            rpe_entries_week.append((full_name_str, payload))
 
             rpe_val = parse_rpe_value(r[col_rpe]) if col_rpe and col_rpe in r else None
             if full_name_str and rpe_val is not None:
@@ -726,15 +777,29 @@ def enrich_gps_dataframe_with_rpe(
                 rpe_entries_for_date.append((full_name_str, (float(rpe_val), session_rpe, float(dur_val))))
 
     # 5. Jointure sécurisée avec le tableau GPS (normalisation des deux côtés)
+    # 5. Jointure sécurisée avec le tableau GPS (exact jour d'abord, puis semaine si absent)
     rpe_col_vals: List[Optional[float]] = []
     srpe_col_vals: List[Optional[float]] = []
     disp_col_vals: List[str] = []
     dur_col_vals: List[Optional[float]] = []
 
+    def _find_best_match(p_name: str, entries: List[Tuple[str, Tuple[float, float, float]]]) -> Optional[Tuple[float, float, float]]:
+        norm_g = normalize_player_name_key(p_name)
+        for r_name_raw, entry in reversed(entries):
+            norm_r = normalize_player_name_key(r_name_raw)
+            if norm_g and norm_r and (
+                norm_g == norm_r
+                or set(norm_g.split()) == set(norm_r.split())
+                or are_player_names_matching(p_name, r_name_raw)
+            ):
+                return entry
+        return None
+
     for _, row in df_out.iterrows():
         p_name = str(row[c_gps_player]).strip() if c_gps_player and c_gps_player in row else ""
         norm_g = normalize_player_name_key(p_name)
         matched_entry: Optional[Tuple[float, float, float]] = None
+        matched_entry = _find_best_match(p_name, rpe_entries_exact) or _find_best_match(p_name, rpe_entries_week)
 
         # Recherche de correspondance par algorithme tolérant nom/prénom/alias
         for r_name_raw, entry in reversed(rpe_entries_for_date):
@@ -855,7 +920,311 @@ def calculate_rpe_group_metrics(df_enriched: pd.DataFrame) -> Dict[str, Any]:
                 foster_key = "foster_5_devant" if grp_std == "5 de devant" else ("foster_3eme_ligne" if grp_std == "3ème Ligne" else "foster_trois_quarts")
                 default_stats[foster_key] = round(float(g_srpe.mean()), 1)
 
+    # Agrégation additionnelle par poste spécifique (9 postes canoniques)
+    by_poste: Dict[str, Optional[float]] = {}
+    col_pd = "Poste_Detaille" if "Poste_Detaille" in df_enriched.columns else ("Poste" if "Poste" in df_enriched.columns else None)
+    if col_pd:
+        tmp_postes = df_enriched[col_pd].apply(_normalize_specific_poste_rpe)
+        for pos_canon in CANONICAL_9_POSTES_RPE:
+            sub_p = df_enriched[tmp_postes == pos_canon]
+            if not sub_p.empty:
+                p_rpe = pd.to_numeric(sub_p["RPE"], errors="coerce").dropna()
+                if not p_rpe.empty:
+                    by_poste[pos_canon] = round(float(p_rpe.mean()), 1)
+    default_stats["by_poste"] = by_poste
+
     return default_stats
+
+
+CANONICAL_9_POSTES_RPE: List[str] = [
+    "Pilier", "Talonneur", "2ème ligne", "3ème ligne",
+    "Demi de mêlée", "Demi d'ouverture", "Centre", "Ailier", "Arrière",
+]
+
+POSTE_TO_GROUPE_RPE: Dict[str, str] = {
+    "Pilier": "5 de devant",
+    "Talonneur": "5 de devant",
+    "2ème ligne": "5 de devant",
+    "3ème ligne": "3ème Ligne",
+    "Demi de mêlée": "Trois-quarts",
+    "Demi d'ouverture": "Trois-quarts",
+    "Centre": "Trois-quarts",
+    "Ailier": "Trois-quarts",
+    "Arrière": "Trois-quarts",
+}
+
+
+def _normalize_specific_poste_rpe(val: Any) -> str:
+    k = normalize_text_key(val)
+    if not k:
+        return ""
+    if any(w in k for w in ("pilier", "prop", "1ere ligne", "premiere ligne")):
+        return "Pilier"
+    if any(w in k for w in ("talonneur", "hooker")):
+        return "Talonneur"
+    if any(w in k for w in ("2eme ligne", "2e ligne", "deuxieme ligne", "seconde ligne", "lock")):
+        return "2ème ligne"
+    if any(w in k for w in ("3eme ligne", "3e ligne", "troisieme ligne", "flanker", "numero 8", "n8")):
+        return "3ème ligne"
+    if any(w in k for w in ("demi de melee", "demi de mele", "demi melee", "melee", "scrum half")):
+        return "Demi de mêlée"
+    if any(w in k for w in ("ouverture", "ouvreur", "fly half")):
+        return "Demi d'ouverture"
+    if "centre" in k:
+        return "Centre"
+    if any(w in k for w in ("ailier", "allier", "wing")):
+        return "Ailier"
+    if any(w in k for w in ("arriere", "fullback")):
+        return "Arrière"
+    return ""
+
+
+def _resolve_rpe_row_player_and_poste(
+    row: pd.Series,
+    cols_map: Dict[str, Optional[str]],
+    joueurs_lookup: Optional[Dict[str, str]] = None,
+) -> Tuple[str, str, str]:
+    """Retourne (nom_complet, poste_canonique, groupe) pour une ligne RPE brute."""
+    col_player = cols_map.get("col_joueur_unique")
+    col_nom = cols_map.get("col_nom")
+    col_prenom = cols_map.get("col_prenom")
+    col_poste = cols_map.get("col_poste")
+
+    full_name = ""
+    if col_player and col_player in row and pd.notna(row[col_player]):
+        full_name = str(row[col_player]).strip()
+    elif col_nom and col_prenom and col_nom in row and col_prenom in row and col_nom != col_prenom:
+        vn = str(row[col_nom]).strip() if pd.notna(row[col_nom]) else ""
+        vp = str(row[col_prenom]).strip() if pd.notna(row[col_prenom]) else ""
+        full_name = f"{vn} {vp}".strip()
+    elif col_nom and col_nom in row and pd.notna(row[col_nom]):
+        full_name = str(row[col_nom]).strip()
+
+    poste_raw = str(row[col_poste]).strip() if col_poste and col_poste in row and pd.notna(row[col_poste]) else ""
+    poste_canon = _normalize_specific_poste_rpe(poste_raw)
+
+    # Résolution via joueurs_lookup si le poste Google Sheets est manquant ou trop générique
+    if not poste_canon and joueurs_lookup and full_name:
+        for k_ref, v_ref in joueurs_lookup.items():
+            if are_player_names_matching(full_name, k_ref):
+                poste_canon = _normalize_specific_poste_rpe(v_ref)
+                if poste_canon:
+                    break
+
+    grp = POSTE_TO_GROUPE_RPE.get(poste_canon, "")
+    if not grp and poste_raw:
+        rk = normalize_text_key(poste_raw)
+        if any(t in rk for t in ("5 de devant", "devant", "avant", "cinq")):
+            grp = "5 de devant"
+        elif any(t in rk for t in ("3eme", "3e", "troisieme")):
+            grp = "3ème Ligne"
+        elif any(t in rk for t in ("trois quarts", "3 4", "arriere")):
+            grp = "Trois-quarts"
+
+    return full_name, poste_canon, grp
+
+
+def filter_rpe_rows_for_week(
+    df_rpe: pd.DataFrame,
+    year: int,
+    week_num: int,
+) -> pd.DataFrame:
+    """Filtre les lignes du Google Sheet Saisies correspondant à (year, week_num)."""
+    if df_rpe is None or not isinstance(df_rpe, pd.DataFrame) or df_rpe.empty:
+        return pd.DataFrame()
+
+    cols_map = identify_rpe_columns(df_rpe)
+    col_week = cols_map["col_week"]
+    col_date = cols_map["col_date"]
+    col_rpe = cols_map["col_rpe"]
+
+    kept_idx: List[Any] = []
+    for idx, row in df_rpe.iterrows():
+        r_rpe = parse_rpe_value(row[col_rpe]) if col_rpe and col_rpe in row else None
+        if r_rpe is None:
+            continue
+
+        r_week = parse_week_number(row[col_week]) if col_week and col_week in row else None
+        r_date = parse_and_normalize_date(row[col_date]) if col_date and col_date in row else None
+
+        match_week = False
+        if r_week is not None and int(r_week) == int(week_num):
+            if r_date is not None:
+                iso_y, _, _ = r_date.isocalendar()
+                if abs(int(iso_y) - int(year)) <= 0 or abs(int(r_date.year) - int(year)) <= 0:
+                    match_week = True
+            else:
+                match_week = True
+        elif r_week is None and r_date is not None:
+            iso_y, iso_w, _ = r_date.isocalendar()
+            if int(iso_y) == int(year) and int(iso_w) == int(week_num):
+                match_week = True
+
+        if match_week:
+            kept_idx.append(idx)
+
+    return df_rpe.loc[kept_idx].copy() if kept_idx else pd.DataFrame()
+
+
+def compute_direct_week_rpe_by_category(
+    df_rpe: pd.DataFrame,
+    year: int,
+    week_num: int,
+    joueurs_lookup: Optional[Dict[str, str]] = None,
+) -> Dict[str, Optional[float]]:
+    """
+    Calcule directement les moyennes RPE de la semaine depuis Google Sheets Saisies
+    pour 'Total', les 3 groupes (5 de devant, 3ème Ligne, Trois-quarts) et les 9 postes.
+    """
+    out: Dict[str, Optional[float]] = {
+        "Total": None,
+        "5 de devant": None,
+        "3ème Ligne": None,
+        "Trois-quarts": None,
+    }
+    for p in CANONICAL_9_POSTES_RPE:
+        out[p] = None
+
+    df_w = filter_rpe_rows_for_week(df_rpe, year=year, week_num=week_num)
+    if df_w.empty:
+        return out
+
+    cols_map = identify_rpe_columns(df_w)
+    col_rpe = cols_map["col_rpe"]
+
+    all_vals: List[float] = []
+    buckets: Dict[str, List[float]] = {k: [] for k in out if k != "Total"}
+
+    for _, row in df_w.iterrows():
+        full_name, poste_canon, grp = _resolve_rpe_row_player_and_poste(row, cols_map, joueurs_lookup=joueurs_lookup)
+        if not full_name:
+            continue
+        try:
+            from modules.gsheet_sync import is_fictional_test_player
+            if is_fictional_test_player(full_name):
+                continue
+        except Exception:
+            pass
+
+        rpe_val = parse_rpe_value(row[col_rpe]) if col_rpe and col_rpe in row else None
+        if rpe_val is None:
+            continue
+        f_val = float(rpe_val)
+        all_vals.append(f_val)
+        if grp in buckets:
+            buckets[grp].append(f_val)
+        if poste_canon in buckets:
+            buckets[poste_canon].append(f_val)
+
+    if all_vals:
+        out["Total"] = round(float(np.mean(all_vals)), 1)
+    for k, vals in buckets.items():
+        if vals:
+            out[k] = round(float(np.mean(vals)), 1)
+    return out
+
+
+def enrich_historical_week_data_with_rpe(
+    week_data: Dict[str, Any],
+    df_rpe: Optional[pd.DataFrame] = None,
+    joueurs_lookup: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, Any], bool]:
+    """
+    Rattrape dynamiquement les valeurs RPE manquantes (ou 'NR') dans un JSON hebdomadaire archivé
+    (ex: S43) en interrogeant les saisies Google Sheets de la semaine ISO correspondante.
+    Retourne (week_data_enrichi, modifie_bool).
+    """
+    if not isinstance(week_data, dict):
+        return week_data, False
+
+    year = int(week_data.get("year") or datetime.date.today().year)
+    week_num = parse_week_number(week_data.get("week_num") or week_data.get("week"))
+    if week_num is None:
+        return week_data, False
+
+    sessions = week_data.get("sessions", {})
+    if not isinstance(sessions, dict) or not sessions:
+        return week_data, False
+
+    # Vérifie s'il manque au moins un RPE de séance ou de joueur
+    needs_backfill = False
+    for s_info in sessions.values():
+        if not isinstance(s_info, dict):
+            continue
+        r_st = s_info.get("rpe_stats")
+        if not isinstance(r_st, dict) or r_st.get("equipe") is None:
+            needs_backfill = True
+            break
+        p_list = s_info.get("players_data", [])
+        if isinstance(p_list, list) and p_list and not any(pd.notna(p.get("RPE")) for p in p_list if isinstance(p, dict)):
+            needs_backfill = True
+            break
+
+    if not needs_backfill and isinstance(week_data.get("rpe_summary"), dict) and week_data["rpe_summary"].get("Total") is not None:
+        return week_data, False
+
+    if df_rpe is None:
+        try:
+            df_rpe = fetch_raw_rpe_data()
+        except Exception:
+            df_rpe = pd.DataFrame()
+
+    if df_rpe is None or df_rpe.empty:
+        return week_data, False
+
+    df_w_rpe = filter_rpe_rows_for_week(df_rpe, year=year, week_num=week_num)
+    if df_w_rpe.empty:
+        return week_data, False
+
+    modified = False
+    for sid, s_info in sessions.items():
+        if not isinstance(s_info, dict):
+            continue
+        p_list = s_info.get("players_data", [])
+        if not isinstance(p_list, list) or not p_list:
+            continue
+
+        df_p = pd.DataFrame(p_list)
+        # S'assurer de la présence du poste canonique / groupe si lookup disponible
+        if joueurs_lookup and "Nom ; Prénom" in df_p.columns:
+            def _enrich_poste_col(row: pd.Series) -> str:
+                cur = _normalize_specific_poste_rpe(row.get("Poste_Detaille", ""))
+                if cur:
+                    return cur
+                nm = str(row.get("Nom ; Prénom", "")).strip()
+                for k_ref, v_ref in joueurs_lookup.items():
+                    if are_player_names_matching(nm, k_ref):
+                        return _normalize_specific_poste_rpe(v_ref) or str(row.get("Poste_Detaille", ""))
+                return str(row.get("Poste_Detaille", ""))
+            df_p["Poste_Detaille"] = df_p.apply(_enrich_poste_col, axis=1)
+
+        has_existing_rpe = "RPE" in df_p.columns and pd.to_numeric(df_p["RPE"], errors="coerce").notna().any()
+        if not has_existing_rpe:
+            s_date = s_info.get("date") or s_info.get("date_str") or s_info.get("day_type") or ""
+            s_day = s_info.get("day_type") or ""
+            df_enriched = enrich_gps_dataframe_with_rpe(
+                df_gps=df_p,
+                session_date=s_date,
+                df_rpe=df_w_rpe,
+                week_number=week_num,
+                weekday=normalize_weekday_str(s_day),
+            )
+            if "RPE" in df_enriched.columns and pd.to_numeric(df_enriched["RPE"], errors="coerce").notna().any():
+                df_clean_records = df_enriched.where(pd.notna(df_enriched), None).to_dict(orient="records")
+                s_info["players_data"] = df_clean_records
+                s_info["rpe_stats"] = calculate_rpe_group_metrics(df_enriched)
+                modified = True
+        elif not isinstance(s_info.get("rpe_stats"), dict) or s_info["rpe_stats"].get("equipe") is None:
+            s_info["rpe_stats"] = calculate_rpe_group_metrics(df_p)
+            modified = True
+
+    direct_summary = compute_direct_week_rpe_by_category(df_w_rpe, year=year, week_num=week_num, joueurs_lookup=joueurs_lookup)
+    if direct_summary.get("Total") is not None:
+        if week_data.get("rpe_summary") != direct_summary:
+            week_data["rpe_summary"] = direct_summary
+            modified = True
+
+    return week_data, modified
 
 
 # ==============================================================================

@@ -256,9 +256,22 @@ def charger_joueurs_personnalises() -> Dict[str, Dict[str, Any]]:
 
 
 def synchroniser_effectif_avec_custom() -> None:
-    """Injecte les joueurs personnalisés dans le dictionnaire global joueurs_data."""
+    """Injecte les joueurs personnalisés dans le dictionnaire global joueurs_data en filtrant les joueurs tests."""
+    try:
+        from modules import gsheet_sync
+        is_test_fn = getattr(gsheet_sync, "is_fictional_test_player", None)
+    except Exception:
+        is_test_fn = None
+
+    if is_test_fn:
+        for k in list(joueurs_data.keys()):
+            if is_test_fn(k):
+                joueurs_data.pop(k, None)
+
     custom = charger_joueurs_personnalises()
     for nom, info in custom.items():
+        if is_test_fn and is_test_fn(nom):
+            continue
         if isinstance(info, dict):
             joueurs_data[nom] = info.get("poste", "Non spécifié")
         elif isinstance(info, str):
@@ -1324,9 +1337,9 @@ def dialog_creer_nouveau_joueur(
         with col_nom:
             nouveau_nom = st.text_input(
                 "Nom et Prénom du joueur * :",
-                placeholder="Ex: DUPONT Antoine",
+                placeholder="Ex: VASELLI Enzo",
                 key="dlg_input_nom_joueur",
-                help="Saisissez le Nom de famille suivi du Prénom (ex: DUPONT Antoine).",
+                help="Saisissez le Nom de famille suivi du Prénom (ex: VASELLI Enzo).",
             )
         with col_poste:
             choix_poste = st.selectbox(
@@ -2960,131 +2973,32 @@ def calculer_metriques_jauges(
 
 
 def generer_podium_dynamique(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """Génère le Podium des 3 tops à partir des données réelles avec photos Base64 et postes."""
-    def _make_player_entry(rank: int, name: Any, stat_str: Any, poste: Any = "") -> Dict[str, Any]:
-        p_name = str(name).strip() if pd.notna(name) and name is not None else "-"
-        if p_name in ["nan", "None", ""]:
-            p_name = "-"
-        p_poste = str(poste).strip() if pd.notna(poste) and poste is not None else ""
-        if p_poste in ["nan", "None"]:
-            p_poste = ""
-        if not p_poste and p_name and p_name != "-":
-            p_poste = joueurs_data.get(p_name, "")
-            if not p_poste:
-                p_poste = JOUEURS_CUSTOM_CACHE.get(p_name, {}).get("poste", "")
-            if not p_poste:
-                parts = p_name.split()
-                if len(parts) >= 2:
-                    inv1 = f"{parts[-1]} {' '.join(parts[:-1])}"
-                    p_poste = joueurs_data.get(inv1, "")
-                    if not p_poste:
-                        inv2 = f"{' '.join(parts[1:])} {parts[0]}"
-                        p_poste = joueurs_data.get(inv2, "")
-        return {
-            "rank": rank,
-            "name": p_name,
-            "poste": p_poste if p_poste else "RCA",
-            "stat": str(stat_str) if stat_str is not None else "-",
-            "avatar_src": get_player_image_b64(p_name, size=80 if rank == 1 else 65) if p_name != "-" else get_player_image_b64("", size=80 if rank == 1 else 65),
-        }
-
-    def _placeholder(rank: int) -> Dict[str, Any]:
-        return {
-            "rank": rank,
-            "name": "-",
-            "poste": "",
-            "stat": "-",
-            "avatar_src": get_player_image_b64("", size=80 if rank == 1 else 65),
-        }
-
+    """Génère les Podiums Top 3 et Flop 3 à partir des données réelles avec photos Base64 et postes."""
     if df_subset is None or not isinstance(df_subset, pd.DataFrame) or len(df_subset) == 0:
-        return {
-            "Top speed (km/h)": {"icon": "⚡", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-            "% de marche": {"icon": "🚶", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-            "Haute intensité (m)": {"icon": "🔥", "players": [_placeholder(1), _placeholder(2), _placeholder(3)]},
-        }
-
-    podium_result: Dict[str, Dict[str, Any]] = {}
-
-    # 1. TOP SPEED
-    ts_col = "Top Speed (km/h)"
-    if ts_col in df_subset.columns:
-        s_ts = pd.to_numeric(df_subset[ts_col], errors="coerce").fillna(0.0)
-        df_sorted_ts = df_subset.assign(_ts_sort=s_ts).sort_values(by="_ts_sort", ascending=False)
+        podium_res = weekly_memory.calculer_podiums_seance(pd.DataFrame())
     else:
-        df_sorted_ts = df_subset
-    players_ts = []
-    for rank, (_, row) in enumerate(df_sorted_ts.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(ts_col, 0.0)
-        val = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val):
-            val = 0.0
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_ts.append(_make_player_entry(rank, name, f"{val:.1f} km/h", poste))
-    while len(players_ts) < 3:
-        players_ts.append(_placeholder(len(players_ts) + 1))
+        podium_res = weekly_memory.calculer_podiums_seance(df_subset)
 
-    podium_result["Top speed (km/h)"] = {
-        "icon": "⚡",
-        "players": players_ts,
-    }
+    for cat_data in podium_res.values():
+        if not isinstance(cat_data, dict):
+            continue
+        for list_key in ("players", "flop_players"):
+            entries = cat_data.get(list_key, [])
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                p_name = str(entry.get("name", "-")).strip()
+                rk = int(entry.get("rank", 2) or 2)
+                if p_name and p_name != "-":
+                    if not entry.get("poste") or entry.get("poste") == "RCA":
+                        p_found = joueurs_data.get(p_name) or JOUEURS_CUSTOM_CACHE.get(p_name, {}).get("poste", "")
+                        if p_found:
+                            entry["poste"] = p_found
+                    entry["avatar_src"] = get_player_image_b64(p_name, size=80 if rk == 1 else 65)
+                else:
+                    entry["avatar_src"] = get_player_image_b64("", size=80 if rk == 1 else 65)
 
-    # 2. % DE MARCHE (Les 3 plus bas : ceux qui ont le moins marché, > 0%)
-    walk_col = "%Marche "
-    if walk_col in df_subset.columns:
-        s_walk = pd.to_numeric(df_subset[walk_col], errors="coerce").fillna(0.0)
-        df_valid_walk = df_subset[s_walk > 0.0]
-        if not df_valid_walk.empty:
-            df_sorted_walk = df_valid_walk.sort_values(by=walk_col, ascending=True)
-        else:
-            df_sorted_walk = df_subset.sort_values(by=walk_col, ascending=True)
-    else:
-        df_sorted_walk = df_subset
-    players_walk = []
-    for rank, (_, row) in enumerate(df_sorted_walk.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(walk_col, 0.0)
-        val_float = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val_float):
-            val_float = 0.0
-        val_pct = val_float * 100.0 if val_float <= 1.0 else val_float
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_walk.append(_make_player_entry(rank, name, f"{val_pct:.1f} %", poste))
-    while len(players_walk) < 3:
-        players_walk.append(_placeholder(len(players_walk) + 1))
-
-    podium_result["% de marche"] = {
-        "icon": "🚶",
-        "players": players_walk,
-    }
-
-    # 3. HAUTE INTENSITÉ (m) - ALIGNEMENT SUR LA MÉTHODE STAFF RCA (Cumul Zones 3, 4 et 5 > 14.4 km/h)
-    hi_col = "Haute intensité Podium (m)" if "Haute intensité Podium (m)" in df_subset.columns else " Distance haute intensité (m)"
-    if hi_col in df_subset.columns:
-        s_hi = pd.to_numeric(df_subset[hi_col], errors="coerce").fillna(0.0)
-        df_sorted_hi = df_subset.assign(_hi_sort=s_hi).sort_values(by="_hi_sort", ascending=False)
-    else:
-        df_sorted_hi = df_subset
-    players_hi = []
-    for rank, (_, row) in enumerate(df_sorted_hi.head(3).iterrows(), start=1):
-        name = str(row.get("Nom ; Prénom", "-")).strip()
-        val_raw = row.get(hi_col, 0.0)
-        val_m = float(val_raw) if pd.notna(val_raw) else 0.0
-        if np.isnan(val_m):
-            val_m = 0.0
-        hi_int = int(round(val_m))
-        poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-        players_hi.append(_make_player_entry(rank, name, f"{hi_int:,d} m".replace(",", " "), poste))
-    while len(players_hi) < 3:
-        players_hi.append(_placeholder(len(players_hi) + 1))
-
-    podium_result["Haute intensité (m)"] = {
-        "icon": "🔥",
-        "players": players_hi,
-    }
-
-    return podium_result
+    return podium_res
 
 
 # ==============================================================================
