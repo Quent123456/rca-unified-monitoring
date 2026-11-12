@@ -114,13 +114,15 @@ def formater_date_seance_fr(val_date: Any) -> str:
 def generer_graphique_groupes_matplotlib(
     df_indiv: pd.DataFrame,
     moyennes_groupes: Optional[Dict[str, Dict[str, float]]] = None,
+    figsize: Tuple[float, float] = (5.6, 5.6),
 ) -> io.BytesIO:
     """
     Génère un diagramme en barres comparant la Distance Moyenne (m)
     et le HSR Moyen (m) par Groupe de joueurs (5 de devant, 3ème Ligne, Trois-quarts).
-    La barre rouge affiche STRICTEMENT la Zone 3 (HSR Z3 = Distance in Speed Zone 3 (km) * 1000).
+    La barre jaune affiche STRICTEMENT la Zone 3 (HSR Z3 = Distance in Speed Zone 3 (km) * 1000).
     """
-    fig, ax1 = plt.subplots(figsize=(5.6, 5.6), dpi=180)
+    is_wide = figsize[0] >= 9.5
+    fig, ax1 = plt.subplots(figsize=figsize, dpi=140)
     fig.patch.set_facecolor("#FFFFFF")
     ax1.set_facecolor("#FFFFFF")
 
@@ -153,17 +155,23 @@ def generer_graphique_groupes_matplotlib(
                 hsr_vals.append(0.0)
 
     x = np.arange(len(groupes))
-    width = 0.35
+    width = 0.28 if is_wide else 0.35
     ax2 = ax1.twinx()
 
     rects1 = ax1.bar(x - width/2, dist_vals, width, label="Distance Moyenne (m)", color=RCA_NAVY_HEX, edgecolor="none")
     rects2 = ax2.bar(x + width/2, hsr_vals, width, label="HSR Z3 Moyen (m)", color=RCA_GOLD_HEX, edgecolor="#D4A100")
 
-    ax1.set_ylabel("Distance Moyenne (m)", color=RCA_NAVY_HEX, fontweight="bold", fontsize=9)
-    ax2.set_ylabel("HSR Z3 Moyen (m)", color=RCA_GOLD_DARK_HEX, fontweight="bold", fontsize=9)
+    fs_lbl = 10.5 if is_wide else 9.0
+    fs_tick = 11.0 if is_wide else 9.0
+    fs_title = 13.0 if is_wide else 10.5
+    fs_ann = 9.5 if is_wide else 8.0
+    fs_leg = 10.0 if is_wide else 8.5
+
+    ax1.set_ylabel("Distance Moyenne (m)", color=RCA_NAVY_HEX, fontweight="bold", fontsize=fs_lbl)
+    ax2.set_ylabel("HSR Z3 Moyen (m)", color=RCA_GOLD_DARK_HEX, fontweight="bold", fontsize=fs_lbl)
     ax1.set_xticks(x)
-    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=9)
-    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color=RCA_NAVY_HEX, fontsize=10.5, pad=12)
+    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=fs_tick)
+    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color=RCA_NAVY_HEX, fontsize=fs_title, pad=14 if is_wide else 12)
 
     # Valeurs écrites directement sur chaque barre
     for rect in rects1:
@@ -172,7 +180,7 @@ def generer_graphique_groupes_matplotlib(
             ax1.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=8, fontweight="bold", color=RCA_NAVY_HEX)
+                         ha="center", va="bottom", fontsize=fs_ann, fontweight="bold", color=RCA_NAVY_HEX)
 
     for rect in rects2:
         h = rect.get_height()
@@ -180,20 +188,20 @@ def generer_graphique_groupes_matplotlib(
             ax2.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=8, fontweight="bold", color=RCA_GOLD_DARK_HEX)
+                         ha="center", va="bottom", fontsize=fs_ann, fontweight="bold", color=RCA_GOLD_DARK_HEX)
 
     max_dist = max(dist_vals) if dist_vals and max(dist_vals) > 0 else 1000.0
     max_hsr = max(hsr_vals) if hsr_vals and max(hsr_vals) > 0 else 100.0
     ax1.set_ylim(0, max_dist * 1.25)
     ax2.set_ylim(0, max_hsr * 1.25)
     ax1.grid(axis="y", linestyle="--", alpha=0.3)
-    ax1.tick_params(axis="y", labelcolor=RCA_NAVY_HEX)
-    ax2.tick_params(axis="y", labelcolor=RCA_GOLD_DARK_HEX)
+    ax1.tick_params(axis="y", labelcolor=RCA_NAVY_HEX, labelsize=9.5 if is_wide else 8.5)
+    ax2.tick_params(axis="y", labelcolor=RCA_GOLD_DARK_HEX, labelsize=9.5 if is_wide else 8.5)
 
     # Légende épurée
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=2, frameon=False, fontsize=8.5)
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.07 if is_wide else -0.06), ncol=2, frameon=False, fontsize=fs_leg)
 
     fig.tight_layout()
     buf = io.BytesIO()
@@ -271,7 +279,7 @@ def generer_graphique_jauges_groupe_matplotlib(
     3. Obj. VHSR (m) vs Réalisé (Z4+Z5)
     4. Obj. ACC/DEC vs Réalisé
     """
-    fig, axes = plt.subplots(2, 2, figsize=(10.5, 5.2), dpi=180)
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 5.2), dpi=130)
     fig.patch.set_facecolor("#FFFFFF")
 
     cards_def = [
@@ -521,7 +529,9 @@ def generer_rapport_pdf_coachs(
 ) -> bytes:
     """
     Génère le rapport PDF multi-pages officiel RCA au format Paysage (A4) :
-    - Mode 'Par ligne de poste' (7 pages, ou 8 avec comparatif)
+    - Mode 'Par ligne de poste' (8 pages, ou 9 avec comparatif) :
+      Page 1 (Synthèse Générale élargie), Page 2 (Podiums Généraux de la Séance),
+      puis 2 pages par ligne (5 de devant, 3ème Ligne, Trois-quarts) + Triptyque comparatif.
     - Mode 'Détaillé par poste' (2 pages par poste actif parmi les 9 postes + triptyques)
     """
     if df_indiv is None:
@@ -777,25 +787,32 @@ def generer_rapport_pdf_coachs(
     pdf.set_text_color(51, 65, 85)
     pdf.multi_cell(w=w_note - 10, h=3.6, txt=safe_latin1(synthese_note), align="L")
 
-    # 3. Colonne de Gauche : Graphique Matplotlib par Groupe (5 de devant, 3ème Ligne, Trois-quarts)
-    buf1 = generer_graphique_groupes_matplotlib(df_indiv, moyennes_groupes=moyennes_groupes)
-    chart_y = 50.5
-    chart_w = 133
-    chart_h = 142
-    pdf.image(buf1, x=12, y=chart_y, w=chart_w, h=chart_h)
+    # 3. Graphique principal élargi et centré : Distance Moyenne & HSR Z3 Moyen par Groupe
+    buf1 = generer_graphique_groupes_matplotlib(
+        df_indiv,
+        moyennes_groupes=moyennes_groupes,
+        figsize=(11.2, 5.8),
+    )
+    chart_y = 51.0
+    chart_w = 256.0
+    chart_h = 142.0
+    chart_x = 12.0 + (273.0 - chart_w) / 2.0
+    pdf.image(buf1, x=chart_x, y=chart_y, w=chart_w, h=chart_h)
 
-    # 4. Colonne de Droite : Podium Général de la Séance (Top 3 + Flop 3)
+    # =========================================================================
+    # PAGE 2 : PODIUMS GÉNÉRAUX DE LA SÉANCE (PLEINE LARGEUR)
+    # =========================================================================
+    pdf.current_subtitle = "PODIUMS GÉNÉRAUX DE LA SÉANCE"
+    pdf.add_page()
     podium_general = generer_podium_dynamique(df_indiv)
     sub_map_gen = calculer_sous_titres_podium(df_indiv, label_prefix="Moy. séance")
-    _render_podium_section_pdf(
+    _render_podium_page_aere(
         pdf=pdf,
         podium_data=podium_general,
-        x_pod=149,
-        y_pod=chart_y,
-        w_pod=136,
-        title_header="PODIUMS DE LA SÉANCE",
+        group_name="",
         subtitle_map=sub_map_gen,
-        include_flop=True,
+        top_title="3 PREMIERS DE LA SÉANCE (TOP 3)",
+        vigilance_title="3 DERNIERS DE LA SÉANCE (VIGILANCE)",
     )
 
     # =========================================================================
@@ -968,7 +985,7 @@ def generer_rapport_pdf_coachs(
         pdf.image(buf_jauges, x=12.0, y=chart_y, w=chart_w, h=chart_h)
 
         # ---------------------------------------------------------------------
-        # PAGE B : PODIUMS TOP 3 + FLOP 3 SUR LA MÊME PAGE
+        # PAGE B : PODIUMS 3 PREMIERS + 3 DERNIERS VIGILANCE SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
         pdf.current_subtitle = f"PODIUMS DE LA {'CATÉGORIE' if is_detailed else 'LIGNE'} — {grp.upper()}"
         pdf.add_page()

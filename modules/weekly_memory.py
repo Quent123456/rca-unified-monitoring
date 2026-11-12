@@ -680,7 +680,7 @@ def aggregate_weekly_sessions(
 # GÉNÉRATION DES PODIUMS HEBDOMADAIRES (AVEC PHOTOS & HTML NETTOYÉ)
 # ==============================================================================
 
-def _compute_top_and_flop_players_list(
+def _compute_top_and_vigilance_players_list(
     df_src: pd.DataFrame,
     metric_col: Optional[str],
     ascending_best: bool,
@@ -688,11 +688,11 @@ def _compute_top_and_flop_players_list(
     require_positive: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
     """
-    Moteur unique (Top 3 & Flop 3) partagé entre les rapports Journalier et Hebdomadaire.
-    - ascending_best=False -> Top 3 = plus grandes valeurs, Flop 3 = plus petites valeurs.
-    - ascending_best=True  -> Top 3 = plus petites valeurs (>0 si require_positive), Flop 3 = plus grandes valeurs.
-    - Si effectif valide < 6 : évite les doublons absurdes avec le Top 3 (affiche les joueurs restants
-      si 4 ou 5 joueurs, et placeholders si <= 3 joueurs).
+    Moteur unique (3 Premiers & 3 Derniers Vigilance) partagé entre les rapports Journalier et Hebdomadaire.
+    - ascending_best=False -> 3 Premiers = plus grandes valeurs, 3 Derniers = plus petites valeurs.
+    - ascending_best=True  -> 3 Premiers = plus petites valeurs (>0 si require_positive), 3 Derniers = plus grandes valeurs.
+    - Si effectif valide < 6 : évite les doublons avec les 3 Premiers (affiche les joueurs restants
+      si 4 ou 5 joueurs, et liste vide si <= 3 joueurs).
     """
     def _make_entry(rank: int, name: Any, stat_str: Any, poste: Any = "") -> Dict[str, Any]:
         p_name = str(name).strip() if pd.notna(name) and name is not None else "-"
@@ -749,37 +749,37 @@ def _compute_top_and_flop_players_list(
         top_players.append(_placeholder(len(top_players) + 1))
 
     if n_valid <= 3:
-        flop_players: List[Dict[str, Any]] = []
+        vigilance_players: List[Dict[str, Any]] = []
     else:
         df_remaining = df_top_sorted.iloc[3:].copy()
-        df_flop_sorted = df_remaining.sort_values(by="_metric_val", ascending=(not ascending_best))
-        df_flop3 = df_flop_sorted.head(3)
-        flop_players = []
-        for rank, (_, row) in enumerate(df_flop3.iterrows(), start=1):
+        df_vig_sorted = df_remaining.sort_values(by="_metric_val", ascending=(not ascending_best))
+        df_vig3 = df_vig_sorted.head(3)
+        vigilance_players = []
+        for rank, (_, row) in enumerate(df_vig3.iterrows(), start=1):
             name = str(row.get("Nom ; Prénom", row.get("Player Name", "-"))).strip()
             poste = str(row.get("Poste_Detaille", row.get("Poste", "")))
-            flop_players.append(_make_entry(rank, name, fmt_fn(float(row["_metric_val"])), poste))
+            vigilance_players.append(_make_entry(rank, name, fmt_fn(float(row["_metric_val"])), poste))
 
-    return top_players, flop_players, n_valid
+    return top_players, vigilance_players, n_valid
 
 
 def calculer_podiums_seance(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     """
-    Calcule les Podiums (Top 3 + Flop 3) d'une séance journalière ou d'un sous-groupe :
-    - Top speed (km/h) : Top 3 desc / Flop 3 asc
-    - % de marche : Top 3 asc (>0%) / Flop 3 desc
-    - Haute intensité (m) : Top 3 desc / Flop 3 asc
+    Calcule les Podiums (3 Premiers + 3 Derniers Vigilance) d'une séance journalière ou d'un sous-groupe :
+    - Top speed (km/h) : 3 Premiers desc / 3 Derniers asc
+    - % de marche : 3 Premiers asc (>0%) / 3 Derniers desc
+    - Haute intensité (m) : 3 Premiers desc / 3 Derniers asc
     """
     if df_subset is None or not isinstance(df_subset, pd.DataFrame) or df_subset.empty:
-        t_e, f_e, _ = _compute_top_and_flop_players_list(pd.DataFrame(), None, False, lambda v: "-")
+        t_e, v_e, _ = _compute_top_and_vigilance_players_list(pd.DataFrame(), None, False, lambda v: "-")
         return {
-            "Top speed (km/h)": {"icon": "⚡", "players": list(t_e), "flop_players": list(f_e), "total_valid": 0},
-            "% de marche": {"icon": "🚶", "players": list(t_e), "flop_players": list(f_e), "total_valid": 0},
-            "Haute intensité (m)": {"icon": "🔥", "players": list(t_e), "flop_players": list(f_e), "total_valid": 0},
+            "Top speed (km/h)": {"icon": "⚡", "players": list(t_e), "vigilance_players": list(v_e), "total_valid": 0},
+            "% de marche": {"icon": "🚶", "players": list(t_e), "vigilance_players": list(v_e), "total_valid": 0},
+            "Haute intensité (m)": {"icon": "🔥", "players": list(t_e), "vigilance_players": list(v_e), "total_valid": 0},
         }
 
     ts_col = "Top Speed (km/h)" if "Top Speed (km/h)" in df_subset.columns else None
-    t_ts, f_ts, n_ts = _compute_top_and_flop_players_list(
+    t_ts, v_ts, n_ts = _compute_top_and_vigilance_players_list(
         df_subset, ts_col, ascending_best=False, fmt_fn=lambda v: f"{v:.1f} km/h"
     )
 
@@ -787,7 +787,7 @@ def calculer_podiums_seance(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]
     def _fmt_walk(v: float) -> str:
         pct = v * 100.0 if v <= 1.0 else v
         return f"{pct:.1f} %"
-    t_wk, f_wk, n_wk = _compute_top_and_flop_players_list(
+    t_wk, v_wk, n_wk = _compute_top_and_vigilance_players_list(
         df_subset, walk_col, ascending_best=True, fmt_fn=_fmt_walk, require_positive=True
     )
 
@@ -796,14 +796,14 @@ def calculer_podiums_seance(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]
         if c in df_subset.columns:
             hi_col = c
             break
-    t_hi, f_hi, n_hi = _compute_top_and_flop_players_list(
+    t_hi, v_hi, n_hi = _compute_top_and_vigilance_players_list(
         df_subset, hi_col, ascending_best=False, fmt_fn=lambda v: f"{int(round(v)):,d} m".replace(",", " ")
     )
 
     return {
-        "Top speed (km/h)": {"icon": "⚡", "players": t_ts, "flop_players": f_ts, "total_valid": n_ts},
-        "% de marche": {"icon": "🚶", "players": t_wk, "flop_players": f_wk, "total_valid": n_wk},
-        "Haute intensité (m)": {"icon": "🔥", "players": t_hi, "flop_players": f_hi, "total_valid": n_hi},
+        "Top speed (km/h)": {"icon": "⚡", "players": t_ts, "vigilance_players": v_ts, "total_valid": n_ts},
+        "% de marche": {"icon": "🚶", "players": t_wk, "vigilance_players": v_wk, "total_valid": n_wk},
+        "Haute intensité (m)": {"icon": "🔥", "players": t_hi, "vigilance_players": v_hi, "total_valid": n_hi},
     }
 
 
@@ -813,7 +813,7 @@ def generer_podiums_hebdomadaires(
     poste_specifique: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Génère les podiums de la semaine (Top 3 & Flop 3) : Top Speed, % Marche, Haute Intensité.
+    Génère les podiums de la semaine (3 Premiers & 3 Derniers Vigilance) : Top Speed, % Marche, Haute Intensité.
     Supporte le filtrage par ligne de poste (groupe) ou par poste spécifique (9 postes).
     """
     filter_cat = poste_specifique or groupe
@@ -1094,14 +1094,18 @@ def restaurer_archive_backup(uploaded_file: Any) -> Tuple[bool, str]:
 # ==============================================================================
 
 
-def generer_graphique_hebdo_groupes_matplotlib(df_agg: pd.DataFrame) -> io.BytesIO:
+def generer_graphique_hebdo_groupes_matplotlib(
+    df_agg: pd.DataFrame,
+    figsize: Tuple[float, float] = (6.2, 3.6),
+) -> io.BytesIO:
     """
     Génère le diagramme combiné à barres comparatif de la semaine pour la Page 1 du PDF et le Dashboard :
     - Distance Moyenne (m) par Groupe (barres bleu marine #1F4E79)
     - HSR Z3 Moyen (m) par Groupe (barres rouge #A30000)
     sur les 3 groupes officiels du RCA : 5 de devant, 3ème Ligne, Trois-quarts.
     """
-    fig, ax1 = plt.subplots(figsize=(6.2, 3.6), dpi=180)
+    is_wide = figsize[0] >= 10.0
+    fig, ax1 = plt.subplots(figsize=figsize, dpi=140)
     fig.patch.set_facecolor("#FFFFFF")
     ax1.set_facecolor("#FFFFFF")
 
@@ -1121,17 +1125,23 @@ def generer_graphique_hebdo_groupes_matplotlib(df_agg: pd.DataFrame) -> io.Bytes
         hsr_vals.append(h_val)
 
     x = np.arange(len(groupes))
-    width = 0.35
+    width = 0.30 if is_wide else 0.35
 
     rects1 = ax1.bar(x - width/2, dist_vals, width, label="Distance Moyenne (m)", color="#1F4E79", edgecolor="none", zorder=3)
     ax2 = ax1.twinx()
     rects2 = ax2.bar(x + width/2, hsr_vals, width, label="HSR Z3 Moyen (m)", color="#A30000", edgecolor="none", zorder=3)
 
-    ax1.set_ylabel("Distance Moyenne (m)", color="#1F4E79", fontweight="bold", fontsize=8.5)
-    ax2.set_ylabel("HSR Z3 Moyen (m)", color="#A30000", fontweight="bold", fontsize=8.5)
+    fs_lbl = 10.0 if is_wide else 8.5
+    fs_tick = 10.5 if is_wide else 9.0
+    fs_title = 12.0 if is_wide else 10.0
+    fs_ann = 9.0 if is_wide else 7.5
+    fs_leg = 9.5 if is_wide else 8.0
+
+    ax1.set_ylabel("Distance Moyenne (m)", color="#1F4E79", fontweight="bold", fontsize=fs_lbl)
+    ax2.set_ylabel("HSR Z3 Moyen (m)", color="#A30000", fontweight="bold", fontsize=fs_lbl)
     ax1.set_xticks(x)
-    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=9.0, color="#1E293B")
-    ax1.set_title("Charge Moyenne Hebdomadaire par Ligne", fontweight="bold", color="#1F4E79", fontsize=10.0, pad=8)
+    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=fs_tick, color="#1E293B")
+    ax1.set_title("Charge Moyenne Hebdomadaire par Ligne de Poste", fontweight="bold", color="#1F4E79", fontsize=fs_title, pad=10 if is_wide else 8)
 
     # Annotations au-dessus des barres
     for rect in rects1:
@@ -1139,28 +1149,28 @@ def generer_graphique_hebdo_groupes_matplotlib(df_agg: pd.DataFrame) -> io.Bytes
         if h > 0:
             ax1.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
-                         xytext=(0, 2), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#1F4E79")
+                         xytext=(0, 3 if is_wide else 2), textcoords="offset points",
+                         ha="center", va="bottom", fontsize=fs_ann, fontweight="bold", color="#1F4E79")
 
     for rect in rects2:
         h = rect.get_height()
         if h > 0:
             ax2.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
-                         xytext=(0, 2), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#A30000")
+                         xytext=(0, 3 if is_wide else 2), textcoords="offset points",
+                         ha="center", va="bottom", fontsize=fs_ann, fontweight="bold", color="#A30000")
 
     max_dist = max(dist_vals) if dist_vals and max(dist_vals) > 0 else 1000.0
     max_hsr = max(hsr_vals) if hsr_vals and max(hsr_vals) > 0 else 100.0
     ax1.set_ylim(0, max_dist * 1.25)
     ax2.set_ylim(0, max_hsr * 1.25)
     ax1.grid(axis="y", linestyle="--", alpha=0.3, zorder=1)
-    ax1.tick_params(axis="y", labelcolor="#1F4E79", labelsize=8)
-    ax2.tick_params(axis="y", labelcolor="#A30000", labelsize=8)
+    ax1.tick_params(axis="y", labelcolor="#1F4E79", labelsize=9.0 if is_wide else 8.0)
+    ax2.tick_params(axis="y", labelcolor="#A30000", labelsize=9.0 if is_wide else 8.0)
 
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False, fontsize=8.0)
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.10 if is_wide else -0.12), ncol=2, frameon=False, fontsize=fs_leg)
 
     fig.tight_layout()
     buf = io.BytesIO()
@@ -1305,10 +1315,10 @@ def generer_graphique_hebdo_jauges_matplotlib(
     ]
 
     if layout == "2x2":
-        fig, axes_grid = plt.subplots(2, 2, figsize=(11.5, 4.0), dpi=180)
+        fig, axes_grid = plt.subplots(2, 2, figsize=(11.5, 4.0), dpi=130)
         axes = axes_grid.flatten()
     else:
-        fig, axes = plt.subplots(1, 4, figsize=(11.5, 2.5), dpi=180)
+        fig, axes = plt.subplots(1, 4, figsize=(11.5, 2.5), dpi=130)
     fig.patch.set_facecolor("#FFFFFF")
 
     for idx, (title, obj_val, real_val, unit) in enumerate(cards_def):
@@ -2753,7 +2763,7 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
     cats = cats[:3]
     group_defs = [(c, default_titles.get(c, str(c).upper())) for c in cats]
 
-    fig, axes = plt.subplots(1, 3, figsize=(14.5, 6.8), dpi=200)
+    fig, axes = plt.subplots(1, 3, figsize=(14.5, 6.8), dpi=130)
     fig.patch.set_facecolor("#FFFFFF")
 
     K = len(items_comparatif)
@@ -3032,33 +3042,33 @@ def _render_podium_section_pdf(
     w_pod: float,
     title_header: str,
     subtitle_map: Optional[Dict[str, str]] = None,
-    include_flop: bool = True,
+    include_vigilance: bool = True,
 ) -> None:
-    """Rend le bloc podium Top 3 (et Flop 3 juste en dessous) de 3 catégories sur la colonne droite."""
+    """Rend le bloc podium 3 Premiers (et 3 Derniers Vigilance juste en dessous) de 3 catégories."""
     categories_config = [
         {
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
-            "flop_sub": "Vitesse Minimale",
+            "vigilance_sub": "Vitesse Minimale",
             "color": (22, 43, 76),
-            "flop_color": (153, 27, 27),
+            "vigilance_color": (153, 27, 27),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
-            "flop_sub": "Plus de marche (%)",
+            "vigilance_sub": "Plus de marche (%)",
             "color": (43, 108, 176),
-            "flop_color": (180, 83, 9),
+            "vigilance_color": (180, 83, 9),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3 + Z4 + Z5 > 14.4 km/h",
-            "flop_sub": "Moins haute intensité",
+            "vigilance_sub": "Moins haute intensité",
             "color": (243, 195, 0),
-            "flop_color": (194, 65, 12),
+            "vigilance_color": (194, 65, 12),
         },
     ]
 
@@ -3067,7 +3077,7 @@ def _render_podium_section_pdf(
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
-    flop_badges = {
+    vigilance_badges = {
         1: {"label": "Dern.", "bg": (153, 27, 27), "fg": (255, 255, 255)},
         2: {"label": "Av-D.", "bg": (194, 65, 12), "fg": (255, 255, 255)},
         3: {"label": "3e D.", "bg": (217, 119, 6), "fg": (255, 255, 255)},
@@ -3076,11 +3086,11 @@ def _render_podium_section_pdf(
     def _draw_block(
         y_start_blk: float,
         blk_title: str,
-        is_flop: bool,
+        is_vigilance: bool,
         compact_half: bool,
     ) -> float:
         hdr_h = 5.0 if compact_half else 6.0
-        hdr_bg = (139, 30, 36) if is_flop else (22, 43, 76)
+        hdr_bg = (139, 30, 36) if is_vigilance else (22, 43, 76)
         pdf.set_fill_color(*hdr_bg)
         pdf.rect(x_pod, y_start_blk, w_pod, hdr_h, style="F")
         pdf.set_fill_color(243, 195, 0)
@@ -3098,8 +3108,8 @@ def _render_podium_section_pdf(
         row_gap = 0.35 if compact_half else 1.3
         y_card_start = y_start_blk + hdr_h + (1.2 if compact_half else 2.0)
 
-        badges_map = flop_badges if is_flop else top_badges
-        list_field = "flop_players" if is_flop else "players"
+        badges_map = vigilance_badges if is_vigilance else top_badges
+        list_field = "vigilance_players" if is_vigilance else "players"
 
         for i, cat_cfg in enumerate(categories_config):
             y_card = y_card_start + i * (card_h + card_gap)
@@ -3108,11 +3118,11 @@ def _render_podium_section_pdf(
             pdf.set_draw_color(203, 213, 225)
             pdf.rect(x_pod, y_card, w_pod, card_h, style="FD")
 
-            accent_color = cat_cfg["flop_color"] if is_flop else cat_cfg["color"]
+            accent_color = cat_cfg["vigilance_color"] if is_vigilance else cat_cfg["color"]
             pdf.set_fill_color(*accent_color)
             pdf.rect(x_pod, y_card, w_pod, cat_hdr_h, style="F")
 
-            is_gold_banner = (not is_flop) and (
+            is_gold_banner = (not is_vigilance) and (
                 (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat_cfg.get("title", "")).upper())
             )
             if is_gold_banner:
@@ -3129,8 +3139,8 @@ def _render_podium_section_pdf(
             pdf.set_text_color(*title_text_color)
             pdf.cell(62, cat_hdr_h, safe_latin1(cat_cfg["title"]), align="L")
 
-            if is_flop:
-                sub_txt = cat_cfg["flop_sub"]
+            if is_vigilance:
+                sub_txt = cat_cfg["vigilance_sub"]
             else:
                 sub_val = subtitle_map.get(cat_cfg["key"]) if isinstance(subtitle_map, dict) else None
                 sub_txt = str(sub_val).strip() if sub_val is not None else cat_cfg["def_sub"]
@@ -3146,9 +3156,9 @@ def _render_podium_section_pdf(
             row_w = w_pod - 4
             y_rows_start = y_card + cat_hdr_h + (0.4 if compact_half else 1.2)
 
-            if is_flop and len(players) == 0:
+            if is_vigilance and len(players) == 0:
                 msg = (
-                    "Effectif <= 3 : déjà classé dans le Top 3"
+                    "Effectif <= 3 : déjà classé dans les 3 Premiers"
                     if total_valid > 0
                     else "Aucune donnée valide pour ce critère"
                 )
@@ -3247,24 +3257,24 @@ def _render_podium_section_pdf(
 
         return y_card_start + 3 * card_h + 2 * card_gap
 
-    if include_flop:
+    if include_vigilance:
         y_after_top = _draw_block(
             y_start_blk=y_pod,
-            blk_title="TOP 3 — 3 PREMIERS DE LA SÉANCE",
-            is_flop=False,
+            blk_title="3 PREMIERS DE LA SÉANCE (TOP 3)",
+            is_vigilance=False,
             compact_half=True,
         )
         _draw_block(
             y_start_blk=y_after_top + 2.0,
-            blk_title="FLOP 3 — 3 DERNIERS (VIGILANCE)",
-            is_flop=True,
+            blk_title="3 DERNIERS DE LA SÉANCE (VIGILANCE)",
+            is_vigilance=True,
             compact_half=True,
         )
     else:
         _draw_block(
             y_start_blk=y_pod,
             blk_title=title_header,
-            is_flop=False,
+            is_vigilance=False,
             compact_half=False,
         )
 
@@ -3272,13 +3282,15 @@ def _render_podium_section_pdf(
 def _render_podium_page_aere(
     pdf: Any,
     podium_data: Dict[str, Dict[str, Any]],
-    group_name: str,
+    group_name: str = "",
     subtitle_map: Optional[Dict[str, str]] = None,
+    top_title: Optional[str] = None,
+    vigilance_title: Optional[str] = None,
 ) -> None:
     """
-    Rend une page podium complète pour une ligne de poste ou un poste spécifique RCA :
-    - Moitié supérieure : PODIUM DES 3 PREMIERS (TOP 3)
-    - Moitié inférieure : PODIUM DES 3 DERNIERS (FLOP 3 — VIGILANCE)
+    Rend une page podium complète pleine largeur (générale, par ligne de poste ou par poste spécifique RCA) :
+    - Moitié supérieure : 3 PREMIERS (TOP 3)
+    - Moitié inférieure : 3 DERNIERS (VIGILANCE)
     Affiche côte-à-côte les 3 critères (Top Speed, % de Marche, Haute Intensité),
     avec gestion gracieuse des petits groupes (<= 3 ou < 6 joueurs, sans doublons).
     """
@@ -3287,25 +3299,25 @@ def _render_podium_page_aere(
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
-            "flop_sub": "Vitesse Minimale",
+            "vigilance_sub": "Vitesse Minimale",
             "color": (31, 78, 121),
-            "flop_color": (153, 27, 27),
+            "vigilance_color": (153, 27, 27),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
-            "flop_sub": "Plus de marche (%)",
+            "vigilance_sub": "Plus de marche (%)",
             "color": (43, 108, 176),
-            "flop_color": (180, 83, 9),
+            "vigilance_color": (180, 83, 9),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3 + Z4 + Z5 > 14.4 km/h",
-            "flop_sub": "Moins haute intensité (m)",
+            "vigilance_sub": "Moins haute intensité (m)",
             "color": (243, 195, 0),
-            "flop_color": (194, 65, 12),
+            "vigilance_color": (194, 65, 12),
         },
     ]
 
@@ -3314,7 +3326,7 @@ def _render_podium_page_aere(
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
-    flop_badges = {
+    vigilance_badges = {
         1: {"label": "Dern.", "bg": (153, 27, 27), "fg": (255, 255, 255)},
         2: {"label": "Av-D.", "bg": (194, 65, 12), "fg": (255, 255, 255)},
         3: {"label": "3e D.", "bg": (217, 119, 6), "fg": (255, 255, 255)},
@@ -3327,11 +3339,11 @@ def _render_podium_page_aere(
     def _draw_podium_half(
         y_section: float,
         section_title: str,
-        is_flop: bool,
+        is_vigilance: bool,
     ) -> float:
-        # 1. Bandeau de section (Top 3 vs Flop 3)
+        # 1. Bandeau de section (3 Premiers vs 3 Derniers Vigilance)
         sec_banner_h = 5.6
-        pdf.set_fill_color(*(139, 30, 36) if is_flop else (22, 43, 76))
+        pdf.set_fill_color(*(139, 30, 36) if is_vigilance else (22, 43, 76))
         pdf.rect(x_start, y_section, 273.0, sec_banner_h, style="F")
         pdf.set_fill_color(243, 195, 0)
         pdf.rect(x_start, y_section + sec_banner_h - 0.5, 273.0, 0.5, style="F")
@@ -3345,18 +3357,18 @@ def _render_podium_page_aere(
         banner_h = 9.0
         card_h = 22.0
         card_gap = 1.2
-        badges_map = flop_badges if is_flop else top_badges
-        list_field = "flop_players" if is_flop else "players"
+        badges_map = vigilance_badges if is_vigilance else top_badges
+        list_field = "vigilance_players" if is_vigilance else "players"
 
         for c_idx, cat in enumerate(categories_config):
             x_c = x_start + c_idx * (col_w + col_gap)
-            accent_color = cat["flop_color"] if is_flop else cat["color"]
+            accent_color = cat["vigilance_color"] if is_vigilance else cat["color"]
 
             # En-tête de catégorie
             pdf.set_fill_color(*accent_color)
             pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-            is_gold_banner = (not is_flop) and (
+            is_gold_banner = (not is_vigilance) and (
                 (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
             )
             if is_gold_banner:
@@ -3378,8 +3390,8 @@ def _render_podium_page_aere(
             pdf.set_text_color(*title_text_color)
             pdf.cell(col_w - 4.0, 4.0, safe_latin1(cat["title"]), align="C")
 
-            if is_flop:
-                sub_txt = cat["flop_sub"]
+            if is_vigilance:
+                sub_txt = cat["vigilance_sub"]
             else:
                 sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
                 sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
@@ -3394,12 +3406,12 @@ def _render_podium_page_aere(
 
             y_cards_start = y_start + banner_h + 1.2
 
-            if is_flop and len(players) == 0:
+            if is_vigilance and len(players) == 0:
                 pdf.set_fill_color(248, 250, 252)
                 pdf.set_draw_color(203, 213, 225)
                 pdf.rect(x_c, y_cards_start, col_w, 26.0, style="FD")
                 msg_empty = (
-                    "Effectif <= 3 joueurs :\nclassement complet affiché dans le Top 3."
+                    "Effectif <= 3 joueurs :\nclassement complet affiché dans les 3 Premiers."
                     if total_valid > 0
                     else "Aucune donnée valide enregistrée\npour ce groupe sur cette catégorie."
                 )
@@ -3409,7 +3421,7 @@ def _render_podium_page_aere(
                 pdf.multi_cell(col_w - 6.0, 4.5, safe_latin1(msg_empty), align="C")
                 continue
 
-            max_slots = 3 if not is_flop else max(len(players), 0)
+            max_slots = 3 if not is_vigilance else max(len(players), 0)
             for r_idx in range(1, max_slots + 1):
                 y_card = y_cards_start + (r_idx - 1) * (card_h + card_gap)
                 p_entry = players[r_idx - 1] if len(players) >= r_idx and isinstance(players[r_idx - 1], dict) else {}
@@ -3474,21 +3486,25 @@ def _render_podium_page_aere(
 
         return y_start + banner_h + 1.2 + 3 * card_h + 2 * card_gap
 
+    grp_label = group_name.upper() if group_name else ""
+    t_title = top_title or (f"3 PREMIERS (TOP 3) — {grp_label}" if grp_label else "3 PREMIERS (TOP 3)")
+    v_title = vigilance_title or (f"3 DERNIERS (VIGILANCE) — {grp_label}" if grp_label else "3 DERNIERS (VIGILANCE)")
+
     y_end_top = _draw_podium_half(
         y_section=19.5,
-        section_title=f"PODIUM DES 3 PREMIERS (TOP 3) — {group_name.upper()}",
-        is_flop=False,
+        section_title=t_title,
+        is_vigilance=False,
     )
 
-    # Liseré doré séparateur entre Top 3 et Flop 3
+    # Liseré doré séparateur entre 3 Premiers et 3 Derniers Vigilance
     y_sep = y_end_top + 1.4
     pdf.set_fill_color(243, 195, 0)
     pdf.rect(x_start, y_sep, 273.0, 0.5, style="F")
 
     _draw_podium_half(
         y_section=y_sep + 1.5,
-        section_title=f"PODIUM DES 3 DERNIERS (FLOP 3 — VIGILANCE) — {group_name.upper()}",
-        is_flop=True,
+        section_title=v_title,
+        is_vigilance=True,
     )
 
 
@@ -3510,32 +3526,32 @@ def _render_podiums_compact_horizontal(
     - % de marche
     - Haute intensité (m)
 
-    Supporte `mode="players"` (Top 3) et `mode="flop_players"` (Flop 3).
+    Supporte `mode="players"` (3 Premiers) et `mode="vigilance_players"` (3 Derniers Vigilance).
     Gère gracieusement les petits effectifs (<= 3 joueurs ou < 6 joueurs) sans doublons ni exception.
     Retourne la hauteur totale occupée (mm).
     """
-    is_flop = (mode == "flop_players")
+    is_vigilance = (mode == "vigilance_players")
     categories_config = [
         {
             "key": "Top speed (km/h)",
             "title": "TOP SPEED (km/h)",
             "def_sub": "Vitesse Maximale",
-            "flop_sub": "Vitesse Minimale",
-            "color": (153, 27, 27) if is_flop else (31, 78, 121),
+            "vigilance_sub": "Vitesse Minimale",
+            "color": (153, 27, 27) if is_vigilance else (31, 78, 121),
         },
         {
             "key": "% de marche",
             "title": "% DE MARCHE",
             "def_sub": "Moins marche (> 0%)",
-            "flop_sub": "Plus de marche (%)",
-            "color": (180, 83, 9) if is_flop else (46, 90, 136),
+            "vigilance_sub": "Plus de marche (%)",
+            "color": (180, 83, 9) if is_vigilance else (46, 90, 136),
         },
         {
             "key": "Haute intensité (m)",
             "title": "HAUTE INTENSITÉ (m)",
             "def_sub": "Cumul Z3+Z4+Z5 > 14.4 km/h",
-            "flop_sub": "Moins haute intensité",
-            "color": (194, 65, 12) if is_flop else (163, 0, 0),
+            "vigilance_sub": "Moins haute intensité",
+            "color": (194, 65, 12) if is_vigilance else (163, 0, 0),
         },
     ]
 
@@ -3544,12 +3560,12 @@ def _render_podiums_compact_horizontal(
         2: {"label": "2e", "bg": (100, 116, 139), "fg": (255, 255, 255)},
         3: {"label": "3e", "bg": (180, 83, 9), "fg": (255, 255, 255)},
     }
-    flop_badges = {
+    vigilance_badges = {
         1: {"label": "Dern.", "bg": (153, 27, 27), "fg": (255, 255, 255)},
         2: {"label": "Av-D.", "bg": (194, 65, 12), "fg": (255, 255, 255)},
         3: {"label": "3e D.", "bg": (217, 119, 6), "fg": (255, 255, 255)},
     }
-    rank_badges = flop_badges if is_flop else top_badges
+    rank_badges = vigilance_badges if is_vigilance else top_badges
 
     if row_h_override is not None:
         banner_h = 4.8
@@ -3583,7 +3599,7 @@ def _render_podiums_compact_horizontal(
         pdf.set_fill_color(*accent_color)
         pdf.rect(x_c, y_start, col_w, banner_h, style="F")
 
-        is_gold_banner = (not is_flop) and (
+        is_gold_banner = (not is_vigilance) and (
             (accent_color == (243, 195, 0)) or ("HAUTE" in str(cat.get("title", "")).upper())
         )
         if is_gold_banner:
@@ -3605,8 +3621,8 @@ def _render_podiums_compact_horizontal(
         pdf.set_text_color(*title_text_color)
         pdf.cell(col_w * 0.54, banner_h - 0.5, safe_latin1(cat["title"]), align="L")
 
-        if is_flop:
-            sub_txt = cat["flop_sub"]
+        if is_vigilance:
+            sub_txt = cat["vigilance_sub"]
         else:
             sub_val = subtitle_map.get(cat["key"]) if isinstance(subtitle_map, dict) else None
             sub_txt = str(sub_val).strip() if sub_val is not None else cat["def_sub"]
@@ -3620,13 +3636,13 @@ def _render_podiums_compact_horizontal(
         players = cat_data.get(mode, []) if isinstance(cat_data, dict) else []
         total_valid = int(cat_data.get("total_valid", len(players)) or 0) if isinstance(cat_data, dict) else len(players)
 
-        if is_flop and len(players) == 0:
+        if is_vigilance and len(players) == 0:
             box_h = 3 * row_h + 2 * row_gap
             pdf.set_fill_color(248, 250, 252)
             pdf.set_draw_color(226, 232, 240)
             pdf.rect(x_c, y_rows_start, col_w, box_h, style="FD")
             msg_empty = (
-                "Effectif <= 3 : déjà classé dans le Top 3."
+                "Effectif <= 3 : déjà classé dans les 3 Premiers."
                 if total_valid > 0
                 else "Aucune donnée valide."
             )
@@ -3652,14 +3668,14 @@ def _render_podiums_compact_horizontal(
             pdf.rect(x_c, y_row, accent_w, row_h, style="F")
 
             badge = rank_badges.get(r_idx, {"label": f"{r_idx}e", "bg": (100, 116, 139), "fg": (255, 255, 255)})
-            b_w = 10.0 if is_large else (9.5 if is_flop else 7.8)
+            b_w = 10.0 if is_large else (9.5 if is_vigilance else 7.8)
             b_h = min(8.0 if is_large else 7.5, row_h - 2.0)
             b_x = x_c + accent_w + 1.2
             b_y = y_row + (row_h - b_h) / 2.0
             pdf.set_fill_color(*badge["bg"])
             pdf.rect(b_x, b_y, b_w, b_h, style="F")
             pdf.set_xy(b_x, b_y)
-            pdf.set_font("Helvetica", "B", 6.8 if is_large else (5.6 if is_flop else 6.0))
+            pdf.set_font("Helvetica", "B", 6.8 if is_large else (5.6 if is_vigilance else 6.0))
             pdf.set_text_color(*badge["fg"])
             pdf.cell(b_w, b_h, badge["label"], align="C")
 
@@ -3830,11 +3846,12 @@ def generate_weekly_pdf_report(
 ) -> bytes:
     """
     Génère le rapport hebdomadaire PDF complet officiel RCA au format Paysage (A4).
-    - Mode 'Par ligne de poste' (8 pages avec comparatif, 7 sans) :
-      Page 1 (Synthèse + Podiums Top 3 & Flop 3), puis 2 pages par ligne (5 de devant, 3ème Ligne, Trois-quarts),
-      puis Page 8 Comparative Multi-Semaines.
+    - Mode 'Par ligne de poste' (9 pages avec comparatif, 8 sans) :
+      Page 1 (Synthèse Générale du Club), Page 2 (Podiums Généraux de la Semaine),
+      puis 2 pages par ligne (5 de devant, 3ème Ligne, Trois-quarts),
+      puis Page 9 Comparative Multi-Semaines.
     - Mode 'Détaillé par poste' (9 postes actifs) :
-      Page 1 + 2 pages par poste actif + pages comparatives triptyques (3 postes/page).
+      Page 1 + Page 2 (Podiums Généraux) + 2 pages par poste actif + pages comparatives triptyques (3 postes/page).
     """
     if df_hebdo is None:
         df_hebdo = kwargs.get("df_agg", pd.DataFrame())
@@ -3942,7 +3959,7 @@ def generate_weekly_pdf_report(
     )
 
     # =========================================================================
-    # PAGE 1 : SYNTHÈSE GLOBALE DU CLUB & PODIUMS GÉNÉRAUX (TOP 3 & FLOP 3)
+    # PAGE 1 : SYNTHÈSE GLOBALE DU CLUB & CHARGE HEBDOMADAIRE
     # =========================================================================
     pdf.current_subtitle = "SYNTHÈSE GLOBALE DU CLUB & CHARGE HEBDOMADAIRE"
     pdf.add_page()
@@ -3981,91 +3998,117 @@ def generate_weekly_pdf_report(
         pdf.set_text_color(31, 78, 121)
         pdf.cell(col_w, 6.0, safe_latin1(val), align="C")
 
-    # 2. Section intermédiaire (Tableau des séances + Graphiques) — y=32.5..93.5
-    y_mid = 32.5
+    # 1. Encart narratif : Note du Préparateur Physique | Synthèse Athlétique
+    y_note = 32.6
+    h_note = 10.6
+    pdf.set_fill_color(248, 250, 252)
+    pdf.set_draw_color(203, 213, 225)
+    pdf.rect(12, y_note, 273.0, h_note, style="FD")
+    pdf.set_fill_color(22, 43, 76)
+    pdf.rect(12, y_note, 3.5, h_note, style="F")
+    pdf.set_fill_color(243, 195, 0)
+    pdf.rect(15.5, y_note, 0.8, h_note, style="F")
+
+    pdf.set_xy(18, y_note + 1.0)
+    pdf.set_font("Helvetica", "B", 7.4)
+    pdf.set_text_color(22, 43, 76)
+    pdf.cell(150, 3.4, safe_latin1("NOTE DU PRÉPARATEUR PHYSIQUE | SYNTHÈSE ATHLÉTIQUE"), align="L")
+
+    rpe_eq_str = f"{rpe_groups['Total']:.1f} / 10" if rpe_groups.get("Total") is not None else "NR"
+    badge_w_txt = f"CHARGE HEBDO : {tot_km:.1f} km  |  RPE MOY. {rpe_eq_str}"
+    pdf.set_xy(170, y_note + 0.9)
+    pdf.set_fill_color(244, 247, 251)
+    pdf.set_draw_color(243, 195, 0)
+    pdf.set_font("Helvetica", "B", 6.8)
+    pdf.set_text_color(22, 43, 76)
+    pdf.cell(112, 3.6, safe_latin1(badge_w_txt), border=1, align="R", fill=True)
+
+    note_txt = str(notes_coach or "").strip() or (
+        f"Bilan consolidé sur {nb_seances} séance(s) et {nb_joueurs_tot} joueurs actifs "
+        f"({tot_km:.1f} km cumulés, {int(round(tot_hi)):,d} m à haute intensité, Vmax {max_speed:.1f} km/h).".replace(",", " ")
+    )
+    pdf.set_xy(18, y_note + 4.8)
+    pdf.set_font("Helvetica", "", 7.3)
+    pdf.set_text_color(51, 65, 85)
+    pdf.multi_cell(w=264.0, h=3.4, txt=safe_latin1(note_txt), align="L")
+
+    # 2. Bandeau intermédiaire côte-à-côte (Séances + Volume Journalier) — y=45.0..90.0
+    y_mid = 45.0
 
     pdf.set_xy(12, y_mid)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(133, 3.8, safe_latin1("1. SÉANCES ENREGISTRÉES & RÉPARTITION DE CHARGE :"), align="L")
+    pdf.cell(134, 3.8, safe_latin1("1. SÉANCES ENREGISTRÉES & VOLUMES :"), align="L")
 
-    y_table = y_mid + 4.0
+    y_table = y_mid + 4.2
     pdf.set_xy(12, y_table)
     pdf.set_fill_color(31, 78, 121)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 7.2)
-    pdf.cell(45, 4.4, "Séance / Type", 1, 0, "L", fill=True)
-    pdf.cell(24, 4.4, "Date", 1, 0, "C", fill=True)
-    pdf.cell(20, 4.4, "Effectif", 1, 0, "C", fill=True)
-    pdf.cell(22, 4.4, "Dist. (km)", 1, 0, "C", fill=True)
-    pdf.cell(22, 4.4, "H.I. (m)", 1, 1, "C", fill=True)
+    pdf.set_font("Helvetica", "B", 7.3)
+    pdf.cell(46, 4.8, "Séance / Type", 1, 0, "L", fill=True)
+    pdf.cell(24, 4.8, "Date", 1, 0, "C", fill=True)
+    pdf.cell(20, 4.8, "Effectif", 1, 0, "C", fill=True)
+    pdf.cell(22, 4.8, "Dist. (km)", 1, 0, "C", fill=True)
+    pdf.cell(22, 4.8, "H.I. (m)", 1, 1, "C", fill=True)
 
-    pdf.set_font("Helvetica", "", 6.9)
+    pdf.set_font("Helvetica", "", 7.1)
     pdf.set_text_color(15, 23, 42)
-    sessions_to_show = list(synthese_dict.items())[:4]
+    sessions_to_show = list(synthese_dict.items())[:6]
+    fill_sess = False
     for _, s in sessions_to_show:
         pdf.set_x(12)
-        pdf.cell(45, 3.8, safe_latin1(str(s.get("day_type", ""))[:20]), 1, 0, "L")
-        pdf.cell(24, 3.8, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C")
-        pdf.cell(20, 3.8, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C")
-        pdf.cell(22, 3.8, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C")
-        pdf.cell(22, 3.8, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C")
-
-    y_chart_days = pdf.get_y() + 1.5
-    chart_days_h = min(40.0, max(22.0, 94.0 - y_chart_days))
-    try:
-        buf_days = generer_graphique_hebdo_repartition_jours_matplotlib(synthese_dict)
-        pdf.image(buf_days, x=12, y=y_chart_days, w=133, h=chart_days_h)
-    except Exception as e:
-        print(f"Erreur graphique repartition jours PDF : {e}")
+        pdf.set_fill_color(*(248, 250, 252) if fill_sess else (255, 255, 255))
+        pdf.cell(46, 4.6, safe_latin1(str(s.get("day_type", ""))[:22]), 1, 0, "L", fill=True)
+        pdf.cell(24, 4.6, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C", fill=True)
+        pdf.cell(20, 4.6, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C", fill=True)
+        pdf.cell(22, 4.6, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C", fill=True)
+        pdf.cell(22, 4.6, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C", fill=True)
+        fill_sess = not fill_sess
 
     pdf.set_xy(151, y_mid)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(133, 3.8, safe_latin1("2. CHARGE MOYENNE PAR LIGNE DE POSTE (SEMAINE) :"), align="L")
+    pdf.cell(134, 3.8, safe_latin1("2. RÉPARTITION DE CHARGE PAR SÉANCE :"), align="L")
+    try:
+        buf_days = generer_graphique_hebdo_repartition_jours_matplotlib(synthese_dict)
+        pdf.image(buf_days, x=151, y=y_mid + 4.2, w=134, h=41.0)
+    except Exception as e:
+        print(f"Erreur graphique repartition jours PDF : {e}")
+
+    # 3. Graphique principal élargi et centré (Charge Moyenne Hebdomadaire par Ligne de Poste)
+    y_main_chart_hdr = 91.5
+    pdf.set_xy(12, y_main_chart_hdr)
+    pdf.set_font("Helvetica", "B", 8.8)
+    pdf.set_text_color(11, 25, 44)
+    pdf.cell(273, 4.0, safe_latin1("3. CHARGE MOYENNE HEBDOMADAIRE PAR LIGNE DE POSTE (5 DE DEVANT | 3ÈME LIGNE | TROIS-QUARTS) :"), align="C")
 
     try:
-        buf_groups = generer_graphique_hebdo_groupes_matplotlib(df_hebdo)
-        pdf.image(buf_groups, x=151, y=y_mid + 4.0, w=134, h=57.0)
+        buf_groups = generer_graphique_hebdo_groupes_matplotlib(df_hebdo, figsize=(12.2, 4.7))
+        chart_w_main = 255.0
+        chart_h_main = 98.5
+        chart_x_main = 12.0 + (273.0 - chart_w_main) / 2.0
+        pdf.image(buf_groups, x=chart_x_main, y=y_main_chart_hdr + 4.5, w=chart_w_main, h=chart_h_main)
     except Exception as e:
         print(f"Erreur graphique groupes hebdo PDF : {e}")
 
-    # 3. Section Podium Général Top 3 + Flop 3 sur Page 1
+    # =========================================================================
+    # PAGE 2 : PODIUMS GÉNÉRAUX DE LA SEMAINE (PLEINE LARGEUR)
+    # =========================================================================
+    pdf.current_subtitle = "PODIUMS GÉNÉRAUX DE LA SEMAINE"
+    pdf.add_page()
     podium_general = generer_podiums_hebdomadaires(df_hebdo)
     sub_map_gen = calculer_sous_titres_podium(df_hebdo, label_prefix="Moy. semaine")
-
-    y_pod_top = 95.5
-    pdf.set_xy(12, y_pod_top)
-    pdf.set_font("Helvetica", "B", 8.5)
-    pdf.set_text_color(11, 25, 44)
-    pdf.cell(273, 3.8, safe_latin1("3. PODIUM GÉNÉRAL HEBDOMADAIRE — TOP 3 (3 PREMIERS) :"), align="L")
-    y_used_top = _render_podiums_compact_horizontal(
+    _render_podium_page_aere(
         pdf=pdf,
         podium_data=podium_general,
-        y_start=y_pod_top + 4.0,
+        group_name="",
         subtitle_map=sub_map_gen,
-        is_large=False,
-        mode="players",
-        row_h_override=12.0,
-    )
-
-    y_pod_flop = y_pod_top + 4.0 + y_used_top + 1.8
-    pdf.set_xy(12, y_pod_flop)
-    pdf.set_font("Helvetica", "B", 8.5)
-    pdf.set_text_color(153, 27, 27)
-    pdf.cell(273, 3.8, safe_latin1("4. PODIUM GÉNÉRAL HEBDOMADAIRE — FLOP 3 (3 DERNIERS / VIGILANCE) :"), align="L")
-    _render_podiums_compact_horizontal(
-        pdf=pdf,
-        podium_data=podium_general,
-        y_start=y_pod_flop + 4.0,
-        subtitle_map=sub_map_gen,
-        is_large=False,
-        mode="flop_players",
-        row_h_override=12.0,
+        top_title="3 PREMIERS DE LA SEMAINE (TOP 3)",
+        vigilance_title="3 DERNIERS DE LA SEMAINE (VIGILANCE)",
     )
 
     # =========================================================================
-    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (RETOUR HEBDO + PODIUMS TOP/FLOP)
+    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (RETOUR HEBDO + PODIUMS)
     # =========================================================================
     def _safe_float(v: Any, default: float = 0.0) -> float:
         try:
@@ -4272,7 +4315,7 @@ def generate_weekly_pdf_report(
                 fill_row = not fill_row
 
         # ---------------------------------------------------------------------
-        # PAGE B : PODIUMS HEBDOMADAIRES — TOP 3 & FLOP 3 SUR LA MÊME PAGE
+        # PAGE B : PODIUMS HEBDOMADAIRES — 3 PREMIERS & 3 DERNIERS SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
         pdf.current_subtitle = f"PODIUMS HEBDOMADAIRES — {grp.upper()}"
         pdf.add_page()

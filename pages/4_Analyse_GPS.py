@@ -3582,7 +3582,7 @@ def calculer_metriques_jauges(
 
 
 def generer_podium_dynamique(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """Génère les Podiums Top 3 et Flop 3 à partir des données réelles avec photos Base64 et postes."""
+    """Génère les Podiums (3 Premiers & 3 Derniers Vigilance) à partir des données réelles avec photos Base64 et postes."""
     if df_subset is None or not isinstance(df_subset, pd.DataFrame) or len(df_subset) == 0:
         podium_res = weekly_memory.calculer_podiums_seance(pd.DataFrame())
     else:
@@ -3591,7 +3591,7 @@ def generer_podium_dynamique(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any
     for cat_data in podium_res.values():
         if not isinstance(cat_data, dict):
             continue
-        for list_key in ("players", "flop_players"):
+        for list_key in ("players", "vigilance_players"):
             entries = cat_data.get(list_key, [])
             for entry in entries:
                 if not isinstance(entry, dict):
@@ -3745,13 +3745,15 @@ def formater_date_seance_fr(val_date: Any) -> str:
 def generer_graphique_groupes_matplotlib(
     df_indiv: pd.DataFrame,
     moyennes_groupes: Optional[Dict[str, Dict[str, float]]] = None,
+    figsize: Tuple[float, float] = (5.6, 5.6),
 ) -> io.BytesIO:
     """
     Génère un diagramme en barres comparant la Distance Moyenne (m)
     et le HSR Moyen (m) par Groupe de joueurs (5 de devant, 3ème Ligne, Trois-quarts).
     La barre rouge affiche STRICTEMENT la Zone 3 (HSR Z3 = Distance in Speed Zone 3 (km) * 1000).
     """
-    fig, ax1 = plt.subplots(figsize=(5.6, 5.6), dpi=180)
+    is_wide = figsize[0] >= 9.5
+    fig, ax1 = plt.subplots(figsize=figsize, dpi=180)
     fig.patch.set_facecolor("#FFFFFF")
     ax1.set_facecolor("#FFFFFF")
 
@@ -3784,17 +3786,23 @@ def generer_graphique_groupes_matplotlib(
                 hsr_vals.append(0.0)
 
     x = np.arange(len(groupes))
-    width = 0.35
+    width = 0.28 if is_wide else 0.35
     ax2 = ax1.twinx()
 
     rects1 = ax1.bar(x - width/2, dist_vals, width, label="Distance Moyenne (m)", color="#1F4E79", edgecolor="none")
     rects2 = ax2.bar(x + width/2, hsr_vals, width, label="HSR Z3 Moyen (m)", color="#A30000", edgecolor="none")
 
-    ax1.set_ylabel("Distance Moyenne (m)", color="#1F4E79", fontweight="bold", fontsize=9)
-    ax2.set_ylabel("HSR Z3 Moyen (m)", color="#A30000", fontweight="bold", fontsize=9)
+    fs_lbl = 10.5 if is_wide else 9.0
+    fs_tick = 11.0 if is_wide else 9.0
+    fs_title = 13.0 if is_wide else 10.5
+    fs_ann = 9.5 if is_wide else 8.0
+    fs_leg = 10.0 if is_wide else 8.5
+
+    ax1.set_ylabel("Distance Moyenne (m)", color="#1F4E79", fontweight="bold", fontsize=fs_lbl)
+    ax2.set_ylabel("HSR Z3 Moyen (m)", color="#A30000", fontweight="bold", fontsize=fs_lbl)
     ax1.set_xticks(x)
-    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=9)
-    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color="#1F4E79", fontsize=10.5, pad=12)
+    ax1.set_xticklabels(groupes, fontweight="bold", fontsize=fs_tick)
+    ax1.set_title("Distance Moyenne & HSR Z3 Moyen par Groupe", fontweight="bold", color="#1F4E79", fontsize=fs_title, pad=14 if is_wide else 12)
 
     # Valeurs écrites directement sur chaque barre
     for rect in rects1:
@@ -3803,7 +3811,7 @@ def generer_graphique_groupes_matplotlib(
             ax1.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=8, fontweight="bold", color="#1F4E79")
+                         ha="center", va="bottom", fontsize=fs_ann, fontweight="bold", color="#1F4E79")
 
     for rect in rects2:
         h = rect.get_height()
@@ -3811,20 +3819,20 @@ def generer_graphique_groupes_matplotlib(
             ax2.annotate(f"{int(round(h)):,d} m".replace(",", " "),
                          xy=(rect.get_x() + rect.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points",
-                         ha="center", va="bottom", fontsize=8, fontweight="bold", color="#A30000")
+                         ha="center", va="bottom", fontsize=fs_ann, fontweight="bold", color="#A30000")
 
     max_dist = max(dist_vals) if dist_vals and max(dist_vals) > 0 else 1000.0
     max_hsr = max(hsr_vals) if hsr_vals and max(hsr_vals) > 0 else 100.0
     ax1.set_ylim(0, max_dist * 1.25)
     ax2.set_ylim(0, max_hsr * 1.25)
     ax1.grid(axis="y", linestyle="--", alpha=0.3)
-    ax1.tick_params(axis="y", labelcolor="#1F4E79")
-    ax2.tick_params(axis="y", labelcolor="#A30000")
+    ax1.tick_params(axis="y", labelcolor="#1F4E79", labelsize=9.5 if is_wide else 8.5)
+    ax2.tick_params(axis="y", labelcolor="#A30000", labelsize=9.5 if is_wide else 8.5)
 
     # Légende épurée
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=2, frameon=False, fontsize=8.5)
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.07 if is_wide else -0.06), ncol=2, frameon=False, fontsize=fs_leg)
 
     fig.tight_layout()
     buf = io.BytesIO()
@@ -4151,7 +4159,9 @@ def generer_rapport_pdf_coachs(
 ) -> bytes:
     """
     Génère le rapport PDF multi-pages officiel RCA au format Paysage (A4) :
-    - Mode 'Par ligne de poste' (7 pages, ou 8 avec comparatif)
+    - Mode 'Par ligne de poste' (8 pages, ou 9 avec comparatif) :
+      Page 1 (Synthèse Générale élargie), Page 2 (Podiums Généraux de la Séance),
+      puis 2 pages par ligne (5 de devant, 3ème Ligne, Trois-quarts) + Triptyque comparatif.
     - Mode 'Détaillé par poste' (2 pages par poste actif parmi les 9 postes + triptyques)
     """
     if df_indiv is None:
@@ -4400,25 +4410,32 @@ def generer_rapport_pdf_coachs(
     pdf.set_text_color(51, 65, 85)
     pdf.multi_cell(w=w_note - 10, h=3.6, txt=safe_latin1(synthese_note), align="L")
 
-    # 3. Colonne de Gauche : Graphique Matplotlib par Groupe (5 de devant, 3ème Ligne, Trois-quarts)
-    buf1 = generer_graphique_groupes_matplotlib(df_indiv, moyennes_groupes=moyennes_groupes)
-    chart_y = 50.5
-    chart_w = 133
-    chart_h = 142
-    pdf.image(buf1, x=12, y=chart_y, w=chart_w, h=chart_h)
+    # 3. Graphique principal élargi et centré : Distance Moyenne & HSR Z3 Moyen par Groupe
+    buf1 = generer_graphique_groupes_matplotlib(
+        df_indiv,
+        moyennes_groupes=moyennes_groupes,
+        figsize=(11.2, 5.8),
+    )
+    chart_y = 51.0
+    chart_w = 256.0
+    chart_h = 142.0
+    chart_x = 12.0 + (273.0 - chart_w) / 2.0
+    pdf.image(buf1, x=chart_x, y=chart_y, w=chart_w, h=chart_h)
 
-    # 4. Colonne de Droite : Podium Général de la Séance (Top 3 + Flop 3)
+    # =========================================================================
+    # PAGE 2 : PODIUMS GÉNÉRAUX DE LA SÉANCE (PLEINE LARGEUR)
+    # =========================================================================
+    pdf.current_subtitle = "PODIUMS GÉNÉRAUX DE LA SÉANCE"
+    pdf.add_page()
     podium_general = generer_podium_dynamique(df_indiv)
     sub_map_gen = calculer_sous_titres_podium(df_indiv, label_prefix="Moy. séance")
-    _render_podium_section_pdf(
+    _render_podium_page_aere(
         pdf=pdf,
         podium_data=podium_general,
-        x_pod=149,
-        y_pod=chart_y,
-        w_pod=136,
-        title_header="PODIUMS DE LA SÉANCE",
+        group_name="",
         subtitle_map=sub_map_gen,
-        include_flop=True,
+        top_title="3 PREMIERS DE LA SÉANCE (TOP 3)",
+        vigilance_title="3 DERNIERS DE LA SÉANCE (VIGILANCE)",
     )
 
     # =========================================================================
@@ -4591,7 +4608,7 @@ def generer_rapport_pdf_coachs(
         pdf.image(buf_jauges, x=12.0, y=chart_y, w=chart_w, h=chart_h)
 
         # ---------------------------------------------------------------------
-        # PAGE B : PODIUMS TOP 3 + FLOP 3 SUR LA MÊME PAGE
+        # PAGE B : PODIUMS 3 PREMIERS + 3 DERNIERS VIGILANCE SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
         pdf.current_subtitle = f"PODIUMS DE LA {'CATÉGORIE' if is_detailed else 'LIGNE'} — {grp.upper()}"
         pdf.add_page()
@@ -5594,7 +5611,7 @@ def render_weekly_reports_view() -> None:
     else:
         cats_w = ["5 de devant", "3ème Ligne", "Trois-quarts"]
     n_comp_w_pages = ((len(cats_w) + 2) // 3) if inclure_comp_w else 0
-    total_w_pages = 1 + 2 * len(cats_w) + n_comp_w_pages
+    total_w_pages = 2 + 2 * len(cats_w) + n_comp_w_pages
 
     pdf_hebdo_bytes = weekly_memory.generate_weekly_pdf_report(
         df_hebdo=df_agg,
@@ -5615,7 +5632,7 @@ def render_weekly_reports_view() -> None:
         data=pdf_hebdo_bytes,
         file_name=f"Rapport_Hebdomadaire_RCA_Semaine_{week_num:02d}_{year}.pdf",
         mime="application/pdf",
-        help="Télécharge le rapport hebdomadaire PDF complet officiel avec podiums Top 3 & Flop 3, KPIs, bilans et comparatifs multi-semaines.",
+        help="Télécharge le rapport hebdomadaire PDF complet officiel avec podiums (3 Premiers & 3 Derniers Vigilance), KPIs, bilans et comparatifs multi-semaines.",
         key="btn_download_weekly_pdf",
         type="primary",
     )
@@ -7028,7 +7045,7 @@ def main() -> None:
         else:
             cats_d = ["5 de devant", "3ème Ligne", "Trois-quarts"]
         n_comp_d_pages = ((len(cats_d) + 2) // 3) if inclure_comp_d else 0
-        total_d_pages = 1 + 2 * len(cats_d) + n_comp_d_pages
+        total_d_pages = 2 + 2 * len(cats_d) + n_comp_d_pages
 
         pdf_bytes = generer_rapport_pdf_coachs(
             df_indiv=st.session_state["df_indiv"],

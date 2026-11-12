@@ -2973,7 +2973,7 @@ def calculer_metriques_jauges(
 
 
 def generer_podium_dynamique(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """Génère les Podiums Top 3 et Flop 3 à partir des données réelles avec photos Base64 et postes."""
+    """Génère les Podiums (3 Premiers & 3 Derniers Vigilance) à partir des données réelles avec photos Base64 et postes."""
     if df_subset is None or not isinstance(df_subset, pd.DataFrame) or len(df_subset) == 0:
         podium_res = weekly_memory.calculer_podiums_seance(pd.DataFrame())
     else:
@@ -2982,7 +2982,7 @@ def generer_podium_dynamique(df_subset: pd.DataFrame) -> Dict[str, Dict[str, Any
     for cat_data in podium_res.values():
         if not isinstance(cat_data, dict):
             continue
-        for list_key in ("players", "flop_players"):
+        for list_key in ("players", "vigilance_players"):
             entries = cat_data.get(list_key, [])
             for entry in entries:
                 if not isinstance(entry, dict):
