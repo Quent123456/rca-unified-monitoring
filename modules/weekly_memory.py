@@ -1786,6 +1786,85 @@ def build_custom_target_groups(
 
     return groups
 
+
+def get_grand_groupe_isolated_excluded(
+    grp: str,
+    isolated_positions: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    Retourne la liste ordonnée des postes isolés appartenant à cette grande ligne.
+    Ex: grp='5 de devant', isolated=['Pilier'] -> ['Pilier']
+    """
+    if not isolated_positions:
+        return []
+    grp_clean = _strip_accents_lower(grp).strip()
+    res = []
+    for pos in isolated_positions:
+        parent = POSTE_TO_GROUPE_MAP.get(pos, "")
+        p_clean = _strip_accents_lower(parent).strip()
+        if (
+            p_clean == grp_clean
+            or (grp_clean in ["5 de devant", "devant"] and parent == "5 de devant")
+            or (grp_clean in ["3eme ligne", "3e ligne", "troisieme ligne", "3ème ligne"] and parent == "3ème Ligne")
+            or (grp_clean in ["trois quarts", "trois-quarts", "3/4", "arrieres"] and parent == "Trois-quarts")
+        ):
+            if pos not in res:
+                res.append(pos)
+    return res
+
+
+def get_group_display_name(
+    grp: str,
+    isolated_positions: Optional[List[str]] = None,
+    is_isolated: bool = False,
+) -> str:
+    """
+    Retourne l'intitulé d'affichage pour une ligne ou un poste.
+    Si la ligne est amputée de certains postes, ajoute '(hors Pos1, Pos2)'.
+    Ex: '5 DE DEVANT (hors Pilier)' ou 'PILIER'
+    """
+    grp_str = str(grp or "").strip()
+    if is_isolated:
+        return grp_str.upper()
+    excluded = get_grand_groupe_isolated_excluded(grp_str, isolated_positions)
+    if excluded:
+        return f"{grp_str.upper()} (hors {', '.join(excluded)})"
+    return grp_str.upper()
+
+
+def resolve_active_target_groups(
+    df: Optional[pd.DataFrame] = None,
+    target_groups: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
+    joueurs_lookup: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """
+    Retourne la liste des libellés de groupes et postes actifs qui seront effectivement
+    générés sur le PDF, en appliquant l'exclusion des postes isolés et la règle anti-vide.
+    """
+    if not target_groups:
+        return ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    isolated = list(isolated_positions or [])
+    active_labels = []
+
+    for idx, grp in enumerate(target_groups):
+        is_iso = (idx >= 3 and grp in isolated) or (grp in isolated and not is_grand_groupe(grp))
+        if df is not None and not df.empty:
+            df_sub = _filter_df_by_group(
+                df, grp, isolated_positions=isolated if not is_iso else None, is_isolated=is_iso
+            )
+            # Règle anti-vide : si une grande ligne est vide après exclusion, on l'ignore !
+            if not is_iso and is_grand_groupe(grp) and df_sub.empty:
+                continue
+            if is_iso and df_sub.empty and len(target_groups) > 1:
+                continue
+
+        disp = get_group_display_name(grp, isolated_positions=isolated, is_isolated=is_iso)
+        active_labels.append(disp)
+
+    return active_labels or target_groups
+
 _REGISTERED_JOUEURS_LOOKUP: Dict[str, str] = {}
 
 
@@ -1913,44 +1992,52 @@ def get_objectifs_for_category(
     return cfg.get("Tous les groupes", DEFAULT_OBJECTIFS_CONFIG["Tous les groupes"])
 
 
-def _filter_df_by_group(df: pd.DataFrame, grp: str) -> pd.DataFrame:
+def _filter_df_by_group(
+    df: pd.DataFrame,
+    grp: str,
+    isolated_positions: Optional[List[str]] = None,
+    is_isolated: bool = False,
+) -> pd.DataFrame:
     """
     Filtre un DataFrame de séance/semaine par groupe de poste ('5 de devant', '3ème Ligne',
     'Trois-quarts') OU par poste spécifique ('Pilier', 'Ailier', etc.).
+    Supporte l'exclusion dynamique des postes isolés (isolated_positions) sur les grandes lignes.
     """
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame()
 
     grp_str = str(grp or "").strip()
     grp_clean = _strip_accents_lower(grp_str)
+    lookup = _get_effective_joueurs_lookup()
+    col_pd = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
+    col_nm = "Nom ; Prénom" if "Nom ; Prénom" in df.columns else ("Player Name" if "Player Name" in df.columns else ("Nom" if "Nom" in df.columns else None))
+
+    # Cas 1 : Poste spécifique isolé ou demandé directement
+    if is_isolated or (grp_str in CANONICAL_9_POSTES and not is_grand_groupe(grp_str)):
+        if col_pd or col_nm:
+            mask = df.apply(
+                lambda r: normaliser_poste_specifique(
+                    r.get(col_pd, "") if col_pd else "",
+                    player_name=str(r.get(col_nm, "")) if col_nm else "",
+                    joueurs_lookup=lookup,
+                ) == grp_str,
+                axis=1,
+            )
+            return df[mask]
+        return pd.DataFrame()
 
     # Support spécifique des sous-postes de 3ème ligne si demandés explicitement
     if grp_clean in ["flanker", "troisieme ligne aile", "flankers"]:
-        col_p = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
-        if col_p:
-            mask = df[col_p].astype(str).str.lower().str.contains("flanker|troisieme ligne aile|troisième ligne aile")
+        if col_pd:
+            mask = df[col_pd].astype(str).str.lower().str.contains("flanker|troisieme ligne aile|troisième ligne aile")
             return df[mask]
     if grp_clean in ["numero 8", "n8", "troisieme ligne centre"]:
-        col_p = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
-        if col_p:
-            mask = df[col_p].astype(str).str.lower().str.contains("numero 8|numéro 8|n8|troisieme ligne centre|troisième ligne centre")
+        if col_pd:
+            mask = df[col_pd].astype(str).str.lower().str.contains("numero 8|numéro 8|n8|troisieme ligne centre|troisième ligne centre")
             return df[mask]
 
-    if grp_str in CANONICAL_9_POSTES:
-        lookup = _get_effective_joueurs_lookup()
-        col_pd = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
-        col_nm = "Nom ; Prénom" if "Nom ; Prénom" in df.columns else ("Player Name" if "Player Name" in df.columns else ("Nom" if "Nom" in df.columns else None))
-        mask = df.apply(
-            lambda r: normaliser_poste_specifique(
-                r.get(col_pd, "") if col_pd else "",
-                player_name=str(r.get(col_nm, "")) if col_nm else "",
-                joueurs_lookup=lookup,
-            ) == grp_str,
-            axis=1,
-        )
-        return df[mask]
-
-    grp_clean = grp_str.lower()
+    # Cas 2 : Grande ligne de poste
+    df_base = pd.DataFrame()
     if "Groupe" in df.columns:
         if grp_clean in ["5 de devant", "devant"]:
             mask = df["Groupe"].astype(str).str.strip().str.lower().isin(["5 de devant", "devant", "cinq de devant", "avants (5)"])
@@ -1960,12 +2047,9 @@ def _filter_df_by_group(df: pd.DataFrame, grp: str) -> pd.DataFrame:
             mask = df["Groupe"].astype(str).str.strip().str.lower().isin(["trois-quarts", "trois quarts", "arrières", "arrieres", "3/4"])
         else:
             mask = df["Groupe"].astype(str).str.strip().str.lower() == grp_clean
-        df_sub = df[mask]
-        if not df_sub.empty:
-            return df_sub
+        df_base = df[mask]
 
-    col_p = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
-    if col_p:
+    if df_base.empty and col_pd:
         if grp_clean in ["5 de devant", "devant"]:
             kw = ["pilier", "talonneur", "2ème ligne", "2eme ligne", "deuxième ligne", "première ligne", "5 de devant"]
         elif grp_clean in ["3ème ligne", "3eme ligne", "3e ligne"]:
@@ -1973,14 +2057,39 @@ def _filter_df_by_group(df: pd.DataFrame, grp: str) -> pd.DataFrame:
         else:
             kw = ["demi", "ouvreur", "ouverture", "mêlée", "melee", "centre", "ailier", "allier", "arrière", "arriere", "trois-quarts"]
         mask = df[col_p].astype(str).str.strip().str.lower().apply(lambda s: any(k in s for k in kw))
-        return df[mask]
+        df_base = df[mask]
 
-    return pd.DataFrame()
+    if df_base.empty and grp_str in CANONICAL_9_POSTES:
+        mask = df.apply(
+            lambda r: normaliser_poste_specifique(
+                r.get(col_pd, "") if col_pd else "",
+                player_name=str(r.get(col_nm, "")) if col_nm else "",
+                joueurs_lookup=lookup,
+            ) == grp_str,
+            axis=1,
+        )
+        df_base = df[mask]
+
+    # Application de l'exclusion des postes isolés pour cette grande ligne
+    if isolated_positions and not df_base.empty:
+        iso_clean = set(_strip_accents_lower(p) for p in isolated_positions)
+        mask_keep = df_base.apply(
+            lambda r: _strip_accents_lower(normaliser_poste_specifique(
+                r.get(col_pd, "") if col_pd else "",
+                player_name=str(r.get(col_nm, "")) if col_nm else "",
+                joueurs_lookup=lookup,
+            )) not in iso_clean,
+            axis=1,
+        )
+        df_base = df_base[mask_keep]
+
+    return df_base
 
 
 def calculer_metriques_groupes_seance(
     df_s: pd.DataFrame,
     categories: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Calcule les moyennes exactes par ligne de poste ou par poste spécifique pour le triptyque :
@@ -1994,8 +2103,10 @@ def calculer_metriques_groupes_seance(
     if df_s is None or not isinstance(df_s, pd.DataFrame) or df_s.empty:
         return res
 
+    isolated_set = set(isolated_positions or [])
     for grp in groupes:
-        df_sub = _filter_df_by_group(df_s, grp)
+        is_iso = grp in isolated_set and not is_grand_groupe(grp)
+        df_sub = _filter_df_by_group(df_s, grp, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
         n_p = len(df_sub)
         res[grp]["num_players"] = n_p
         if n_p == 0:
@@ -2212,6 +2323,7 @@ def recuperer_historique_seances_meme_jour(
     current_adversaire: str = "",
     current_rpe_stats: Optional[Dict[str, Any]] = None,
     categories: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extrait l'historique des N dernières séances enregistrées correspondant au même jour de la semaine
@@ -2260,6 +2372,7 @@ def recuperer_historique_seances_meme_jour(
         return df_rpe_cache
 
     j_lookup = _get_effective_joueurs_lookup()
+    isolated_set = set(isolated_positions or [])
 
     for w_info in saved_weeks:
         y = w_info["year"]
@@ -2335,11 +2448,12 @@ def recuperer_historique_seances_meme_jour(
                         week_num=w,
                     )
 
-                    g_metrics = calculer_metriques_groupes_seance(df_s, categories=all_cats)
+                    g_metrics = calculer_metriques_groupes_seance(df_s, categories=all_cats, isolated_positions=isolated_positions)
                     r_stats_s = s.get("rpe_stats", {}) or {}
                     by_p_s = r_stats_s.get("by_poste") if isinstance(r_stats_s, dict) else {}
                     for grp_key in all_cats:
-                        df_group = _filter_df_by_group(df_s, grp_key)
+                        is_iso = grp_key in isolated_set and not is_grand_groupe(grp_key)
+                        df_group = _filter_df_by_group(df_s, grp_key, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
                         rpe_moyen = None
                         if not df_group.empty and "RPE" in df_group.columns:
                             s_rpe = pd.to_numeric(df_group["RPE"], errors="coerce").dropna()
@@ -2397,10 +2511,11 @@ def recuperer_historique_seances_meme_jour(
         week_num=curr_iso_week,
     )
 
-    curr_g_metrics = calculer_metriques_groupes_seance(df_current, categories=all_cats)
+    curr_g_metrics = calculer_metriques_groupes_seance(df_current, categories=all_cats, isolated_positions=isolated_positions)
     curr_by_p = current_rpe_stats.get("by_poste") if isinstance(current_rpe_stats, dict) else {}
     for grp_key in all_cats:
-        df_group = _filter_df_by_group(df_current, grp_key)
+        is_iso = grp_key in isolated_set and not is_grand_groupe(grp_key)
+        df_group = _filter_df_by_group(df_current, grp_key, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
         rpe_moyen = None
         if not df_group.empty and "RPE" in df_group.columns:
             s_r = pd.to_numeric(df_group["RPE"], errors="coerce").dropna()
@@ -2452,6 +2567,7 @@ def _calculate_rpe_groups_for_week(
     sessions_dict: Optional[Dict[str, Any]] = None,
     week_data: Optional[Dict[str, Any]] = None,
     categories: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> Dict[str, Optional[float]]:
     """
     Calcule les moyennes RPE de la semaine pour l'équipe, les 3 groupes de postes
@@ -2485,9 +2601,11 @@ def _calculate_rpe_groups_for_week(
         r_all = pd.to_numeric(df_week["RPE"], errors="coerce").dropna()
         if not r_all.empty and res["Total"] is None:
             res["Total"] = round(float(r_all.mean()), 1)
+        isolated_set = set(isolated_positions or [])
         for cat_k in ["5 de devant", "3ème Ligne", "Trois-quarts"] + cats_extra:
             if res.get(cat_k) is None:
-                df_sub = _filter_df_by_group(df_week, cat_k)
+                is_iso = cat_k in isolated_set and not is_grand_groupe(cat_k)
+                df_sub = _filter_df_by_group(df_week, cat_k, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
                 if not df_sub.empty and "RPE" in df_sub.columns:
                     sub_r = pd.to_numeric(df_sub["RPE"], errors="coerce").dropna()
                     if not sub_r.empty:
@@ -2533,6 +2651,7 @@ def recuperer_historique_semaines(
     n_max: int = 4,
     categories: Optional[List[str]] = None,
     synthese_curr: Optional[Dict[str, Any]] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extrait l'historique des N dernières semaines enregistrées (semaine en cours incluse).
@@ -2602,9 +2721,9 @@ def recuperer_historique_semaines(
             short_str = f"S{w:02d}"
             metrics_w = calculer_moyennes_seance(df_w)
             rpe_grp_w = _calculate_rpe_groups_for_week(
-                df_w, w_data.get("sessions", {}), week_data=w_data, categories=all_cats
+                df_w, w_data.get("sessions", {}), week_data=w_data, categories=all_cats, isolated_positions=isolated_positions
             )
-            g_metrics_w = calculer_metriques_groupes_seance(df_w, categories=all_cats)
+            g_metrics_w = calculer_metriques_groupes_seance(df_w, categories=all_cats, isolated_positions=isolated_positions)
             for cat_k in all_cats:
                 if g_metrics_w.get(cat_k, {}).get("rpe") is None and rpe_grp_w.get(cat_k) is not None:
                     g_metrics_w.setdefault(cat_k, {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0})
@@ -2660,8 +2779,9 @@ def recuperer_historique_semaines(
         synthese_curr if isinstance(synthese_curr, dict) else curr_w_data.get("sessions", {}),
         week_data=curr_w_data,
         categories=all_cats,
+        isolated_positions=isolated_positions,
     )
-    curr_g_metrics = calculer_metriques_groupes_seance(df_curr_hebdo, categories=all_cats)
+    curr_g_metrics = calculer_metriques_groupes_seance(df_curr_hebdo, categories=all_cats, isolated_positions=isolated_positions)
     for cat_k in all_cats:
         if curr_g_metrics.get(cat_k, {}).get("rpe") is None and curr_rpe_grp.get(cat_k) is not None:
             curr_g_metrics.setdefault(cat_k, {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0})
@@ -2836,11 +2956,12 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
     items_comparatif: List[Dict[str, Any]],
     target_day: str = "Vendredi",
     categories_list: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> io.BytesIO:
     """
     Génère un triptyque graphique (jusqu'à 3 panneaux côte à côte) officiel Staff RCA :
     - Par défaut : 5 de devant | 3ème Ligne | Trois-quarts (3/4)
-    - En mode détaillé par poste : tout lot de 1 à 3 postes (ex: Pilier | Talonneur | 2ème ligne).
+    - En mode détaillé ou sur-mesure : tout lot de 1 à 3 postes/lignes (ex: Pilier | Talonneur | 2ème ligne).
     Histogramme à barres groupées :
     - Volume (m) : Bleu (#1E88E5) sur axe Y gauche
     - HSR (> 20 km/h) (m) : Rouge (#C62828) sur axe Y gauche
@@ -2848,14 +2969,14 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
     - RPE (1-10) : Orange (#E67E22) sur axe Y droit twinx (échelle 1-10), ou 'NR' gris uniquement si absent.
     Une seule légende horizontale centrée en haut sous le bandeau.
     """
-    default_titles = {
-        "5 de devant": "5 DE DEVANT",
-        "3ème Ligne": "3ÈME LIGNE",
-        "Trois-quarts": "TROIS-QUARTS (3/4)",
-    }
     cats = list(categories_list) if categories_list else ["5 de devant", "3ème Ligne", "Trois-quarts"]
     cats = cats[:3]
-    group_defs = [(c, default_titles.get(c, str(c).upper())) for c in cats]
+    isolated_set = set(isolated_positions or [])
+    group_defs = []
+    for c in cats:
+        is_iso = c in isolated_set and not is_grand_groupe(c)
+        title = get_group_display_name(c, isolated_positions=isolated_positions, is_isolated=is_iso)
+        group_defs.append((c, title))
 
     n_panels = max(1, min(3, len(group_defs)))
     fig, axes_arr = plt.subplots(1, n_panels, figsize=(14.5, 6.8), dpi=130)
@@ -3004,6 +3125,7 @@ def render_comparatif_triptyque_seances_pdf_page(
     df_current: Optional[pd.DataFrame] = None,
     categories_list: Optional[List[str]] = None,
     info_banner_text: Optional[str] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> None:
     """
     Rend une page de comparaison historique au format triptyque Staff RCA (3 panneaux côte à côte) :
@@ -3017,6 +3139,7 @@ def render_comparatif_triptyque_seances_pdf_page(
         return
 
     cats = list(categories_list) if categories_list else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    isolated_set = set(isolated_positions or [])
 
     # Garantie absolue d'injection du RPE par catégorie
     for it in items_comparatif:
@@ -3032,7 +3155,8 @@ def render_comparatif_triptyque_seances_pdf_page(
                     df_src = pd.DataFrame(it["players_data"])
 
                 if df_src is not None and not df_src.empty:
-                    df_group = _filter_df_by_group(df_src, grp)
+                    is_iso = grp in isolated_set and not is_grand_groupe(grp)
+                    df_group = _filter_df_by_group(df_src, grp, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
                     if not df_group.empty and "RPE" in df_group.columns:
                         s_rpe = pd.to_numeric(df_group["RPE"], errors="coerce").dropna()
                         rpe_moyen = s_rpe.mean() if not s_rpe.empty else None
@@ -3060,6 +3184,7 @@ def render_comparatif_triptyque_seances_pdf_page(
             items_comparatif=items_comparatif,
             target_day=target_day,
             categories_list=cats,
+            isolated_positions=isolated_positions,
         )
         pdf.image(buf_chart, x=12.0, y=y_chart, w=273.0, h=h_chart)
     except Exception as e:
@@ -3075,16 +3200,18 @@ def render_comparatif_triptyque_pdf_pages(
     week_num: Optional[int] = None,
     df_current: Optional[pd.DataFrame] = None,
     info_banner_text: Optional[str] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> None:
     """
     Pagine automatiquement la section comparative en triptyques de 3 panneaux par page
-    (1 page en mode Lignes, jusqu'à 3 pages en mode 9 Postes).
+    (1 page en mode Lignes, jusqu'à 3 pages en mode 9 Postes ou Sur-mesure).
     """
     cats = list(categories_list) if categories_list else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    isolated_set = set(isolated_positions or [])
     chunks = [cats[i : i + 3] for i in range(0, len(cats), 3)]
     for ch_idx, chunk in enumerate(chunks):
         if len(chunks) > 1:
-            chunk_lbl = " / ".join(c.upper() for c in chunk)
+            chunk_lbl = " / ".join(get_group_display_name(c, isolated_positions=isolated_positions, is_isolated=(c in isolated_set and not is_grand_groupe(c))) for c in chunk)
             pdf.current_subtitle = f"{subtitle_base} ({ch_idx + 1}/{len(chunks)} — {chunk_lbl})"
         else:
             pdf.current_subtitle = subtitle_base
@@ -3097,6 +3224,7 @@ def render_comparatif_triptyque_pdf_pages(
             df_current=df_current,
             categories_list=chunk,
             info_banner_text=info_banner_text,
+            isolated_positions=isolated_positions,
         )
 
 
@@ -3107,6 +3235,7 @@ def render_comparatif_historique_pdf_page(
     target_day: str = "",
     categories_list: Optional[List[str]] = None,
     df_current: Optional[pd.DataFrame] = None,
+    isolated_positions: Optional[List[str]] = None,
 ) -> None:
     """
     Rend la page comparative multi-semaines avec le nouveau triptyque visuel unifié
@@ -3123,6 +3252,7 @@ def render_comparatif_historique_pdf_page(
         df_current=df_current,
         categories_list=categories_list,
         info_banner_text=info_txt,
+        isolated_positions=isolated_positions,
     )
 
 
@@ -3935,6 +4065,7 @@ def generate_weekly_pdf_report(
     nb_comparatif: int = 4,
     granularity_mode: str = "Par ligne de poste",
     target_groups: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -3945,6 +4076,9 @@ def generate_weekly_pdf_report(
       puis Page 9 Comparative Multi-Semaines.
     - Mode 'Détaillé par poste' (9 postes actifs) :
       Page 1 + Page 2 (Podiums Généraux) + 2 pages par poste actif + pages comparatives triptyques (3 postes/page).
+    - Mode 'Sur mesure / Personnalisé (Mixte)' :
+      Lignes classiques amputées des postes isolés + pages dédiées pour chaque poste isolé.
+      Règle anti-vide : omission totale des lignes vides sans joueur.
     """
     if df_hebdo is None:
         df_hebdo = kwargs.get("df_agg", pd.DataFrame())
@@ -3979,6 +4113,7 @@ def generate_weekly_pdf_report(
     is_detailed = ("detaille" in g_low) or ("9 poste" in g_low)
 
     target_groups_arg = kwargs.get("target_groups", target_groups)
+    isolated_arg = kwargs.get("isolated_positions", isolated_positions)
     if target_groups_arg:
         categories = list(target_groups_arg)
         is_detailed = any(not is_grand_groupe(c) for c in categories)
@@ -3989,13 +4124,42 @@ def generate_weekly_pdf_report(
     else:
         categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
+    # Construction dynamique des éléments à afficher avec exclusion et règle anti-vide
+    items_to_render = []
+    isolated_set = set(isolated_arg or [])
+    for idx, grp in enumerate(categories):
+        is_iso = (idx >= 3 and grp in isolated_set) or (grp in isolated_set and not is_grand_groupe(grp))
+        df_sub = _filter_df_by_group(
+            df_hebdo, grp, isolated_positions=isolated_arg if not is_iso else None, is_isolated=is_iso
+        )
+        # Règle anti-vide : si une grande ligne se retrouve vide après exclusion, on saute la page !
+        if not is_iso and is_grand_groupe(grp) and df_sub.empty:
+            continue
+        if is_iso and df_sub.empty and len(categories) > 1:
+            continue
+        disp_name = get_group_display_name(grp, isolated_positions=isolated_arg, is_isolated=is_iso)
+        items_to_render.append({
+            "key": grp,
+            "display_name": disp_name,
+            "is_isolated": is_iso,
+            "df_sub": df_sub,
+        })
+
+    if not items_to_render:
+        items_to_render = [{
+            "key": c,
+            "display_name": get_group_display_name(c, isolated_positions=isolated_arg),
+            "is_isolated": False,
+            "df_sub": _filter_df_by_group(df_hebdo, c),
+        } for c in categories]
+
     week_label = f"Semaine {week_num:02d} - {year}"
     raw_dates = [format_readable_date(s.get("date", "")) for s in synthese_dict.values() if isinstance(s, dict) and s.get("date")]
     raw_dates = [d for d in raw_dates if d]
     dates_str = f"Du {raw_dates[0]} au {raw_dates[-1]}" if len(raw_dates) >= 2 else (raw_dates[0] if raw_dates else "")
 
-    n_comp_pages = ((len(categories) + 2) // 3) if inclure_comparatif else 0
-    total_pages_calc = 2 + 2 * len(categories) + n_comp_pages
+    n_comp_pages = ((len(items_to_render) + 2) // 3) if inclure_comparatif else 0
+    total_pages_calc = 2 + 2 * len(items_to_render) + n_comp_pages
     pdf = RCAWeeklyPDFReport(week_label=week_label, dates_label=dates_str, total_pages=total_pages_calc)
 
     if df_hebdo is None or df_hebdo.empty:
@@ -4055,7 +4219,8 @@ def generate_weekly_pdf_report(
         df_hebdo,
         sessions_dict=w_data_curr.get("sessions") if isinstance(w_data_curr, dict) and w_data_curr.get("sessions") else synthese_dict,
         week_data=w_data_curr,
-        categories=categories,
+        categories=[it["key"] for it in items_to_render],
+        isolated_positions=isolated_arg,
     )
 
     # =========================================================================
@@ -4221,14 +4386,17 @@ def generate_weekly_pdf_report(
     active_cfg = objectifs_config or charger_objectifs_config()
     multiplier = max(nb_seances, 1)
 
-    for grp in categories:
-        df_sub = _filter_df_by_group(df_hebdo, grp)
+    for item in items_to_render:
+        grp = item["key"]
+        disp_name = item["display_name"]
+        is_iso = item["is_isolated"]
+        df_sub = item["df_sub"]
         n_players_grp = len(df_sub)
 
         # ---------------------------------------------------------------------
         # PAGE A : RETOUR HEBDOMADAIRE — OBJECTIFS, JAUGES & TABLEAU JOUEURS
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"RETOUR HEBDOMADAIRE — {grp.upper()} ({n_players_grp} JOUEUR{'S' if n_players_grp > 1 else ''})"
+        pdf.current_subtitle = f"RETOUR HEBDOMADAIRE — {disp_name} ({n_players_grp} JOUEUR{'S' if n_players_grp > 1 else ''})"
         pdf.add_page()
         pdf.set_y(19.5)
 
@@ -4295,10 +4463,10 @@ def generate_weekly_pdf_report(
         pdf.set_draw_color(31, 78, 121)
         pdf.set_font("Helvetica", "B", 7.8)
         pdf.set_text_color(255, 255, 255)
-        grp_is_line = is_grand_groupe(grp, is_detailed_context=is_detailed)
+        grp_is_line = not is_iso and is_grand_groupe(grp, is_detailed_context=is_detailed)
         cat_label_prefix = "LIGNE" if grp_is_line else "POSTE"
         headers_tbl = [
-            (col_w_grp, f"{cat_label_prefix} : {grp.upper()}", "L"),
+            (col_w_grp, f"{cat_label_prefix} : {disp_name}", "L"),
             (col_w_num, "DISTANCE TOTALE", "C"),
             (col_w_num, "DISTANCE HSR (Z3)", "C"),
             (col_w_num, "DISTANCE VHSR (Sprint)", "C"),
@@ -4344,18 +4512,18 @@ def generate_weekly_pdf_report(
         # 2. 4 Graphiques comparatifs 2x2
         try:
             buf_jauges = generer_graphique_hebdo_jauges_matplotlib(
-                grp, df_sub, nb_seances=nb_seances, objectifs_config=active_cfg, layout="2x2"
+                disp_name, df_sub, nb_seances=nb_seances, objectifs_config=active_cfg, layout="2x2"
             )
             pdf.image(buf_jauges, x=12, y=38.0, w=273, h=60.0)
         except Exception as e:
-            print(f"Erreur graphique jauges hebdo PDF pour {grp} : {e}")
+            print(f"Erreur graphique jauges hebdo PDF pour {disp_name} : {e}")
 
         # 3. Tableau individuel des statistiques cumulées
         y_sec_tbl = 100.0
         pdf.set_xy(12, y_sec_tbl)
         pdf.set_font("Helvetica", "B", 8.8)
         pdf.set_text_color(11, 25, 44)
-        pdf.cell(273, 4.0, safe_latin1(f"STATISTIQUES INDIVIDUELLES CUMULÉES SUR LA SEMAINE — {grp.upper()} :"), align="L")
+        pdf.cell(273, 4.0, safe_latin1(f"STATISTIQUES INDIVIDUELLES CUMULÉES SUR LA SEMAINE — {disp_name} :"), align="L")
 
         y_tbl_hdr = y_sec_tbl + 4.4
         pdf.set_xy(12, y_tbl_hdr)
@@ -4437,14 +4605,14 @@ def generate_weekly_pdf_report(
         # ---------------------------------------------------------------------
         # PAGE B : PODIUMS HEBDOMADAIRES — 3 PREMIERS & 3 DERNIERS SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"PODIUMS HEBDOMADAIRES — {'LIGNE' if grp_is_line else 'POSTE'} {grp.upper()}"
+        pdf.current_subtitle = f"PODIUMS HEBDOMADAIRES — {cat_label_prefix} {disp_name}"
         pdf.add_page()
-        podium_grp = generer_podiums_hebdomadaires(df_hebdo, groupe=grp)
+        podium_grp = generer_podiums_hebdomadaires(df_sub)
         sub_map_grp = calculer_sous_titres_podium(df_sub, label_prefix="Moyenne")
         _render_podium_page_aere(
             pdf=pdf,
             podium_data=podium_grp,
-            group_name=grp,
+            group_name=disp_name,
             subtitle_map=sub_map_grp,
         )
 
@@ -4452,20 +4620,23 @@ def generate_weekly_pdf_report(
     # DERNIÈRE(S) PAGE(S) : ANALYSE COMPARATIVE HISTORIQUE (TRIPTYQUE)
     # =========================================================================
     if inclure_comparatif:
+        active_comp_categories = [it["key"] for it in items_to_render]
         items_comp = recuperer_historique_semaines(
             year_curr=year,
             week_curr=week_num,
             df_curr_hebdo=df_hebdo,
             n_max=nb_comparatif,
-            categories=categories,
+            categories=active_comp_categories,
             synthese_curr=synthese_dict,
+            isolated_positions=isolated_arg,
         )
         render_comparatif_triptyque_pdf_pages(
             pdf=pdf,
             items_comparatif=items_comp,
             subtitle_base="ANALYSE COMPARATIVE HISTORIQUE — MULTI-SEMAINES",
-            categories_list=categories,
+            categories_list=active_comp_categories,
             df_current=df_hebdo,
+            isolated_positions=isolated_arg,
         )
 
     return bytes(pdf.output())

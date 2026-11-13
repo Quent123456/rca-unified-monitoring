@@ -526,6 +526,7 @@ def generer_rapport_pdf_coachs(
     rpe_stats: Optional[Dict[str, Any]] = None,
     granularity_mode: str = "Par ligne de poste",
     target_groups: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -820,6 +821,7 @@ def generer_rapport_pdf_coachs(
     # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (3 GROUPES OU 9 POSTES ACTIFS OU SUR MESURE)
     # =========================================================================
     target_groups_arg = kwargs.get("target_groups", target_groups)
+    isolated_arg = kwargs.get("isolated_positions", isolated_positions)
     if target_groups_arg:
         groupes_pages = list(target_groups_arg)
         is_detailed = any(not weekly_memory.is_grand_groupe(c) for c in groupes_pages) if hasattr(weekly_memory, "is_grand_groupe") else True
@@ -830,18 +832,51 @@ def generer_rapport_pdf_coachs(
     else:
         groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
-    for grp in groupes_pages:
-        grp_is_line = weekly_memory.is_grand_groupe(grp, is_detailed_context=is_detailed) if hasattr(weekly_memory, "is_grand_groupe") else (grp in ["5 de devant", "3ème Ligne", "Trois-quarts"])
+    # Construction dynamique des éléments à afficher avec exclusion et règle anti-vide
+    items_to_render = []
+    isolated_set = set(isolated_arg or [])
+    for idx, grp in enumerate(groupes_pages):
+        is_iso = (idx >= 3 and grp in isolated_set) or (grp in isolated_set and not (weekly_memory.is_grand_groupe(grp) if hasattr(weekly_memory, "is_grand_groupe") else False))
+        df_sub = weekly_memory._filter_df_by_group(
+            df_indiv, grp, isolated_positions=isolated_arg if not is_iso else None, is_isolated=is_iso
+        )
+        # Règle anti-vide : si une grande ligne se retrouve vide après exclusion, on saute la page !
+        if not is_iso and (weekly_memory.is_grand_groupe(grp) if hasattr(weekly_memory, "is_grand_groupe") else False) and df_sub.empty:
+            continue
+        if is_iso and df_sub.empty and len(groupes_pages) > 1:
+            continue
+        disp_name = weekly_memory.get_group_display_name(grp, isolated_positions=isolated_arg, is_isolated=is_iso) if hasattr(weekly_memory, "get_group_display_name") else grp.upper()
+        items_to_render.append({
+            "key": grp,
+            "display_name": disp_name,
+            "is_isolated": is_iso,
+            "df_sub": df_sub,
+        })
+
+    if not items_to_render:
+        items_to_render = [{
+            "key": c,
+            "display_name": weekly_memory.get_group_display_name(c, isolated_positions=isolated_arg) if hasattr(weekly_memory, "get_group_display_name") else c.upper(),
+            "is_isolated": False,
+            "df_sub": weekly_memory._filter_df_by_group(df_indiv, c),
+        } for c in groupes_pages]
+
+    for item in items_to_render:
+        grp = item["key"]
+        disp_name = item["display_name"]
+        is_iso = item["is_isolated"]
+        df_sub = item["df_sub"]
+
+        grp_is_line = not is_iso and (weekly_memory.is_grand_groupe(grp, is_detailed_context=is_detailed) if hasattr(weekly_memory, "is_grand_groupe") else (grp in ["5 de devant", "3ème Ligne", "Trois-quarts"]))
         cat_prefix = "LIGNE" if grp_is_line else "POSTE"
-        pdf.current_subtitle = f"RETOUR JOURNÉE — {grp.upper()}"
+        pdf.current_subtitle = f"RETOUR JOURNÉE — {disp_name}"
         pdf.add_page()
 
         if config_objectifs is None:
             config_objectifs = get_active_objectifs_config()
         cfg_targets = weekly_memory.get_objectifs_for_category(config_objectifs, grp)
-        df_sub = weekly_memory._filter_df_by_group(df_indiv, grp)
 
-        if (not is_detailed) and moyennes_groupes and grp in moyennes_groupes:
+        if (not is_detailed) and (not is_iso) and moyennes_groupes and grp in moyennes_groupes:
             grp_stats = moyennes_groupes[grp]
         elif not df_sub.empty:
             hsr_m_val = (
@@ -910,7 +945,7 @@ def generer_rapport_pdf_coachs(
         pdf.set_text_color(255, 255, 255)
 
         headers = [
-            (col_w_grp, f"{cat_prefix} : {grp.upper()}", "L"),
+            (col_w_grp, f"{cat_prefix} : {disp_name}", "L"),
             (col_w_num, "DISTANCE TOTALE", "C"),
             (col_w_num, "DISTANCE HSR (Z3)", "C"),
             (col_w_num, "DISTANCE VHSR (Sprint)", "C"),
@@ -984,7 +1019,7 @@ def generer_rapport_pdf_coachs(
             "Obj. VHSR": (obj_vhsr, real_vhsr),
             "Obj. ACC/DEC": (obj_acc, real_acc),
         }
-        buf_jauges = generer_graphique_jauges_groupe_matplotlib(grp, grp_metrics)
+        buf_jauges = generer_graphique_jauges_groupe_matplotlib(disp_name, grp_metrics)
         chart_y = 43.0
         chart_w = 273.0
         chart_h = 146.0
@@ -993,7 +1028,7 @@ def generer_rapport_pdf_coachs(
         # ---------------------------------------------------------------------
         # PAGE B : PODIUMS 3 PREMIERS + 3 DERNIERS VIGILANCE SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"PODIUMS DE LA {'LIGNE' if grp_is_line else 'CATÉGORIE'} — {grp.upper()}"
+        pdf.current_subtitle = f"PODIUMS DE LA {'LIGNE' if grp_is_line else 'CATÉGORIE'} — {disp_name}"
         pdf.add_page()
 
         podium_grp = generer_podium_dynamique(df_sub)
@@ -1002,7 +1037,7 @@ def generer_rapport_pdf_coachs(
         _render_podium_page_aere(
             pdf=pdf,
             podium_data=podium_grp,
-            group_name=grp,
+            group_name=disp_name,
             subtitle_map=sub_map,
         )
 
@@ -1013,6 +1048,7 @@ def generer_rapport_pdf_coachs(
         target_day = weekly_memory.detect_day_of_week(date_seance) or "Vendredi"
         dt_curr = weekly_memory.parse_session_date(date_seance)
         curr_week = dt_curr.isocalendar()[1] if dt_curr else 45
+        active_comp_categories = [it["key"] for it in items_to_render]
         items_comp = weekly_memory.recuperer_historique_seances_meme_jour(
             session_date_or_day=date_seance,
             df_current=df_indiv,
@@ -1020,52 +1056,56 @@ def generer_rapport_pdf_coachs(
             current_notes_or_tag=synthese_note or "",
             current_adversaire=adversaire,
             current_rpe_stats=rpe_stats,
-            categories=groupes_pages,
+            categories=active_comp_categories,
+            isolated_positions=isolated_arg,
         )
 
         for it in items_comp:
             it_g_metrics = it.setdefault("group_metrics", {})
             if it.get("is_current", False):
-                for grp in groupes_pages:
-                    df_group = weekly_memory._filter_df_by_group(df_indiv, grp)
+                for grp_k in active_comp_categories:
+                    is_k_iso = grp_k in isolated_set and not (weekly_memory.is_grand_groupe(grp_k) if hasattr(weekly_memory, "is_grand_groupe") else False)
+                    df_group = weekly_memory._filter_df_by_group(df_indiv, grp_k, isolated_positions=isolated_arg if not is_k_iso else None, is_isolated=is_k_iso)
                     s_rpe = pd.to_numeric(df_group['RPE'], errors='coerce').dropna() if "RPE" in df_group.columns else pd.Series(dtype=float)
                     if not s_rpe.empty:
-                        it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe.mean()), 1)
-                    elif it_g_metrics.get(grp, {}).get("rpe") is None and rpe_stats:
+                        it_g_metrics.setdefault(grp_k, {})["rpe"] = round(float(s_rpe.mean()), 1)
+                    elif it_g_metrics.get(grp_k, {}).get("rpe") is None and rpe_stats:
                         by_p = rpe_stats.get("by_poste") if isinstance(rpe_stats, dict) else {}
-                        v_r = rpe_stats.get(grp) or (by_p.get(grp) if isinstance(by_p, dict) else None)
+                        v_r = rpe_stats.get(grp_k) or (by_p.get(grp_k) if isinstance(by_p, dict) else None)
                         if v_r is not None and float(v_r) > 0:
-                            it_g_metrics.setdefault(grp, {})["rpe"] = round(float(v_r), 1)
+                            it_g_metrics.setdefault(grp_k, {})["rpe"] = round(float(v_r), 1)
             else:
-                for grp in groupes_pages:
-                    if it_g_metrics.get(grp, {}).get("rpe") is None:
+                for grp_k in active_comp_categories:
+                    if it_g_metrics.get(grp_k, {}).get("rpe") is None:
                         df_grp_hist = None
                         if "players_data" in it and it["players_data"]:
                             df_p = pd.DataFrame(it["players_data"])
-                            df_grp_hist = weekly_memory._filter_df_by_group(df_p, grp)
+                            is_k_iso = grp_k in isolated_set and not (weekly_memory.is_grand_groupe(grp_k) if hasattr(weekly_memory, "is_grand_groupe") else False)
+                            df_grp_hist = weekly_memory._filter_df_by_group(df_p, grp_k, isolated_positions=isolated_arg if not is_k_iso else None, is_isolated=is_k_iso)
                         if df_grp_hist is not None and not df_grp_hist.empty and "RPE" in df_grp_hist.columns:
                             s_rpe_h = pd.to_numeric(df_grp_hist['RPE'], errors='coerce').dropna()
                             if not s_rpe_h.empty:
-                                it_g_metrics.setdefault(grp, {})["rpe"] = round(float(s_rpe_h.mean()), 1)
-                        if it_g_metrics.get(grp, {}).get("rpe") is None:
+                                it_g_metrics.setdefault(grp_k, {})["rpe"] = round(float(s_rpe_h.mean()), 1)
+                        if it_g_metrics.get(grp_k, {}).get("rpe") is None:
                             r_stats_it = it.get("rpe_stats") or {}
                             by_p_it = r_stats_it.get("by_poste") if isinstance(r_stats_it, dict) else {}
                             v_r = (
-                                r_stats_it.get(grp)
-                                or (by_p_it.get(grp) if isinstance(by_p_it, dict) else None)
-                                or r_stats_it.get(f"rpe_moyen_{grp.lower().replace(' ', '_').replace('è', 'e')}")
+                                r_stats_it.get(grp_k)
+                                or (by_p_it.get(grp_k) if isinstance(by_p_it, dict) else None)
+                                or r_stats_it.get(f"rpe_moyen_{grp_k.lower().replace(' ', '_').replace('è', 'e')}")
                             )
                             if v_r is not None and float(v_r) > 0:
-                                it_g_metrics.setdefault(grp, {})["rpe"] = round(float(v_r), 1)
+                                it_g_metrics.setdefault(grp_k, {})["rpe"] = round(float(v_r), 1)
 
         weekly_memory.render_comparatif_triptyque_pdf_pages(
             pdf=pdf,
             items_comparatif=items_comp,
             subtitle_base=f"RETOUR JOURNÉE — COMPARAISON AVEC LES DERNIERS {target_day.upper()}S (SEMAINE {curr_week})",
-            categories_list=groupes_pages,
+            categories_list=active_comp_categories,
             target_day=target_day,
             week_num=curr_week,
             df_current=df_indiv,
+            isolated_positions=isolated_arg,
         )
 
     return bytes(pdf.output())
