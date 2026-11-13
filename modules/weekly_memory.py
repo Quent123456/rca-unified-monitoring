@@ -1280,27 +1280,31 @@ def generer_graphique_hebdo_jauges_matplotlib(
 
     # Calcul des réalisés moyens par joueur du groupe sur la semaine
     if not df_grp.empty:
-        try:
-            val_dist = float(pd.to_numeric(df_grp.get("Distance Totale (m)", df_grp.get("Distance Totale (km)", 0) * 1000.0), errors="coerce").mean())
-        except Exception:
-            val_dist = 0.0
-        try:
-            val_hsr = float(pd.to_numeric(df_grp.get("HSR Z3 (m)", df_grp.get("Haute intensité (m)", 0)), errors="coerce").mean())
-        except Exception:
-            val_hsr = 0.0
-        try:
-            val_vhsr = float(pd.to_numeric(df_grp.get("Distance Sprint VHSR (m)", df_grp.get("VHSR (m)", 0)), errors="coerce").mean())
-        except Exception:
-            val_vhsr = 0.0
-        try:
-            val_acc = float(pd.to_numeric(df_grp.get("Accel/Dec total", df_grp.get("Accel/Dec", 0)), errors="coerce").mean())
-        except Exception:
-            val_acc = 0.0
+        def _get_mean(df_m: pd.DataFrame, candidates: List[str], mult: float = 1.0) -> float:
+            for col in candidates:
+                if col in df_m.columns:
+                    s = pd.to_numeric(df_m[col], errors="coerce").dropna()
+                    if not s.empty:
+                        return float(s.mean() * mult)
+            return 0.0
+
+        val_dist = _get_mean(df_grp, ["Distance Totale (m)", "Distance (m)"])
+        if val_dist == 0.0:
+            val_dist = _get_mean(df_grp, ["Distance Totale (km)", "Distance (km)"], mult=1000.0)
+
+        val_hsr = _get_mean(df_grp, ["HSR Z3 (m)", "Haute intensité (m)", "HSR_m", "Distance haute intensité (m)"])
+        if val_hsr == 0.0:
+            val_hsr = _get_mean(df_grp, ["Distance in Speed Zone 3  (km)"], mult=1000.0)
+
+        val_vhsr = _get_mean(df_grp, ["Distance Sprint VHSR (m)", "VHSR (m)", "Sprint (m)"])
+        if val_vhsr == 0.0 and "Distance in Speed Zone 4  (km)" in df_grp.columns and "Distance in Speed Zone 5  (km)" in df_grp.columns:
+            s4 = pd.to_numeric(df_grp["Distance in Speed Zone 4  (km)"], errors="coerce").fillna(0.0)
+            s5 = pd.to_numeric(df_grp["Distance in Speed Zone 5  (km)"], errors="coerce").fillna(0.0)
+            val_vhsr = float((s4 + s5).mean() * 1000.0)
+
+        val_acc = _get_mean(df_grp, ["Accel/Dec total", "Accel/Dec", "ACC/DEC"])
     else:
-        val_dist = 0.0
-        val_hsr = 0.0
-        val_vhsr = 0.0
-        val_acc = 0.0
+        val_dist = val_hsr = val_vhsr = val_acc = 0.0
 
     val_dist = 0.0 if (val_dist is None or np.isnan(val_dist)) else val_dist
     val_hsr = 0.0 if (val_hsr is None or np.isnan(val_hsr)) else val_hsr
@@ -1699,12 +1703,88 @@ POSTE_TO_GROUPE_MAP: Dict[str, str] = {
     "Talonneur": "5 de devant",
     "2ème ligne": "5 de devant",
     "3ème ligne": "3ème Ligne",
+    "Flanker": "3ème Ligne",
+    "Numéro 8": "3ème Ligne",
+    "Numero 8": "3ème Ligne",
     "Demi de mêlée": "Trois-quarts",
     "Demi d'ouverture": "Trois-quarts",
     "Centre": "Trois-quarts",
     "Ailier": "Trois-quarts",
     "Arrière": "Trois-quarts",
 }
+
+
+def is_grand_groupe(category: str, is_detailed_context: bool = False) -> bool:
+    """
+    Détermine si une catégorie correspond à une grande ligne (5 de devant, 3ème Ligne, Trois-quarts)
+    ou à un poste individuel / spécifique (Pilier, Talonneur, Demi de mêlée, etc.).
+    """
+    c_norm = _strip_accents_lower(str(category or "")).strip()
+    if c_norm in ("5 de devant", "cinq de devant", "devant", "avants", "trois quarts", "trois-quarts", "3 4", "arrieres", "arrières"):
+        return True
+    if c_norm in ("3eme ligne", "3e ligne", "troisieme ligne", "3ème ligne"):
+        return not is_detailed_context
+    return False
+
+
+def build_custom_target_groups(
+    choice_5: str,
+    choice_3: str,
+    choice_tq: str,
+    df: Optional[pd.DataFrame] = None,
+    only_active: bool = False,
+    joueurs_lookup: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """
+    Construit la liste dynamique `target_groups` à partir des sélections de l'UI :
+    - 5 de devant : 'Ensemble (1 groupe)' -> ['5 de devant']
+                    'Séparés (Pilier, Talonneur, 2ème ligne)' -> ['Pilier', 'Talonneur', '2ème ligne']
+    - 3ème ligne : 'Ensemble (1 groupe)' -> ['3ème ligne']
+                   'Séparés (Flanker, Numéro 8)' -> ['Flanker', 'Numéro 8'] si présents, sinon ['3ème ligne']
+    - Trois-quarts : 'Ensemble (1 groupe)' -> ['Trois-quarts']
+                     'Séparés (Demis, Centres, Ailiers, Arrières)' -> ['Demi de mêlée', "Demi d'ouverture", 'Centre', 'Ailier', 'Arrière']
+    """
+    groups: List[str] = []
+
+    # 1. 5 de devant
+    c5 = str(choice_5 or "").lower()
+    if "séparé" in c5 or "separe" in c5:
+        groups.extend(["Pilier", "Talonneur", "2ème ligne"])
+    else:
+        groups.append("5 de devant")
+
+    # 2. 3ème ligne
+    c3 = str(choice_3 or "").lower()
+    if "séparé" in c3 or "separe" in c3:
+        has_f8 = False
+        if df is not None and not df.empty:
+            for c in ("Poste_Detaille", "Poste"):
+                if c in df.columns and df[c].astype(str).str.lower().str.contains("flanker|numero 8|numéro 8|n8").any():
+                    has_f8 = True
+                    break
+        if has_f8:
+            groups.extend(["Flanker", "Numéro 8"])
+        else:
+            groups.append("3ème ligne")
+    else:
+        groups.append("3ème ligne")
+
+    # 3. Trois-quarts
+    ctq = str(choice_tq or "").lower()
+    if "séparé" in ctq or "separe" in ctq:
+        groups.extend(["Demi de mêlée", "Demi d'ouverture", "Centre", "Ailier", "Arrière"])
+    else:
+        groups.append("Trois-quarts")
+
+    if only_active and df is not None and not df.empty:
+        active_res = []
+        for g in groups:
+            sub = _filter_df_by_group(df, g)
+            if not sub.empty:
+                active_res.append(g)
+        return active_res or groups
+
+    return groups
 
 _REGISTERED_JOUEURS_LOOKUP: Dict[str, str] = {}
 
@@ -1842,6 +1922,20 @@ def _filter_df_by_group(df: pd.DataFrame, grp: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     grp_str = str(grp or "").strip()
+    grp_clean = _strip_accents_lower(grp_str)
+
+    # Support spécifique des sous-postes de 3ème ligne si demandés explicitement
+    if grp_clean in ["flanker", "troisieme ligne aile", "flankers"]:
+        col_p = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
+        if col_p:
+            mask = df[col_p].astype(str).str.lower().str.contains("flanker|troisieme ligne aile|troisième ligne aile")
+            return df[mask]
+    if grp_clean in ["numero 8", "n8", "troisieme ligne centre"]:
+        col_p = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
+        if col_p:
+            mask = df[col_p].astype(str).str.lower().str.contains("numero 8|numéro 8|n8|troisieme ligne centre|troisième ligne centre")
+            return df[mask]
+
     if grp_str in CANONICAL_9_POSTES:
         lookup = _get_effective_joueurs_lookup()
         col_pd = "Poste_Detaille" if "Poste_Detaille" in df.columns else ("Poste" if "Poste" in df.columns else None)
@@ -2763,19 +2857,17 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
     cats = cats[:3]
     group_defs = [(c, default_titles.get(c, str(c).upper())) for c in cats]
 
-    fig, axes = plt.subplots(1, 3, figsize=(14.5, 6.8), dpi=130)
+    n_panels = max(1, min(3, len(group_defs)))
+    fig, axes_arr = plt.subplots(1, n_panels, figsize=(14.5, 6.8), dpi=130)
+    axes = [axes_arr] if n_panels == 1 else list(axes_arr)
     fig.patch.set_facecolor("#FFFFFF")
 
     K = len(items_comparatif)
     x = np.arange(K)
     w = 0.18 if K >= 4 else (0.19 if K == 3 else 0.20)
 
-    for idx in range(3):
+    for idx, (grp_key, grp_title) in enumerate(group_defs):
         ax = axes[idx]
-        if idx >= len(group_defs):
-            ax.axis("off")
-            continue
-        grp_key, grp_title = group_defs[idx]
         ax.set_facecolor("#FAFAFA")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
@@ -3842,6 +3934,7 @@ def generate_weekly_pdf_report(
     inclure_comparatif: bool = False,
     nb_comparatif: int = 4,
     granularity_mode: str = "Par ligne de poste",
+    target_groups: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -3885,12 +3978,25 @@ def generate_weekly_pdf_report(
     g_low = _strip_accents_lower(granularity_mode)
     is_detailed = ("detaille" in g_low) or ("9 poste" in g_low)
 
+    target_groups_arg = kwargs.get("target_groups", target_groups)
+    if target_groups_arg:
+        categories = list(target_groups_arg)
+        is_detailed = any(not is_grand_groupe(c) for c in categories)
+    elif is_detailed:
+        categories = get_active_positions(df_hebdo)
+        if not categories:
+            categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    else:
+        categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
     week_label = f"Semaine {week_num:02d} - {year}"
     raw_dates = [format_readable_date(s.get("date", "")) for s in synthese_dict.values() if isinstance(s, dict) and s.get("date")]
     raw_dates = [d for d in raw_dates if d]
     dates_str = f"Du {raw_dates[0]} au {raw_dates[-1]}" if len(raw_dates) >= 2 else (raw_dates[0] if raw_dates else "")
 
-    pdf = RCAWeeklyPDFReport(week_label=week_label, dates_label=dates_str, total_pages=8 if inclure_comparatif else 7)
+    n_comp_pages = ((len(categories) + 2) // 3) if inclure_comparatif else 0
+    total_pages_calc = 2 + 2 * len(categories) + n_comp_pages
+    pdf = RCAWeeklyPDFReport(week_label=week_label, dates_label=dates_str, total_pages=total_pages_calc)
 
     if df_hebdo is None or df_hebdo.empty:
         pdf.add_page()
@@ -3944,12 +4050,6 @@ def generate_weekly_pdf_report(
                         if str(n).strip() in player_rpe_vals else np.nan
                     )
 
-    if is_detailed:
-        categories = get_active_positions(df_hebdo)
-        if not categories:
-            categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
-    else:
-        categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
     rpe_groups = _calculate_rpe_groups_for_week(
         df_hebdo,
@@ -4139,11 +4239,30 @@ def generate_weekly_pdf_report(
         obj_acc = targets_daily["Obj. ACC/DEC"] * multiplier
 
         if not df_sub.empty:
-            real_dist = float(pd.to_numeric(df_sub.get("Distance Totale (m)", df_sub.get("Distance Totale (km)", 0) * 1000.0), errors="coerce").mean() or 0.0)
-            real_hsr = float(pd.to_numeric(df_sub.get("HSR Z3 (m)", df_sub.get("Haute intensité (m)", 0)), errors="coerce").mean() or 0.0)
-            real_vhsr = float(pd.to_numeric(df_sub.get("Distance Sprint VHSR (m)", df_sub.get("VHSR (m)", 0)), errors="coerce").mean() or 0.0)
-            real_dpm = float(pd.to_numeric(df_sub.get("Distance/min (m/min)", df_sub.get("Distance Per Min (m/min)", 0)), errors="coerce").mean() or 0.0)
-            real_acc = float(pd.to_numeric(df_sub.get("Accel/Dec total", df_sub.get("Accel/Dec", 0)), errors="coerce").mean() or 0.0)
+            def _extract_metric_mean(df_m: pd.DataFrame, candidates: List[str], mult: float = 1.0) -> float:
+                for col in candidates:
+                    if col in df_m.columns:
+                        s = pd.to_numeric(df_m[col], errors="coerce").dropna()
+                        if not s.empty:
+                            return float(s.mean() * mult)
+                return 0.0
+
+            real_dist = _extract_metric_mean(df_sub, ["Distance Totale (m)", "Distance (m)"])
+            if real_dist == 0.0:
+                real_dist = _extract_metric_mean(df_sub, ["Distance Totale (km)", "Distance (km)"], mult=1000.0)
+
+            real_hsr = _extract_metric_mean(df_sub, ["HSR Z3 (m)", "Haute intensité (m)", "HSR_m", "Distance haute intensité (m)"])
+            if real_hsr == 0.0:
+                real_hsr = _extract_metric_mean(df_sub, ["Distance in Speed Zone 3  (km)"], mult=1000.0)
+
+            real_vhsr = _extract_metric_mean(df_sub, ["Distance Sprint VHSR (m)", "VHSR (m)", "Sprint (m)"])
+            if real_vhsr == 0.0 and "Distance in Speed Zone 4  (km)" in df_sub.columns and "Distance in Speed Zone 5  (km)" in df_sub.columns:
+                s4 = pd.to_numeric(df_sub["Distance in Speed Zone 4  (km)"], errors="coerce").fillna(0.0)
+                s5 = pd.to_numeric(df_sub["Distance in Speed Zone 5  (km)"], errors="coerce").fillna(0.0)
+                real_vhsr = float((s4 + s5).mean() * 1000.0)
+
+            real_dpm = _extract_metric_mean(df_sub, ["Distance/min (m/min)", "Distance Per Min (m/min)", "m/min"])
+            real_acc = _extract_metric_mean(df_sub, ["Accel/Dec total", "Accel/Dec", "ACC/DEC"])
         else:
             real_dist = real_hsr = real_vhsr = real_dpm = real_acc = 0.0
 
@@ -4176,7 +4295,8 @@ def generate_weekly_pdf_report(
         pdf.set_draw_color(31, 78, 121)
         pdf.set_font("Helvetica", "B", 7.8)
         pdf.set_text_color(255, 255, 255)
-        cat_label_prefix = "POSTE" if is_detailed else "GROUPE"
+        grp_is_line = is_grand_groupe(grp, is_detailed_context=is_detailed)
+        cat_label_prefix = "LIGNE" if grp_is_line else "POSTE"
         headers_tbl = [
             (col_w_grp, f"{cat_label_prefix} : {grp.upper()}", "L"),
             (col_w_num, "DISTANCE TOTALE", "C"),
@@ -4317,7 +4437,7 @@ def generate_weekly_pdf_report(
         # ---------------------------------------------------------------------
         # PAGE B : PODIUMS HEBDOMADAIRES — 3 PREMIERS & 3 DERNIERS SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"PODIUMS HEBDOMADAIRES — {grp.upper()}"
+        pdf.current_subtitle = f"PODIUMS HEBDOMADAIRES — {'LIGNE' if grp_is_line else 'POSTE'} {grp.upper()}"
         pdf.add_page()
         podium_grp = generer_podiums_hebdomadaires(df_hebdo, groupe=grp)
         sub_map_grp = calculer_sous_titres_podium(df_sub, label_prefix="Moyenne")

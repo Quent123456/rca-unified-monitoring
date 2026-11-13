@@ -4155,6 +4155,7 @@ def generer_rapport_pdf_coachs(
     adversaire: str = "",
     rpe_stats: Optional[Dict[str, Any]] = None,
     granularity_mode: str = "Par ligne de poste",
+    target_groups: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -4439,9 +4440,13 @@ def generer_rapport_pdf_coachs(
     )
 
     # =========================================================================
-    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (3 GROUPES OU 9 POSTES ACTIFS)
+    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (3 GROUPES OU 9 POSTES ACTIFS OU SUR MESURE)
     # =========================================================================
-    if is_detailed:
+    target_groups_arg = kwargs.get("target_groups", target_groups)
+    if target_groups_arg:
+        groupes_pages = list(target_groups_arg)
+        is_detailed = any(not weekly_memory.is_grand_groupe(c) for c in groupes_pages) if hasattr(weekly_memory, "is_grand_groupe") else True
+    elif is_detailed:
         groupes_pages = weekly_memory.get_active_positions(df_indiv, joueurs_data)
         if not groupes_pages:
             groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
@@ -4449,6 +4454,8 @@ def generer_rapport_pdf_coachs(
         groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
     for grp in groupes_pages:
+        grp_is_line = weekly_memory.is_grand_groupe(grp, is_detailed_context=is_detailed) if hasattr(weekly_memory, "is_grand_groupe") else (grp in ["5 de devant", "3ème Ligne", "Trois-quarts"])
+        cat_prefix = "LIGNE" if grp_is_line else "POSTE"
         pdf.current_subtitle = f"RETOUR JOURNÉE — {grp.upper()}"
         pdf.add_page()
 
@@ -4525,7 +4532,6 @@ def generer_rapport_pdf_coachs(
         pdf.set_font("Helvetica", "B", 8.0)
         pdf.set_text_color(255, 255, 255)
 
-        cat_prefix = "POSTE" if is_detailed else "GROUPE"
         headers = [
             (col_w_grp, f"{cat_prefix} : {grp.upper()}", "L"),
             (col_w_num, "DISTANCE TOTALE", "C"),
@@ -4610,7 +4616,7 @@ def generer_rapport_pdf_coachs(
         # ---------------------------------------------------------------------
         # PAGE B : PODIUMS 3 PREMIERS + 3 DERNIERS VIGILANCE SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"PODIUMS DE LA {'CATÉGORIE' if is_detailed else 'LIGNE'} — {grp.upper()}"
+        pdf.current_subtitle = f"PODIUMS DE LA {'LIGNE' if grp_is_line else 'CATÉGORIE'} — {grp.upper()}"
         pdf.add_page()
 
         podium_grp = generer_podium_dynamique(df_sub)
@@ -5578,11 +5584,52 @@ def render_weekly_reports_view() -> None:
 
     granularity_w = st.radio(
         "Granularité du rapport PDF Hebdomadaire :",
-        options=["Par ligne de poste (3 groupes)", "Détaillé par poste (9 postes)"],
+        options=[
+            "Par ligne de poste (3 groupes classiques)",
+            "Détaillé par poste (Tous les postes séparés)",
+            "Sur mesure / Personnalisé (Mixte)",
+        ],
         horizontal=True,
         key="radio_granularity_weekly",
-        help="Par ligne de poste : 5 de devant, 3ème Ligne, Trois-quarts (7-8 pages). Détaillé par poste : 2 pages par poste actif parmi les 9 postes.",
+        help="Par ligne de poste : 5 de devant, 3ème Ligne, Trois-quarts. Détaillé par poste : tous les postes actifs séparés. Sur mesure : configuration personnalisée par ligne.",
     )
+
+    target_groups_w = None
+    if granularity_w == "Sur mesure / Personnalisé (Mixte)":
+        st.markdown("##### ⚙️ Configuration Sur Mesure des Lignes & Postes")
+        col_w_5, col_w_3, col_w_tq = st.columns(3)
+        with col_w_5:
+            opt_w_5 = st.radio(
+                "Les 5 de devant :",
+                options=["Ensemble (1 groupe)", "Séparés (Pilier, Talonneur, 2ème ligne)"],
+                key="radio_custom_w_5",
+            )
+        with col_w_3:
+            has_f8_w = False
+            if df_agg is not None and not df_agg.empty:
+                for c in ("Poste_Detaille", "Poste"):
+                    if c in df_agg.columns and df_agg[c].astype(str).str.lower().str.contains("flanker|numero 8|numéro 8|n8").any():
+                        has_f8_w = True
+                        break
+            opt_w_3 = st.radio(
+                "La 3ème ligne :",
+                options=["Ensemble (1 groupe)", "Séparés (Flanker, Numéro 8)"],
+                disabled=not has_f8_w,
+                help="Poste unique '3ème ligne' dans le référentiel RCA actuel." if not has_f8_w else "Sépare les Flankers et Numéros 8.",
+                key="radio_custom_w_3",
+            )
+        with col_w_tq:
+            opt_w_tq = st.radio(
+                "Les Trois-quarts (3/4) :",
+                options=["Ensemble (1 groupe)", "Séparés (Demis, Centres, Ailiers, Arrières)"],
+                key="radio_custom_w_tq",
+            )
+        target_groups_w = weekly_memory.build_custom_target_groups(opt_w_5, opt_w_3, opt_w_tq, df=df_agg)
+        st.caption(f"📋 Groupes / Postes analysés ({len(target_groups_w)}) : {', '.join(target_groups_w)}")
+    elif "détaillé" in granularity_w.lower() or "séparés" in granularity_w.lower():
+        target_groups_w = weekly_memory.get_active_positions(df_agg, joueurs_data) or list(weekly_memory.CANONICAL_9_POSTES)
+    else:
+        target_groups_w = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
     col_toggle_w, col_slider_w = st.columns([1.6, 2.0])
     with col_toggle_w:
@@ -5606,10 +5653,7 @@ def render_weekly_reports_view() -> None:
             )
 
     selected_meta = [s for s_id, s in sessions.items() if s_id in selected_sids]
-    if "détaillé" in granularity_w.lower() or "9 postes" in granularity_w.lower():
-        cats_w = weekly_memory.get_active_positions(df_agg, joueurs_data) or ["5 de devant", "3ème Ligne", "Trois-quarts"]
-    else:
-        cats_w = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    cats_w = target_groups_w
     n_comp_w_pages = ((len(cats_w) + 2) // 3) if inclure_comp_w else 0
     total_w_pages = 2 + 2 * len(cats_w) + n_comp_w_pages
 
@@ -5624,6 +5668,7 @@ def render_weekly_reports_view() -> None:
         inclure_comparatif=inclure_comp_w,
         nb_comparatif=nb_semaines_comp,
         granularity_mode=granularity_w,
+        target_groups=target_groups_w,
     )
 
     pdf_w_pages_label = f"{total_w_pages} pages"
@@ -6990,11 +7035,53 @@ def main() -> None:
 
         granularity_d = st.radio(
             "Granularité du rapport PDF Journalier :",
-            options=["Par ligne de poste (3 groupes)", "Détaillé par poste (9 postes)"],
+            options=[
+                "Par ligne de poste (3 groupes classiques)",
+                "Détaillé par poste (Tous les postes séparés)",
+                "Sur mesure / Personnalisé (Mixte)",
+            ],
             horizontal=True,
             key="radio_granularity_daily",
-            help="Par ligne de poste : 5 de devant, 3ème Ligne, Trois-quarts (7-8 pages). Détaillé par poste : 2 pages par poste actif parmi les 9 postes.",
+            help="Par ligne de poste : 5 de devant, 3ème Ligne, Trois-quarts. Détaillé par poste : tous les postes actifs séparés. Sur mesure : configuration personnalisée par ligne.",
         )
+
+        target_groups_d = None
+        if granularity_d == "Sur mesure / Personnalisé (Mixte)":
+            st.markdown("##### ⚙️ Configuration Sur Mesure des Lignes & Postes")
+            col_d_5, col_d_3, col_d_tq = st.columns(3)
+            with col_d_5:
+                opt_d_5 = st.radio(
+                    "Les 5 de devant :",
+                    options=["Ensemble (1 groupe)", "Séparés (Pilier, Talonneur, 2ème ligne)"],
+                    key="radio_custom_d_5",
+                )
+            with col_d_3:
+                has_f8_d = False
+                df_curr_f8 = st.session_state.get("df_indiv", df_indiv)
+                if df_curr_f8 is not None and not df_curr_f8.empty:
+                    for c in ("Poste_Detaille", "Poste"):
+                        if c in df_curr_f8.columns and df_curr_f8[c].astype(str).str.lower().str.contains("flanker|numero 8|numéro 8|n8").any():
+                            has_f8_d = True
+                            break
+                opt_d_3 = st.radio(
+                    "La 3ème ligne :",
+                    options=["Ensemble (1 groupe)", "Séparés (Flanker, Numéro 8)"],
+                    disabled=not has_f8_d,
+                    help="Poste unique '3ème ligne' dans le référentiel RCA actuel." if not has_f8_d else "Sépare les Flankers et Numéros 8.",
+                    key="radio_custom_d_3",
+                )
+            with col_d_tq:
+                opt_d_tq = st.radio(
+                    "Les Trois-quarts (3/4) :",
+                    options=["Ensemble (1 groupe)", "Séparés (Demis, Centres, Ailiers, Arrières)"],
+                    key="radio_custom_d_tq",
+                )
+            target_groups_d = weekly_memory.build_custom_target_groups(opt_d_5, opt_d_3, opt_d_tq, df=st.session_state.get("df_indiv", df_indiv))
+            st.caption(f"📋 Groupes / Postes analysés ({len(target_groups_d)}) : {', '.join(target_groups_d)}")
+        elif "détaillé" in granularity_d.lower() or "séparés" in granularity_d.lower():
+            target_groups_d = weekly_memory.get_active_positions(st.session_state.get("df_indiv", df_indiv), joueurs_data) or list(weekly_memory.CANONICAL_9_POSTES)
+        else:
+            target_groups_d = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
         col_toggle_d, col_slider_d = st.columns([1.6, 2.0])
         with col_toggle_d:
@@ -7040,10 +7127,7 @@ def main() -> None:
         st.session_state["df_indiv_enriched"] = df_indiv
         rpe_metrics_seance = rpe_connector.calculate_rpe_group_metrics(st.session_state["df_indiv"])
 
-        if "détaillé" in granularity_d.lower() or "9 postes" in granularity_d.lower():
-            cats_d = weekly_memory.get_active_positions(st.session_state["df_indiv"], joueurs_data) or ["5 de devant", "3ème Ligne", "Trois-quarts"]
-        else:
-            cats_d = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+        cats_d = target_groups_d
         n_comp_d_pages = ((len(cats_d) + 2) // 3) if inclure_comp_d else 0
         total_d_pages = 2 + 2 * len(cats_d) + n_comp_d_pages
 
@@ -7058,6 +7142,7 @@ def main() -> None:
             adversaire=adversaire_input,
             rpe_stats=rpe_metrics_seance,
             granularity_mode=granularity_d,
+            target_groups=target_groups_d,
         )
         clean_date_tag = session_date_val.strftime("%d_%m_%Y") if isinstance(session_date_val, (datetime.date, datetime.datetime)) else re.sub(r"[^0-9a-zA-Z]", "_", str(session_date_val))
         pdf_filename = f"Rapport_Seance_GPS_RCA_{clean_date_tag}.pdf"

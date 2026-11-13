@@ -525,6 +525,7 @@ def generer_rapport_pdf_coachs(
     adversaire: str = "",
     rpe_stats: Optional[Dict[str, Any]] = None,
     granularity_mode: str = "Par ligne de poste",
+    target_groups: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -816,9 +817,13 @@ def generer_rapport_pdf_coachs(
     )
 
     # =========================================================================
-    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (3 GROUPES OU 9 POSTES ACTIFS)
+    # PAGES DÉTAILLÉES : 2 PAGES PAR CATÉGORIE (3 GROUPES OU 9 POSTES ACTIFS OU SUR MESURE)
     # =========================================================================
-    if is_detailed:
+    target_groups_arg = kwargs.get("target_groups", target_groups)
+    if target_groups_arg:
+        groupes_pages = list(target_groups_arg)
+        is_detailed = any(not weekly_memory.is_grand_groupe(c) for c in groupes_pages) if hasattr(weekly_memory, "is_grand_groupe") else True
+    elif is_detailed:
         groupes_pages = weekly_memory.get_active_positions(df_indiv, j_lookup)
         if not groupes_pages:
             groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
@@ -826,6 +831,8 @@ def generer_rapport_pdf_coachs(
         groupes_pages = ["5 de devant", "3ème Ligne", "Trois-quarts"]
 
     for grp in groupes_pages:
+        grp_is_line = weekly_memory.is_grand_groupe(grp, is_detailed_context=is_detailed) if hasattr(weekly_memory, "is_grand_groupe") else (grp in ["5 de devant", "3ème Ligne", "Trois-quarts"])
+        cat_prefix = "LIGNE" if grp_is_line else "POSTE"
         pdf.current_subtitle = f"RETOUR JOURNÉE — {grp.upper()}"
         pdf.add_page()
 
@@ -902,7 +909,6 @@ def generer_rapport_pdf_coachs(
         pdf.set_font("Helvetica", "B", 8.0)
         pdf.set_text_color(255, 255, 255)
 
-        cat_prefix = "POSTE" if is_detailed else "GROUPE"
         headers = [
             (col_w_grp, f"{cat_prefix} : {grp.upper()}", "L"),
             (col_w_num, "DISTANCE TOTALE", "C"),
@@ -987,7 +993,7 @@ def generer_rapport_pdf_coachs(
         # ---------------------------------------------------------------------
         # PAGE B : PODIUMS 3 PREMIERS + 3 DERNIERS VIGILANCE SUR LA MÊME PAGE
         # ---------------------------------------------------------------------
-        pdf.current_subtitle = f"PODIUMS DE LA {'CATÉGORIE' if is_detailed else 'LIGNE'} — {grp.upper()}"
+        pdf.current_subtitle = f"PODIUMS DE LA {'LIGNE' if grp_is_line else 'CATÉGORIE'} — {grp.upper()}"
         pdf.add_page()
 
         podium_grp = generer_podium_dynamique(df_sub)
