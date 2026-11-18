@@ -199,6 +199,37 @@ def get_session_pdf_path(year: int, week_num: int, session_id: str) -> str:
     return os.path.join(WEEKLY_PDFS_DIR, f"week_{year}_W{week_num:02d}_{session_id}.pdf")
 
 
+def _normalize_session_objectifs_config(
+    objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Construit une copie figée, complète et isolée des objectifs unitaires d'une séance
+    (5 de devant, 3ème Ligne, Trois-quarts et moyenne Tous les groupes) afin qu'aucune
+    séance enregistrée ne dépende ultérieurement du fichier global targets_config.json.
+    """
+    base_fallback = charger_objectifs_config()
+    src = objectifs_config if isinstance(objectifs_config, dict) else base_fallback
+    keys = ["Objectif Distance (m)", "Obj. HSR", "Obj. VHSR", "Obj. ACC/DEC"]
+    normalized: Dict[str, Dict[str, float]] = {}
+
+    for grp in ("5 de devant", "3ème Ligne", "Trois-quarts"):
+        grp_src = src.get(grp) if isinstance(src.get(grp), dict) else None
+        if grp_src is None:
+            grp_src = get_objectifs_for_category(src, grp) if src else None
+        fb_grp = base_fallback.get(grp, DEFAULT_OBJECTIFS_CONFIG[grp])
+        normalized[grp] = {}
+        for k in keys:
+            raw_v = grp_src.get(k) if isinstance(grp_src, dict) else None
+            try:
+                val_f = float(raw_v) if raw_v is not None and not pd.isna(raw_v) else float(fb_grp.get(k, 0.0))
+            except (ValueError, TypeError):
+                val_f = float(fb_grp.get(k, 0.0))
+            normalized[grp][k] = round(val_f, 1)
+
+    normalized["Tous les groupes"] = _calculer_moyenne_tous_groupes(normalized)
+    return copy.deepcopy(normalized)
+
+
 def get_session_pdf_bytes(
     year: int,
     week_num: int,
@@ -208,7 +239,7 @@ def get_session_pdf_bytes(
     """
     Récupère les octets (bytes) du PDF archivé de la séance.
     Si le fichier physique n'est pas encore présent sur disque mais que la séance existe en mémoire,
-    il régénère le PDF à la volée à partir des données de joueurs sauvegardées.
+    il régénère le PDF à la volée à partir des données de joueurs et des objectifs propres à la séance.
     """
     pdf_path = get_session_pdf_path(year, week_num, session_id)
     if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 1000:
@@ -221,7 +252,7 @@ def get_session_pdf_bytes(
     if not generate_if_missing:
         return None
 
-    # Régénération dynamique à la volée
+    # Régénération dynamique à la volée avec les objectifs isolés de la séance
     week_data = load_week_data(year, week_num)
     sessions = week_data.get("sessions", {})
     if session_id not in sessions:
@@ -235,14 +266,26 @@ def get_session_pdf_bytes(
     df_indiv = pd.DataFrame(p_data)
     date_val = format_readable_date(s_info.get("date", ""))
     day_val = s_info.get("day_type", "")
+    session_obj_cfg = _get_session_objectifs_config(
+        dict(s_info),
+        fallback_config=charger_objectifs_config(),
+        year=year,
+        week_num=week_num,
+    )
 
     try:
-        import app
-        pdf_bytes = app.generer_rapport_pdf_coachs(
+        try:
+            from modules import pdf_reports as _pdf_mod
+        except (ImportError, ModuleNotFoundError):
+            import pdf_reports as _pdf_mod
+        pdf_bytes = _pdf_mod.generer_rapport_pdf_coachs(
             df_indiv=df_indiv,
             date_seance=date_val or day_val,
             synthese_note=s_info.get("notes", ""),
             moyennes_groupes=s_info.get("group_stats"),
+            config_objectifs=session_obj_cfg,
+            rpe_stats=s_info.get("rpe_stats"),
+            adversaire=s_info.get("adversaire", ""),
         )
         if pdf_bytes and len(pdf_bytes) > 1000:
             try:
@@ -279,7 +322,9 @@ def save_session_to_memory(
 ) -> Tuple[bool, str]:
     """
     Sauvegarde manuellement une séance validée dans la mémoire hebdomadaire.
-    Archivage simultané des données structurées et du fichier PDF journalier dans data/weekly_pdfs/.
+    - Fige systématiquement une copie isolée des objectifs de la séance dans session["objectifs_config"].
+    - Calcule et stocke les KPIs clés (Distance Moy./Joueur, Vitesse Max + joueur) pour la vue Explorer.
+    - Synchronise immédiatement week_YYYY_WXX.json sur GitHub si configuré.
     """
     if df_indiv is None or df_indiv.empty:
         return False, "Le tableau des données joueurs est vide."
@@ -312,10 +357,16 @@ def save_session_to_memory(
                 p_dict[col] = str(val).strip()
         serialized_players.append(p_dict)
 
-    # Métadonnées calculées de la séance
+    # Métadonnées calculées de la séance (inclut Distance Moy./Joueur et Vitesse Max pour Explorer)
     total_dist_km = 0.0
+    avg_distance_m = 0.0
     if "Distance (km)" in df_indiv.columns:
-        total_dist_km = float(pd.to_numeric(df_indiv["Distance (km)"], errors="coerce").fillna(0).sum())
+        s_dist_km = pd.to_numeric(df_indiv["Distance (km)"], errors="coerce").dropna()
+        if not s_dist_km.empty:
+            total_dist_km = float(s_dist_km.sum())
+            avg_distance_m = float(s_dist_km.mean()) * 1000.0
+    elif len(df_indiv) > 0:
+        avg_distance_m = 0.0
 
     total_hi_m = 0.0
     hi_col = "Haute intensité Podium (m)" if "Haute intensité Podium (m)" in df_indiv.columns else " Distance haute intensité (m)"
@@ -325,6 +376,25 @@ def save_session_to_memory(
     avg_dpm = 0.0
     if "Distance Per Min (m/min)" in df_indiv.columns:
         avg_dpm = float(pd.to_numeric(df_indiv["Distance Per Min (m/min)"], errors="coerce").fillna(0).mean())
+
+    max_speed_kmh = 0.0
+    max_speed_player = "-"
+    speed_col = next(
+        (c for c in ("Top Speed (km/h)", "Top Speed", "Vmax (km/h)", "Vitesse Max (km/h)") if c in df_indiv.columns),
+        None,
+    )
+    if speed_col:
+        s_spd = pd.to_numeric(df_indiv[speed_col], errors="coerce")
+        s_spd_valid = s_spd[s_spd > 0].dropna()
+        if not s_spd_valid.empty:
+            idx_max_s = s_spd_valid.idxmax()
+            max_speed_kmh = round(float(s_spd_valid.loc[idx_max_s]), 1)
+            name_col = next((c for c in ("Nom ; Prénom", "Nom", "Joueur") if c in df_indiv.columns), None)
+            if name_col:
+                max_speed_player = str(df_indiv.loc[idx_max_s, name_col]).strip() or "-"
+
+    # Copie figée et isolée des objectifs de cette séance (jamais None)
+    frozen_objectifs = _normalize_session_objectifs_config(objectifs_config)
 
     # Archivage automatique du fichier PDF si fourni
     pdf_filename = f"week_{year}_W{week_num:02d}_{session_id}.pdf"
@@ -352,13 +422,16 @@ def save_session_to_memory(
         "adversaire": adv_clean,
         "num_players": len(df_indiv),
         "total_distance_km": round(total_dist_km, 2),
+        "avg_distance_m": round(avg_distance_m, 1),
         "total_hi_m": round(total_hi_m, 1),
         "avg_dpm": round(avg_dpm, 1),
+        "max_speed_kmh": max_speed_kmh,
+        "max_speed_player": max_speed_player,
         "has_pdf": has_pdf,
         "pdf_filename": pdf_filename,
         "group_stats": group_stats or {},
         "rpe_stats": rpe_stats or {},
-        "objectifs_config": copy.deepcopy(objectifs_config) if isinstance(objectifs_config, dict) else None,
+        "objectifs_config": frozen_objectifs,
         "players_data": serialized_players,
     }
 
@@ -369,22 +442,22 @@ def save_session_to_memory(
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(week_data, f, ensure_ascii=False, indent=2)
 
+        gh_suffix = ""
         try:
             try:
-
                 import github_sync
-
             except (ImportError, ModuleNotFoundError):
-
                 from modules import github_sync
-            github_sync.push_file_to_github(
+            gh_ok, gh_msg = github_sync.push_file_to_github(
                 fp,
-                commit_message=f"data: enregistrement séance {clean_day} (Semaine {week_num:02d} — {year})"
+                commit_message=f"data: enregistrement séance {clean_day} avec objectifs isolés (Semaine {week_num:02d} — {year})",
             )
+            if gh_ok:
+                gh_suffix = " (synchronisé sur GitHub)"
         except Exception:
             pass
 
-        return True, f"Séance « {clean_day} » archivée avec succès en Semaine {week_num} ({len(df_indiv)} joueurs)."
+        return True, f"Séance « {clean_day} » archivée avec objectifs figés en Semaine {week_num} ({len(df_indiv)} joueurs){gh_suffix}."
     except Exception as e:
         return False, f"Erreur lors de la sauvegarde : {str(e)}"
 
@@ -2177,8 +2250,9 @@ def update_week_sessions_objectifs(
     session_objectifs_map: Dict[str, Dict[str, Dict[str, float]]],
 ) -> Tuple[bool, str]:
     """
-    Enregistre de façon persistante les objectifs spécifiques de chaque séance dans
-    data/weekly_memory/week_YYYY_WXX.json (et synchronise sur GitHub si configuré).
+    Enregistre de façon persistante les objectifs spécifiques (copie isolée et figée)
+    de chaque séance dans data/weekly_memory/week_YYYY_WXX.json, invalide tout PDF
+    journalier local obsolète pour ces séances, et synchronise immédiatement sur GitHub.
     """
     if not isinstance(session_objectifs_map, dict) or not session_objectifs_map:
         return False, "Aucun objectif de séance à enregistrer."
@@ -2188,15 +2262,20 @@ def update_week_sessions_objectifs(
     if not sessions:
         return False, f"Aucune séance trouvée pour la semaine {week_num:02d} — {year}."
 
-    updated_cnt = 0
+    updated_sids: List[str] = []
     for sid, cfg in session_objectifs_map.items():
         if sid in sessions and isinstance(cfg, dict):
-            cfg_clean = copy.deepcopy(cfg)
-            cfg_clean["Tous les groupes"] = _calculer_moyenne_tous_groupes(cfg_clean)
-            sessions[sid]["objectifs_config"] = cfg_clean
-            updated_cnt += 1
+            sessions[sid]["objectifs_config"] = _normalize_session_objectifs_config(cfg)
+            updated_sids.append(sid)
+            # Invalider le PDF journalier en cache disque pour que le bouton PDF reflète les nouveaux objectifs
+            stale_pdf = get_session_pdf_path(year, week_num, sid)
+            if os.path.exists(stale_pdf):
+                try:
+                    os.remove(stale_pdf)
+                except Exception:
+                    pass
 
-    if updated_cnt == 0:
+    if not updated_sids:
         return False, "Aucune séance correspondante mise à jour."
 
     week_data["last_updated"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -2204,18 +2283,27 @@ def update_week_sessions_objectifs(
     try:
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(week_data, f, ensure_ascii=False, indent=2)
+
+        gh_status = ""
         try:
             try:
                 import github_sync
             except (ImportError, ModuleNotFoundError):
                 from modules import github_sync
-            github_sync.push_file_to_github(
+            gh_ok, gh_msg = github_sync.push_file_to_github(
                 fp,
-                commit_message=f"config: objectifs par séance Semaine {week_num:02d} — {year}",
+                commit_message=f"config: objectifs isolés par séance Semaine {week_num:02d} — {year}",
             )
-        except Exception:
-            pass
-        return True, f"Objectifs enregistrés pour {updated_cnt} séance(s) de la Semaine {week_num:02d}."
+            if gh_ok:
+                gh_status = " et synchronisés sur GitHub"
+            elif github_sync.is_github_sync_available():
+                gh_status = f" (local OK, erreur GitHub : {gh_msg})"
+            else:
+                gh_status = " (mode local — token GitHub non configuré)"
+        except Exception as gh_err:
+            gh_status = f" (local OK, sync GitHub ignorée : {gh_err})"
+
+        return True, f"Objectifs enregistrés pour {len(updated_sids)} séance(s) de la Semaine {week_num:02d}{gh_status}."
     except Exception as e:
         return False, f"Erreur d'enregistrement : {e}"
 

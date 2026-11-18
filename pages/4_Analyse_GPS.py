@@ -5424,17 +5424,70 @@ def render_weekly_reports_view() -> None:
         players_data = exp_sinfo.get("players_data", [])
         df_exp_session = pd.DataFrame(players_data) if players_data else pd.DataFrame()
 
+        # Résolution des objectifs propres à cette séance (jamais écrasés par targets_config.json si figés)
+        exp_has_isolated_obj = isinstance(exp_sinfo.get("objectifs_config"), dict) and any(
+            k in exp_sinfo["objectifs_config"] for k in ("5 de devant", "3ème Ligne", "Trois-quarts")
+        )
+        exp_session_obj = weekly_memory._get_session_objectifs_config(
+            dict(exp_sinfo),
+            fallback_config=get_active_objectifs_config(),
+            year=year,
+            week_num=week_num,
+        )
+
+        # Calcul robuste des KPIs Explorer (rattrapage dynamique depuis players_data pour les séances archivées)
+        exp_num_players = int(exp_sinfo.get("num_players") or len(df_exp_session))
+        exp_tot_dist_km = float(exp_sinfo.get("total_distance_km") or 0.0)
+        if exp_tot_dist_km <= 0 and not df_exp_session.empty and "Distance (km)" in df_exp_session.columns:
+            exp_tot_dist_km = float(pd.to_numeric(df_exp_session["Distance (km)"], errors="coerce").dropna().sum())
+
+        exp_avg_dist_m = float(exp_sinfo.get("avg_distance_m") or 0.0)
+        if exp_avg_dist_m <= 0:
+            if not df_exp_session.empty and "Distance (km)" in df_exp_session.columns:
+                s_d_exp = pd.to_numeric(df_exp_session["Distance (km)"], errors="coerce").dropna()
+                if not s_d_exp.empty:
+                    exp_avg_dist_m = float(s_d_exp.mean()) * 1000.0
+            if exp_avg_dist_m <= 0 and exp_num_players > 0 and exp_tot_dist_km > 0:
+                exp_avg_dist_m = (exp_tot_dist_km * 1000.0) / exp_num_players
+
+        exp_tot_hi_m = float(exp_sinfo.get("total_hi_m") or 0.0)
+        if exp_tot_hi_m <= 0 and not df_exp_session.empty:
+            hi_c_exp = next(
+                (c for c in ("Haute intensité Podium (m)", " Distance haute intensité (m)", "Distance haute intensité (m)", "HSR Z3 (m)") if c in df_exp_session.columns),
+                None,
+            )
+            if hi_c_exp:
+                exp_tot_hi_m = float(pd.to_numeric(df_exp_session[hi_c_exp], errors="coerce").dropna().sum())
+
+        exp_max_s = float(exp_sinfo.get("max_speed_kmh") or 0.0)
+        exp_max_p = str(exp_sinfo.get("max_speed_player") or "-").strip() or "-"
+        if (exp_max_s <= 0 or exp_max_p == "-") and not df_exp_session.empty:
+            spd_c_exp = next(
+                (c for c in ("Top Speed (km/h)", "Top Speed", "Vmax (km/h)", "Vitesse Max (km/h)") if c in df_exp_session.columns),
+                None,
+            )
+            if spd_c_exp:
+                s_spd_exp = pd.to_numeric(df_exp_session[spd_c_exp], errors="coerce")
+                s_spd_exp = s_spd_exp[s_spd_exp > 0].dropna()
+                if not s_spd_exp.empty:
+                    idx_best_spd = s_spd_exp.idxmax()
+                    exp_max_s = float(s_spd_exp.loc[idx_best_spd])
+                    name_c_exp = next((c for c in ("Nom ; Prénom", "Nom", "Joueur") if c in df_exp_session.columns), None)
+                    if name_c_exp:
+                        exp_max_p = str(df_exp_session.loc[idx_best_spd, name_c_exp]).strip() or "-"
+
         with st.expander(f"🔍 DÉTAILS DE LA SÉANCE : {exp_day_type.upper()} ({exp_date_str})", expanded=True):
             col_exp_h1, col_exp_h2, col_exp_h3 = st.columns([3, 1.8, 1])
             with col_exp_h1:
-                st.markdown(f"**Séance du {exp_day_type} ({exp_date_str})** — *{exp_sinfo.get('notes', 'Aucune note')}*")
+                st.markdown(f"**Séance du {exp_day_type} ({exp_date_str})** — *{exp_sinfo.get('notes', 'Aucune note') or 'Aucune note'}*")
             with col_exp_h2:
                 if st.button("🏉 Charger dans l'analyse active", key=f"btn_load_session_{exp_sid}", type="primary", use_container_width=True):
                     if not df_exp_session.empty:
                         st.session_state["df_raw"] = df_exp_session
+                        st.session_state["objectifs_config"] = copy.deepcopy(exp_session_obj)
                         st.session_state["step2_validated"] = True
                         st.session_state["nav_mode_principal"] = "🏉 Séance du jour (Workflow 3 étapes)"
-                        st.toast(f"Séance {exp_day_type} chargée avec succès !")
+                        st.toast(f"Séance {exp_day_type} et ses objectifs chargés avec succès !")
                         st.rerun()
                     else:
                         st.warning("Données de séance indisponibles pour le chargement.")
@@ -5446,32 +5499,38 @@ def render_weekly_reports_view() -> None:
             st.write("")
             ekpi1, ekpi2, ekpi3, ekpi4, ekpi5 = st.columns(5)
             with ekpi1:
-                st.metric("Joueurs présents", f"{exp_sinfo.get('num_players', len(df_exp_session))}")
+                st.metric("Joueurs présents", f"{exp_num_players}")
             with ekpi2:
-                st.metric("Volume Total (km)", f"{exp_sinfo.get('total_distance_km', 0.0):.1f} km")
+                st.metric("Volume Total (km)", f"{exp_tot_dist_km:.1f} km")
             with ekpi3:
-                st.metric("Distance Moy./Joueur", f"{exp_sinfo.get('avg_distance_m', 0.0):,.0f} m")
+                st.metric("Distance Moy./Joueur", f"{exp_avg_dist_m:,.0f} m".replace(",", " "))
             with ekpi4:
-                st.metric("Haute Intensité (>14.4)", f"{exp_sinfo.get('total_hi_m', 0.0):,.0f} m")
+                st.metric("Haute Intensité (>14.4)", f"{exp_tot_hi_m:,.0f} m".replace(",", " "))
             with ekpi5:
-                max_s = exp_sinfo.get("max_speed_kmh", 0.0)
-                max_p = exp_sinfo.get("max_speed_player", "-")
-                st.metric("Vitesse Max", f"{max_s:.1f} km/h", f"{max_p}")
+                st.metric("Vitesse Max", f"{exp_max_s:.1f} km/h", f"{exp_max_p}")
 
             if not df_exp_session.empty:
-                exp_tab_jauges, exp_tab_podiums, exp_tab_effectif = st.tabs([
+                exp_tab_jauges, exp_tab_obj, exp_tab_podiums, exp_tab_effectif = st.tabs([
                     "📊 Jauges & Graphiques par Groupe",
+                    "🎯 Objectifs de la Séance",
                     "🏆 Podiums de la Séance",
                     "👥 Tableau de l'Effectif Présent",
                 ])
 
                 with exp_tab_jauges:
+                    if exp_has_isolated_obj:
+                        st.caption("✅ Objectifs propres à cette séance (isolés et figés dans le JSON de la semaine).")
+                    else:
+                        st.warning(
+                            "⚠️ Cette séance a été enregistrée avant l'isolation des objectifs par séance (affichage en repli sur la configuration globale). "
+                            "Ouvrez l'onglet **« 🎯 Objectifs de la Séance »** pour saisir et sauvegarder ses vrais objectifs."
+                        )
                     grp_tabs = st.tabs(["🏉 5 de devant", "🏉 3ème Ligne", "🏉 Trois-quarts", "📊 Comparatif Barres"])
                     for g_idx, g_name in enumerate(["5 de devant", "3ème Ligne", "Trois-quarts"]):
                         with grp_tabs[g_idx]:
                             sub_g = df_exp_session[df_exp_session["Groupe"] == g_name] if "Groupe" in df_exp_session.columns else pd.DataFrame()
                             if not sub_g.empty:
-                                m_jauges = calculer_metriques_jauges(sub_g, g_name, mode_calc="Moyenne / joueur", config_objectifs=get_active_objectifs_config())
+                                m_jauges = calculer_metriques_jauges(sub_g, g_name, mode_calc="Moyenne / joueur", config_objectifs=exp_session_obj)
                                 render_dashboard_objectifs(g_name, m_jauges)
                                 st.caption(f"{len(sub_g)} joueur(s) analysé(s) dans le groupe {g_name}.")
                             else:
@@ -5484,6 +5543,48 @@ def render_weekly_reports_view() -> None:
                         )
                         st.image(buf_seance_chart, use_container_width=True)
 
+                with exp_tab_obj:
+                    st.markdown(f"##### 🎯 Édition directe des objectifs propres à « {exp_day_type} » ({exp_date_str})")
+                    if exp_has_isolated_obj:
+                        st.caption("Ces objectifs sont stockés indépendamment dans `week_YYYY_WXX.json` et n'affectent aucune autre séance ni `targets_config.json`.")
+                    else:
+                        st.info("ℹ️ Cette séance utilise encore le repli global. Ajustez ci-dessous ses vrais objectifs et enregistrez pour les figer définitivement dans le JSON + GitHub.")
+
+                    c_eo1, c_eo2, c_eo3 = st.columns(3)
+                    new_exp_cfg: Dict[str, Dict[str, float]] = {}
+                    for col_eo, g_lbl in [(c_eo1, "5 de devant"), (c_eo2, "3ème Ligne"), (c_eo3, "Trois-quarts")]:
+                        g_cur_e = weekly_memory.get_objectifs_for_category(exp_session_obj, g_lbl)
+                        k_ep = f"exp_obj_{year}_{week_num}_{exp_sid}_{g_lbl}"
+                        with col_eo:
+                            st.markdown(f"**🏉 {g_lbl}**")
+                            ed_v = st.number_input("Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(g_cur_e.get("Objectif Distance (m)", 4500.0)), key=f"{k_ep}_d")
+                            eh_v = st.number_input("HSR Z3 (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(g_cur_e.get("Obj. HSR", 300.0)), key=f"{k_ep}_h")
+                            ev_v = st.number_input("VHSR Sprint (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(g_cur_e.get("Obj. VHSR", 100.0)), key=f"{k_ep}_v")
+                            ea_v = st.number_input("ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(g_cur_e.get("Obj. ACC/DEC", 50.0)), key=f"{k_ep}_a")
+                            new_exp_cfg[g_lbl] = {
+                                "Objectif Distance (m)": float(ed_v),
+                                "Obj. HSR": float(eh_v),
+                                "Obj. VHSR": float(ev_v),
+                                "Obj. ACC/DEC": float(ea_v),
+                            }
+
+                    if st.button(
+                        f"💾 Enregistrer les objectifs de « {exp_day_type} » (JSON + GitHub)",
+                        key=f"btn_save_exp_obj_{year}_{week_num}_{exp_sid}",
+                        type="primary",
+                    ):
+                        ok_eo, msg_eo = weekly_memory.update_week_sessions_objectifs(year, week_num, {exp_sid: new_exp_cfg})
+                        if ok_eo:
+                            # Synchroniser immédiatement les widgets de l'expander hebdomadaire pour cette séance
+                            w_pref = f"wobj_{year}_{week_num}_{exp_sid}_"
+                            for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(w_pref)]:
+                                del st.session_state[sk_del]
+                            st.session_state["weekly_obj_save_flash"] = f"✅ {msg_eo}"
+                            st.toast(f"✅ {msg_eo}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg_eo}")
+
                 with exp_tab_podiums:
                     pod_seance = generer_podium_dynamique(df_exp_session)
                     render_podium_section(pod_seance)
@@ -5491,9 +5592,10 @@ def render_weekly_reports_view() -> None:
                 with exp_tab_effectif:
                     cols_seance_pref = [
                         "Nom ; Prénom", "Poste_Detaille", "Groupe",
-                        "Distance (km)", "Distance haute intensité (m)", "Distance Sprint VHSR (m)",
+                        "Distance (km)", " Distance haute intensité (m)", "Distance haute intensité (m)", "Haute intensité Podium (m)",
+                        "VHSR (m)", "Distance Sprint VHSR (m)",
                         "Top Speed (km/h)", "Distance Per Min (m/min)", "Temps de jeu ",
-                        "Accélération (> 3 m/s²)", "Décélération (> 3 m/s²)",
+                        "Accel/Dec", "Accélération (> 3 m/s²)", "Décélération (> 3 m/s²)",
                     ]
                     cols_seance_valid = [c for c in cols_seance_pref if c in df_exp_session.columns]
                     st.dataframe(df_exp_session[cols_seance_valid], use_container_width=True, hide_index=True)
@@ -5586,34 +5688,47 @@ def render_weekly_reports_view() -> None:
                         else:
                             st.markdown(clean_html, unsafe_allow_html=True)
 
-    # 6. Tableaux récapitulatifs & Jauges Objectif vs Réalisé par catégorie de poste
-    # 6. Vérification / Ajustement des Objectifs par Séance (Somme = Objectif Hebdo)
+    # 6. Vérification / Édition des Objectifs Isolés par Séance (Somme = Objectif Hebdo)
     st.divider()
+    flash_obj_msg = st.session_state.pop("weekly_obj_save_flash", None)
+    if flash_obj_msg:
+        st.success(flash_obj_msg)
+
     fallback_cfg_w = get_active_objectifs_config()
     missing_saved_obj = [
         s.get("day_type", sid)
         for sid, s in synthese_jours.items()
         if isinstance(s, dict) and not (isinstance(s.get("objectifs_config"), dict) and "5 de devant" in s["objectifs_config"])
     ]
-    with st.expander(
-        f"🎯 Objectifs par Séance Fusionnée (Somme = Objectif Hebdo — {len(synthese_jours)} séance{'s' if len(synthese_jours) > 1 else ''})",
-        expanded=False,
-    ):
+    exp_title_obj = (
+        f"🎯 Objectifs par Séance Fusionnée (Somme = Objectif Hebdo — {len(synthese_jours)} séance{'s' if len(synthese_jours) > 1 else ''}"
+        + (f" — ⚠️ {len(missing_saved_obj)} à figer" if missing_saved_obj else " — ✅ tous figés")
+        + ")"
+    )
+    with st.expander(exp_title_obj, expanded=bool(missing_saved_obj)):
         if missing_saved_obj:
-            st.info(
-                f"ℹ️ Les séances suivantes ont été archivées avant la sauvegarde automatique des objectifs par séance : "
-                f"**{', '.join(missing_saved_obj)}**. Vérifiez ou ajustez leurs objectifs ci-dessous puis cliquez sur **Enregistrer** "
-                f"pour figer la somme exacte de la semaine dans l'archive."
+            st.warning(
+                f"⚠️ Les séances suivantes ont été archivées avant l'isolation des objectifs par séance : "
+                f"**{', '.join(missing_saved_obj)}**. Saisissez leurs vrais objectifs ci-dessous puis cliquez sur **Enregistrer** "
+                f"pour les figer définitivement dans `week_{year}_W{week_num:02d}.json` (avec synchronisation GitHub automatique)."
             )
         edited_sess_objs: Dict[str, Dict[str, Dict[str, float]]] = {}
         sess_items_w = [(sid, s) for sid, s in synthese_jours.items() if isinstance(s, dict)]
         if sess_items_w:
-            sess_tabs_w = st.tabs([f"📅 {s.get('day_type', sid)}" for sid, s in sess_items_w])
+            sess_tabs_w = st.tabs([
+                f"{'✅' if (isinstance(s.get('objectifs_config'), dict) and '5 de devant' in s['objectifs_config']) else '⚠️'} {s.get('day_type', sid)}"
+                for sid, s in sess_items_w
+            ])
             for t_i, (sid, s_meta) in enumerate(sess_items_w):
+                has_own_cfg = isinstance(s_meta.get("objectifs_config"), dict) and "5 de devant" in s_meta["objectifs_config"]
                 base_s_cfg = weekly_memory._get_session_objectifs_config(
-                    s_meta, fallback_config=fallback_cfg_w, year=year, week_num=week_num
+                    dict(s_meta), fallback_config=fallback_cfg_w, year=year, week_num=week_num
                 )
                 with sess_tabs_w[t_i]:
+                    if has_own_cfg:
+                        st.caption(f"✅ Objectifs propres à « {s_meta.get('day_type', sid)} » figés dans le JSON (isolés des autres séances).")
+                    else:
+                        st.caption(f"⚠️ Non encore figés dans le JSON pour « {s_meta.get('day_type', sid)} » — valeurs pré-remplies depuis le repli actif.")
                     c_o1, c_o2, c_o3 = st.columns(3)
                     s_cfg_new: Dict[str, Dict[str, float]] = {}
                     for col_o, g_lbl in [(c_o1, "5 de devant"), (c_o2, "3ème Ligne"), (c_o3, "Trois-quarts")]:
@@ -5651,10 +5766,19 @@ def render_weekly_reports_view() -> None:
             st.markdown("**📊 Somme Dynamique des Objectifs Hebdomadaires :**")
             st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
 
-            if st.button("💾 Enregistrer les objectifs de ces séances dans l'archive de la semaine", key=f"btn_save_wobjs_{year}_{week_num}"):
+            if st.button(
+                "💾 Enregistrer les objectifs de ces séances dans l'archive (JSON + GitHub)",
+                key=f"btn_save_wobjs_{year}_{week_num}",
+                type="primary",
+            ):
                 ok_o, msg_o = weekly_memory.update_week_sessions_objectifs(year, week_num, edited_sess_objs)
                 if ok_o:
-                    st.success(f"✅ {msg_o}")
+                    # Synchroniser immédiatement les widgets de la vue Explorer pour ces séances
+                    e_pref = f"exp_obj_{year}_{week_num}_"
+                    for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(e_pref)]:
+                        del st.session_state[sk_del]
+                    st.session_state["weekly_obj_save_flash"] = f"✅ {msg_o}"
+                    st.toast(f"✅ {msg_o}")
                     st.rerun()
                 else:
                     st.error(f"❌ {msg_o}")
@@ -7328,6 +7452,7 @@ def main() -> None:
 
             if st.button("✅ Enregistrer ce rapport dans la mémoire de la semaine", type="primary", use_container_width=True, key="btn_save_weekly_memory"):
                 clean_date_val = selected_session_date.strftime("%d/%m/%Y") if selected_session_date else datetime.date(2026, 11, 6).strftime("%d/%m/%Y")
+                frozen_session_objectifs = copy.deepcopy(get_active_objectifs_config())
                 success, msg = weekly_memory.save_session_to_memory(
                     df_indiv=df_indiv,
                     year=int(sel_year),
@@ -7340,7 +7465,7 @@ def main() -> None:
                     group_stats=moyennes_groupes,
                     adversaire=adversaire_input,
                     rpe_stats=rpe_metrics_seance,
-                    objectifs_config=active_objectifs,
+                    objectifs_config=frozen_session_objectifs,
                 )
                 if success:
                     st.success(f"🎉 {msg}")
