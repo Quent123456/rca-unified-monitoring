@@ -1379,16 +1379,16 @@ def generer_graphique_hebdo_jauges_matplotlib(
 
     is_2x2 = (layout == "2x2")
     if is_2x2:
-        fig, axes_grid = plt.subplots(2, 2, figsize=(12.6, 7.0), dpi=150)
+        fig, axes_grid = plt.subplots(2, 2, figsize=(12.6, 7.2), dpi=150)
         axes = axes_grid.flatten()
     else:
-        fig, axes = plt.subplots(1, 4, figsize=(12.2, 2.9), dpi=140)
+        fig, axes = plt.subplots(1, 4, figsize=(12.2, 3.1), dpi=140)
     fig.patch.set_facecolor("#FFFFFF")
 
-    fs_title = 11.5 if is_2x2 else 9.4
-    fs_xtick = 10.5 if is_2x2 else 8.6
-    fs_val = 10.5 if is_2x2 else 8.2
-    fs_badge = 10.5 if is_2x2 else 8.2
+    fs_title = 11.2 if is_2x2 else 9.4
+    fs_xtick = 10.2 if is_2x2 else 8.8
+    fs_val = 10.2 if is_2x2 else 8.2
+    fs_badge = 10.2 if is_2x2 else 8.2
 
     for idx, (title, obj_val, real_val, unit) in enumerate(cards_def):
         ax = axes[idx]
@@ -1397,7 +1397,7 @@ def generer_graphique_hebdo_jauges_matplotlib(
             spine.set_color("#CBD5E1")
             spine.set_linewidth(0.9 if is_2x2 else 0.8)
 
-        pct = (real_val / obj_val * 100.0) if obj_val > 0 else 0.0
+        pct = int(round((real_val / obj_val) * 100.0)) if obj_val > 0 else 0
 
         x = np.array([0, 1])
         width = 0.42 if is_2x2 else 0.44
@@ -1420,7 +1420,8 @@ def generer_graphique_hebdo_jauges_matplotlib(
         ax.set_ylim(0, max_v * (1.30 if is_2x2 else 1.35))
         ax.grid(axis="y", linestyle="--", alpha=0.35, color="#94A3B8", zorder=1)
         ax.set_yticklabels([])
-        ax.tick_params(axis="both", which="both", length=0, pad=5 if is_2x2 else 3)
+        ax.tick_params(axis="x", which="both", length=0, pad=7 if is_2x2 else 5)
+        ax.tick_params(axis="y", which="both", length=0)
 
         def _fmt(v: float, u: str) -> str:
             s = f"{int(round(v)):,d}".replace(",", " ")
@@ -1440,13 +1441,13 @@ def generer_graphique_hebdo_jauges_matplotlib(
             fontsize=fs_val, fontweight="bold", color="#A30000"
         )
 
-        # Badge % d'atteinte
-        badge_bg = "#DCFCE7" if pct >= 95.0 else ("#FEF3C7" if pct >= 75.0 else "#FEE2E2")
-        badge_fg = "#166534" if pct >= 95.0 else ("#92400E" if pct >= 75.0 else "#991B1B")
+        # Badge % d'atteinte (calculé par round((Réalisé_Hebdo / Objectif_Hebdo) * 100))
+        badge_bg = "#DCFCE7" if pct >= 95 else ("#FEF3C7" if pct >= 75 else "#FEE2E2")
+        badge_fg = "#166534" if pct >= 95 else ("#92400E" if pct >= 75 else "#991B1B")
 
         ax.text(
             0.5, 0.89,
-            f"{pct:.0f}%",
+            f"{pct}%",
             transform=ax.transAxes,
             ha="center", va="center",
             fontsize=fs_badge, fontweight="bold",
@@ -1456,11 +1457,11 @@ def generer_graphique_hebdo_jauges_matplotlib(
         )
 
     if is_2x2:
-        fig.subplots_adjust(left=0.03, right=0.97, top=0.93, bottom=0.06, hspace=0.32, wspace=0.14)
+        fig.subplots_adjust(left=0.03, right=0.97, top=0.92, bottom=0.18, hspace=0.44, wspace=0.14)
     else:
-        fig.tight_layout()
+        fig.subplots_adjust(left=0.03, right=0.97, top=0.86, bottom=0.18, wspace=0.16)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.12)
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.18)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -2219,6 +2220,50 @@ def update_week_sessions_objectifs(
         return False, f"Erreur d'enregistrement : {e}"
 
 
+def _deduplicate_merged_sessions(
+    synthese_src: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Source unique de vérité : dédoublonne strictement la liste des N séances validées et
+    fusionnées (par session_id ou par couple canonique (day_type, date)) en préservant
+    l'ordre d'origine, afin de ne jamais sommer deux fois une même séance.
+    """
+    if not synthese_src:
+        return {}
+
+    pairs: List[Tuple[str, Dict[str, Any]]] = []
+    if isinstance(synthese_src, dict):
+        for k, v in synthese_src.items():
+            if isinstance(v, dict):
+                pairs.append((str(k), v))
+    elif isinstance(synthese_src, list):
+        for i, v in enumerate(synthese_src):
+            if isinstance(v, dict):
+                sid = str(v.get("session_id") or f"s_{i}")
+                pairs.append((sid, v))
+
+    deduped: Dict[str, Dict[str, Any]] = {}
+    seen_fingerprints: set = set()
+    for key_str, s_meta in pairs:
+        sid = str(s_meta.get("session_id") or "").strip().lower()
+        day_norm = _strip_accents_lower(s_meta.get("day_type", ""))
+        date_clean = format_readable_date(s_meta.get("date", ""))
+        if sid:
+            fp = ("sid", sid)
+        elif day_norm or date_clean:
+            fp = ("day_date", day_norm, date_clean)
+        else:
+            fp = ("key", key_str.strip().lower())
+
+        if fp in seen_fingerprints:
+            continue
+        seen_fingerprints.add(fp)
+        out_key = str(s_meta.get("session_id") or key_str)
+        deduped[out_key] = s_meta
+
+    return deduped
+
+
 def _get_session_objectifs_config(
     session_meta: Dict[str, Any],
     fallback_config: Optional[Dict[str, Dict[str, float]]] = None,
@@ -2226,12 +2271,12 @@ def _get_session_objectifs_config(
     week_num: Optional[int] = None,
 ) -> Dict[str, Dict[str, float]]:
     """
-    Résout dynamiquement la configuration d'objectifs réelle d'une séance :
+    Résout dynamiquement l'objectif unitaire d'une séance :
     1. Objectifs sauvegardés dans la séance ('objectifs_config') — source exacte prioritaire.
     2. Extraction automatique depuis le rapport PDF journalier archivé (data/weekly_pdfs/)
        si 'objectifs_config' n'était pas encore présent dans l'archive JSON.
-    3. Repli sur fallback_config (targets_config.json actif du club) — jamais sur des
-       constantes arbitraires figées qui écraseraient les cibles configurées par le staff.
+    3. Repli sur fallback_config (targets_config.json actif du club) — aucune valeur numérique
+       hebdomadaire codée en dur.
     """
     if isinstance(session_meta, dict):
         saved_cfg = session_meta.get("objectifs_config")
@@ -2263,7 +2308,7 @@ def _get_session_objectifs_config(
 
 def calculer_objectifs_hebdo_pour_categorie(
     category_name: str,
-    synthese_dict: Optional[Dict[str, Any]] = None,
+    synthese_dict: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
     fallback_config: Optional[Dict[str, Dict[str, float]]] = None,
     nb_seances_fallback: int = 1,
     year: Optional[int] = None,
@@ -2271,19 +2316,22 @@ def calculer_objectifs_hebdo_pour_categorie(
 ) -> Dict[str, float]:
     """
     Calcule l'objectif hebdomadaire exact d'une ligne de poste ou d'un poste spécifique
-    en additionnant dynamiquement les objectifs de cette catégorie sur chacune des séances
-    fusionnées de la semaine (Objectif_Séance_1 + Objectif_Séance_2 + Objectif_Séance_3).
+    en additionnant dynamiquement les objectifs unitaires de cette catégorie sur les N
+    séances fusionnées et dédoublonnées :
+      Objectif_Hebdo(groupe) = Somme_{s in Seances_Fusionnees} Objectif(s, groupe).
     """
     keys = ["Objectif Distance (m)", "Obj. HSR", "Obj. VHSR", "Obj. ACC/DEC"]
-    sessions_list: List[Dict[str, Any]] = []
-    if isinstance(synthese_dict, dict):
-        sessions_list = [s for s in synthese_dict.values() if isinstance(s, dict)]
-    elif isinstance(synthese_dict, list):
-        sessions_list = [s for s in synthese_dict if isinstance(s, dict)]
+    dedup_sessions = _deduplicate_merged_sessions(synthese_dict)
 
-    if sessions_list:
+    if dedup_sessions:
         totals = {k: 0.0 for k in keys}
-        for s_meta in sessions_list:
+        seen_pairs: set = set()
+        cat_norm = _strip_accents_lower(re.sub(r"\s*\(hors\s+[^)]*\)", "", str(category_name or ""), flags=re.IGNORECASE).strip())
+        for s_key, s_meta in dedup_sessions.items():
+            pair_id = (s_key, cat_norm)
+            if pair_id in seen_pairs:
+                continue
+            seen_pairs.add(pair_id)
             s_cfg = _get_session_objectifs_config(
                 s_meta,
                 fallback_config=fallback_config,
@@ -2555,11 +2603,8 @@ def calculer_metriques_hebdo_groupe_par_seances(
     sessions_with_data = 0
     total_participations = 0
 
-    sessions_list: List[Dict[str, Any]] = []
-    if isinstance(sessions_dict, dict):
-        sessions_list = [s for s in sessions_dict.values() if isinstance(s, dict)]
-    elif isinstance(sessions_dict, list):
-        sessions_list = [s for s in sessions_dict if isinstance(s, dict)]
+    dedup_sessions = _deduplicate_merged_sessions(sessions_dict)
+    sessions_list: List[Dict[str, Any]] = list(dedup_sessions.values())
 
     iso_arg = isolated_positions if not is_isolated else None
     can_use_group_stats = (
@@ -3535,14 +3580,16 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
         group_defs.append((c, title))
 
     n_panels = max(1, min(3, len(group_defs)))
-    fig, axes_arr = plt.subplots(1, n_panels, figsize=(16.8, 7.2), dpi=150)
+    # Ratio ~1.58 aligné avec le cadre PDF (273 x 173 mm) pour éviter tout étirement vertical
+    fig, axes_arr = plt.subplots(1, n_panels, figsize=(14.4, 9.0), dpi=160)
     axes = [axes_arr] if n_panels == 1 else list(axes_arr)
     fig.patch.set_facecolor("#FFFFFF")
 
     K = len(items_comparatif)
     x = np.arange(K)
-    step = 0.20 if K >= 4 else 0.215
-    bar_w = step * 0.84
+    step = 0.205 if K >= 4 else 0.22
+    bar_w = step * 0.78
+    rpe_axes: List[Any] = []
 
     for idx, (grp_key, grp_title) in enumerate(group_defs):
         ax = axes[idx]
@@ -3555,6 +3602,7 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
 
         # Axe Y secondaire découplé dédié exclusivement au RPE (1 à 10)
         ax_rpe = ax.twinx()
+        rpe_axes.append(ax_rpe)
         ax_rpe.set_facecolor("none")
         ax_rpe.spines["top"].set_visible(False)
         ax_rpe.spines["left"].set_visible(False)
@@ -3563,8 +3611,8 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
         ax_rpe.grid(False)
         ax_rpe.set_ylim(0.0, 10.5)
         ax_rpe.set_yticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-        ax_rpe.set_ylabel("RPE (1-10)", fontsize=8.0, fontweight="bold", color="#C2410C", labelpad=5)
-        ax_rpe.tick_params(axis="y", labelsize=7.6, colors="#C2410C")
+        ax_rpe.set_ylabel("RPE (1-10)", fontsize=9.0, fontweight="bold", color="#C2410C", labelpad=6)
+        ax_rpe.tick_params(axis="y", labelsize=8.4, colors="#C2410C")
 
         v_vol = [it.get("group_metrics", {}).get(grp_key, {}).get("volume", 0.0) for it in items_comparatif]
         v_hsr = [it.get("group_metrics", {}).get(grp_key, {}).get("hsr", 0.0) for it in items_comparatif]
@@ -3591,7 +3639,7 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
             zorder=4,
         )
 
-        # Annotations numériques des métriques GPS (Volume, HSR, VHSR) avec anti-chevauchement HSR / VHSR
+        # Annotations numériques des métriques GPS (Volume, HSR, VHSR) avec anti-chevauchement strict
         for i_idx in range(K):
             # 1. Volume (barre bleue)
             vol_val = float(v_vol[i_idx] or 0.0)
@@ -3600,34 +3648,28 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
                 ax.annotate(
                     f"{int(round(vol_val))}",
                     xy=(r_vol.get_x() + r_vol.get_width() / 2.0, r_vol.get_height()),
-                    xytext=(0, 3),
+                    xytext=(0, 4),
                     textcoords="offset points",
                     ha="center",
                     va="bottom",
-                    fontsize=7.0,
+                    fontsize=7.4,
                     fontweight="bold",
                     color="#0C2340",
                     zorder=6,
                 )
 
-            # 2 & 3. HSR (rouge) & VHSR (verte) — décalage vertical anti-collision si hauteurs proches
+            # 2 & 3. HSR (rouge) & VHSR (verte) — décalage vertical anti-collision sans déborder sur la barre RPE
             hsr_val = float(v_hsr[i_idx] or 0.0)
             vhsr_val = float(v_vhsr[i_idx] or 0.0)
-            close_pair = (hsr_val > 0 and vhsr_val > 0 and abs(hsr_val - vhsr_val) < max_v * 0.12)
+            close_pair = (hsr_val > 0 and vhsr_val > 0 and abs(hsr_val - vhsr_val) < max_v * 0.16)
 
             if hsr_val > 0:
                 r_hsr = b_hsr[i_idx]
-                if close_pair:
-                    # Placer l'étiquette de la barre la plus haute (ou HSR si égalité) plus haut
-                    hsr_dy = 11 if hsr_val >= vhsr_val else 2
-                    hsr_dx = -1.5
-                else:
-                    hsr_dy = 3
-                    hsr_dx = 0.0
+                hsr_dy = (14 if hsr_val >= vhsr_val else 3) if close_pair else 3
                 ax.annotate(
                     f"{int(round(hsr_val))}",
                     xy=(r_hsr.get_x() + r_hsr.get_width() / 2.0, r_hsr.get_height()),
-                    xytext=(hsr_dx, hsr_dy),
+                    xytext=(0, hsr_dy),
                     textcoords="offset points",
                     ha="center",
                     va="bottom",
@@ -3639,16 +3681,11 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
 
             if vhsr_val > 0:
                 r_vhsr = b_vhsr[i_idx]
-                if close_pair:
-                    vhsr_dy = 11 if vhsr_val > hsr_val else 2
-                    vhsr_dx = 1.5
-                else:
-                    vhsr_dy = 3
-                    vhsr_dx = 0.0
+                vhsr_dy = (14 if vhsr_val > hsr_val else 3) if close_pair else 3
                 ax.annotate(
                     f"{int(round(vhsr_val))}",
                     xy=(r_vhsr.get_x() + r_vhsr.get_width() / 2.0, r_vhsr.get_height()),
-                    xytext=(vhsr_dx, vhsr_dy),
+                    xytext=(0, vhsr_dy),
                     textcoords="offset points",
                     ha="center",
                     va="bottom",
@@ -3668,11 +3705,11 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
                 ax_rpe.annotate(
                     lbl_rpe,
                     xy=(bar_center_x, f_val),
-                    xytext=(0, 3),
+                    xytext=(0, 4),
                     textcoords="offset points",
                     ha="center",
                     va="bottom",
-                    fontsize=7.6,
+                    fontsize=8.2,
                     fontweight="bold",
                     color="#C2410C",
                     zorder=6,
@@ -3685,23 +3722,23 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
                     textcoords="offset points",
                     ha="center",
                     va="bottom",
-                    fontsize=6.6,
+                    fontsize=7.2,
                     fontweight="bold",
                     color="#94A3B8",
                     zorder=6,
                 )
 
-        ax.set_title(grp_title, fontsize=11.8, fontweight="bold", color="#0C2340", pad=12)
+        ax.set_title(grp_title, fontsize=12.6, fontweight="bold", color="#0C2340", pad=12)
         ax.set_xticks(x)
         x_labels = [it.get("label_x", it.get("short_label", it.get("label", ""))) for it in items_comparatif]
-        ax.set_xticklabels([str(lbl).replace(" (", "\n(") for lbl in x_labels], fontsize=8.4, fontweight="bold", color="#334155")
-        ax.set_xlim(-0.75, max(float(K) - 0.25, 0.75))
-        ax_rpe.set_xlim(-0.75, max(float(K) - 0.25, 0.75))
+        ax.set_xticklabels([str(lbl).replace(" (", "\n(") for lbl in x_labels], fontsize=9.2, fontweight="bold", color="#334155")
+        ax.set_xlim(-0.78, max(float(K) - 0.22, 0.78))
+        ax_rpe.set_xlim(-0.78, max(float(K) - 0.22, 0.78))
 
         ax.set_ylim(0, max_v * 1.25)
-        ax.set_ylabel("Mètres (m)", fontsize=8.0, fontweight="bold", color="#0C2340", labelpad=4)
+        ax.set_ylabel("Mètres (m)", fontsize=9.0, fontweight="bold", color="#0C2340", labelpad=5)
         ax.tick_params(axis="x", length=0, pad=6)
-        ax.tick_params(axis="y", labelsize=7.6, color="#94A3B8")
+        ax.tick_params(axis="y", labelsize=8.4, color="#94A3B8")
 
     leg_elements = [
         Line2D([0], [0], marker="o", color="w", markerfacecolor="#1E88E5", markersize=9, label="Volume (m)"),
@@ -3712,16 +3749,17 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
     fig.legend(
         handles=leg_elements,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.98),
+        bbox_to_anchor=(0.5, 0.985),
         ncol=4,
         frameon=False,
-        fontsize=9.8,
+        fontsize=10.4,
     )
 
+    # Marges fixes généreuses (sans bbox_inches='tight') pour garantir la visibilité totale du titre RPE (1-10) à droite
     wspace_val = 0.56 if n_panels >= 3 else (0.42 if n_panels == 2 else 0.25)
-    fig.subplots_adjust(top=0.88, bottom=0.14, left=0.06, right=0.95, wspace=wspace_val)
+    fig.subplots_adjust(top=0.89, bottom=0.08, left=0.065, right=0.935, wspace=wspace_val)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.22)
+    fig.savefig(buf, format="png")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -4712,12 +4750,7 @@ def generate_weekly_pdf_report(
     if synthese_jours is None:
         synthese_jours = kwargs.get("selected_sessions_meta", {})
 
-    if isinstance(synthese_jours, list):
-        synthese_dict = {f"s_{i}": s for i, s in enumerate(synthese_jours) if isinstance(s, dict)}
-    elif isinstance(synthese_jours, dict):
-        synthese_dict = dict(synthese_jours)
-    else:
-        synthese_dict = {}
+    synthese_dict = _deduplicate_merged_sessions(synthese_jours)
 
     granularity_mode = str(kwargs.get("granularity_mode", granularity_mode) or "Par ligne de poste")
     g_low = _strip_accents_lower(granularity_mode)
@@ -5078,10 +5111,10 @@ def generate_weekly_pdf_report(
         real_dpm = 0.0 if np.isnan(real_dpm) else real_dpm
         real_acc = 0.0 if np.isnan(real_acc) else real_acc
 
-        pct_dist = (real_dist / obj_dist * 100.0) if obj_dist > 0 else 0.0
-        pct_hsr = (real_hsr / obj_hsr * 100.0) if obj_hsr > 0 else 0.0
-        pct_vhsr = (real_vhsr / obj_vhsr * 100.0) if obj_vhsr > 0 else 0.0
-        pct_acc = (real_acc / obj_acc * 100.0) if obj_acc > 0 else 0.0
+        pct_dist = int(round((real_dist / obj_dist) * 100.0)) if obj_dist > 0 else 0
+        pct_hsr = int(round((real_hsr / obj_hsr) * 100.0)) if obj_hsr > 0 else 0
+        pct_vhsr = int(round((real_vhsr / obj_vhsr) * 100.0)) if obj_vhsr > 0 else 0
+        pct_acc = int(round((real_acc / obj_acc) * 100.0)) if obj_acc > 0 else 0
 
         # 3. RPE moyen hebdomadaire : moyenne pondérée par participation (identique Page finale, ignore 'NR')
         rpe_cat_val = rpe_groups.get(grp)
@@ -5101,7 +5134,7 @@ def generate_weekly_pdf_report(
             c_acc_p = float(pd.to_numeric(df_sub["Accel/Dec total"], errors="coerce").dropna().mean()) if "Accel/Dec total" in df_sub.columns else 0.0
             c_dpm_p = float(pd.to_numeric(df_sub["Distance/min (m/min)"], errors="coerce").dropna().mean()) if "Distance/min (m/min)" in df_sub.columns else 0.0
             cum_info_txt = (
-                f"Moy. cumulée/joueur (moy. {avg_sess_p:.1f} sé.) : "
+                f"Moy. cumulée/joueur ({n_players_grp} joueur{'s' if n_players_grp > 1 else ''} | moy. {avg_sess_p:.1f} sé.) : "
                 f"{int(round(c_dist_p)):,d} m  |  HSR Z3 : {int(round(c_hsr_p)):,d} m  |  "
                 f"VHSR Sprint : {int(round(c_vhsr_p)):,d} m  |  ACC/DEC : {int(round(c_acc_p))}  |  "
                 f"Intensité : {c_dpm_p:.1f} m/min"
@@ -5157,14 +5190,14 @@ def generate_weekly_pdf_report(
         pdf.set_font("Helvetica", "B", 7.8)
         pdf.cell(col_w_grp, 6.2, safe_latin1("  Réalisé Hebdo"), border=1, align="L", fill=True)
         pdf.set_text_color(30, 41, 59)
-        pdf.cell(col_w_num, 6.2, f"{int(round(real_dist)):,d} m ({pct_dist:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
-        pdf.cell(col_w_num, 6.2, f"{int(round(real_hsr)):,d} m ({pct_hsr:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
-        pdf.cell(col_w_num, 6.2, f"{int(round(real_vhsr)):,d} m ({pct_vhsr:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.2, f"{int(round(real_dist)):,d} m ({pct_dist}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.2, f"{int(round(real_hsr)):,d} m ({pct_hsr}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.2, f"{int(round(real_vhsr)):,d} m ({pct_vhsr}%)".replace(",", " "), border=1, align="C", fill=True)
         pdf.cell(col_w_num, 6.2, f"{real_dpm:.1f} m/min", border=1, align="C", fill=True)
-        pdf.cell(col_w_num, 6.2, f"{int(round(real_acc)):,d} ({pct_acc:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
+        pdf.cell(col_w_num, 6.2, f"{int(round(real_acc)):,d} ({pct_acc}%)".replace(",", " "), border=1, align="C", fill=True)
         pdf.cell(col_w_num, 6.2, safe_latin1(rpe_cat_str), border=1, align="C", fill=True)
 
-        # 2. 4 Graphiques comparatifs 2x2 GRAND FORMAT (toute la hauteur disponible sous le tableau)
+        # 2. 4 Graphiques comparatifs 2x2 GRAND FORMAT (avec marge basse propre pour Obj. / Réalisé)
         try:
             buf_jauges = generer_graphique_hebdo_jauges_matplotlib(
                 grp,
@@ -5178,7 +5211,7 @@ def generate_weekly_pdf_report(
                 isolated_positions=isolated_arg if not is_iso else None,
                 is_isolated=is_iso,
             )
-            pdf.image(buf_jauges, x=12, y=40.5, w=273, h=154.0)
+            pdf.image(buf_jauges, x=12, y=40.5, w=273, h=151.0)
         except Exception as e:
             print(f"Erreur graphique jauges hebdo PDF pour {disp_name} : {e}")
 
@@ -5188,9 +5221,9 @@ def generate_weekly_pdf_report(
         pdf.current_subtitle = f"STATISTIQUES INDIVIDUELLES CUMULÉES — {disp_name}"
         pdf.add_page()
 
-        # a) Bandeau récapitulatif des moyennes cumulées par joueur
+        # a) Bandeau récapitulatif épuré des moyennes cumulées par joueur (sans sous-titre redondant)
         y_banner = 20.5
-        h_banner = 12.2
+        h_banner = 8.4
         pdf.set_fill_color(248, 250, 252)
         pdf.set_draw_color(203, 213, 225)
         pdf.rect(12.0, y_banner, 273.0, h_banner, style="FD")
@@ -5199,26 +5232,14 @@ def generate_weekly_pdf_report(
         pdf.set_fill_color(243, 195, 0)
         pdf.rect(15.5, y_banner, 0.8, h_banner, style="F")
 
-        pdf.set_xy(18.5, y_banner + 1.4)
-        pdf.set_font("Helvetica", "B", 8.6)
+        pdf.set_xy(18.5, y_banner + 2.0)
+        pdf.set_font("Helvetica", "B", 8.2)
         pdf.set_text_color(22, 43, 76)
-        pdf.cell(
-            264.0,
-            4.2,
-            safe_latin1(
-                f"STATISTIQUES INDIVIDUELLES CUMULÉES — {disp_name}  ({n_players_grp} joueur{'s' if n_players_grp > 1 else ''} actifs)"
-            ),
-            align="L",
-        )
-
-        pdf.set_xy(18.5, y_banner + 6.4)
-        pdf.set_font("Helvetica", "B", 8.0)
-        pdf.set_text_color(51, 65, 85)
         banner_sub = cum_info_txt or "Aucune statistique individuelle cumulée disponible pour cette catégorie."
-        pdf.cell(264.0, 4.2, safe_latin1(banner_sub), align="L")
+        pdf.cell(264.0, 4.4, safe_latin1(banner_sub), align="L")
 
         # b) Tableau complet des statistiques individuelles avec marges et hauteurs de lignes confortables
-        y_tbl_hdr = 36.2
+        y_tbl_hdr = 32.0
         pdf.set_xy(12.0, y_tbl_hdr)
         pdf.set_fill_color(31, 78, 121)
         pdf.set_draw_color(31, 78, 121)
