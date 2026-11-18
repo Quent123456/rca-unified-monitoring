@@ -538,7 +538,33 @@
           "RPE_Display": "3",
           "RPE_Duration": 60.0
         }
-      ]
+      ],
+      "objectifs_config": {
+        "5 de devant": {
+          "Objectif Distance (m)": 2552.0,
+          "Obj. HSR": 173.0,
+          "Obj. VHSR": 31.0,
+          "Obj. ACC/DEC": 40.0
+        },
+        "3ème Ligne": {
+          "Objectif Distance (m)": 2617.0,
+          "Obj. HSR": 271.0,
+          "Obj. VHSR": 57.0,
+          "Obj. ACC/DEC": 50.0
+        },
+        "Trois-quarts": {
+          "Objectif Distance (m)": 2803.0,
+          "Obj. HSR": 275.0,
+          "Obj. VHSR": 83.0,
+          "Obj. ACC/DEC": 41.0
+        },
+        "Tous les groupes": {
+          "Objectif Distance (m)": 2657.3,
+          "Obj. HSR": 239.7,
+          "Obj. VHSR": 57.0,
+          "Obj. ACC/DEC": 43.7
+        }
+      }
     },
     "mercredi_entraînement": {
       "session_id": "mercredi_entraînement",
@@ -1157,7 +1183,33 @@
           "RPE_Display": "3",
           "RPE_Duration": 60.0
         }
-      ]
+      ],
+      "objectifs_config": {
+        "5 de devant": {
+          "Objectif Distance (m)": 5358.0,
+          "Obj. HSR": 380.0,
+          "Obj. VHSR": 213.0,
+          "Obj. ACC/DEC": 75.0
+        },
+        "3ème Ligne": {
+          "Objectif Distance (m)": 5495.0,
+          "Obj. HSR": 596.0,
+          "Obj. VHSR": 392.0,
+          "Obj. ACC/DEC": 95.0
+        },
+        "Trois-quarts": {
+          "Objectif Distance (m)": 5885.0,
+          "Obj. HSR": 604.0,
+          "Obj. VHSR": 574.0,
+          "Obj. ACC/DEC": 78.0
+        },
+        "Tous les groupes": {
+          "Objectif Distance (m)": 5579.3,
+          "Obj. HSR": 526.7,
+          "Obj. VHSR": 393.0,
+          "Obj. ACC/DEC": 82.7
+        }
+      }
     },
     "vendredi_entraînement": {
       "session_id": "vendredi_entraînement",
@@ -1963,8 +2015,49 @@
           "RPE_Display": "3",
           "RPE_Duration": 60.0
         }
-      ]
+      ],
+      "objectifs_config": {
+        "5 de devant": {
+          "Objectif Distance (m)": 3969.0,
+          "Obj. HSR": 250.0,
+          "Obj. VHSR": 93.0,
+          "Obj. ACC/DEC": 44.0
+        },
+        "3ème Ligne": {
+          "Objectif Distance (m)": 4071.0,
+          "Obj. HSR": 392.0,
+          "Obj. VHSR": 171.0,
+          "Obj. ACC/DEC": 56.0
+        },
+        "Trois-quarts": {
+          "Objectif Distance (m)": 4360.0,
+          "Obj. HSR": 397.0,
+          "Obj. VHSR": 250.0,
+          "Obj. ACC/DEC": 46.0
+        },
+        "Tous les groupes": {
+          "Objectif Distance (m)": 4133.3,
+          "Obj. HSR": 346.3,
+          "Obj. VHSR": 171.3,
+          "Obj. ACC/DEC": 48.7
+        }
+      }
     }
   },
-  "last_updated": "16/11/2026 11:47:55"
+  "last_updated": "18/11/2026 10:43:53",
+  "rpe_summary": {
+    "Total": 3.5,
+    "5 de devant": 3.8,
+    "3ème Ligne": 2.7,
+    "Trois-quarts": 3.4,
+    "Pilier": 4.1,
+    "Talonneur": 3.5,
+    "2ème ligne": 3.6,
+    "3ème ligne": 2.7,
+    "Demi de mêlée": 3.0,
+    "Demi d'ouverture": 3.5,
+    "Centre": 3.8,
+    "Ailier": 4.0,
+    "Arrière": 2.4
+  }
 }
