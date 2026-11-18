@@ -5367,21 +5367,19 @@ def render_weekly_reports_view() -> None:
             else ""
         )
         with target_col:
-            st.markdown(
-                f"""
-                <div style="background:#FFFFFF;border:1.5px solid {card_border};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
-                    <div style="font-weight:800;color:#1F4E79;font-size:0.95rem;">🏉 {s_info.get('day_type', s_id)}</div>
-                    <div style="font-size:0.75rem;color:#64748B;margin-top:2px;">📅 {date_clean_card}</div>
-                    {prov_badge_html}
-                    <div style="font-size:0.80rem;color:#334155;margin-top:6px;">
-                        👥 <strong>{s_info.get('num_players', 0)}</strong> joueurs<br/>
-                        🏃 <strong>{s_info.get('total_distance_km', 0.0)} km</strong> cumulés<br/>
-                        🔥 <strong>{s_info.get('total_hi_m', 0.0)} m</strong> haute int.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+            card_html = (
+                f'<div style="background:#FFFFFF;border:1.5px solid {card_border};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">'
+                f'<div style="font-weight:800;color:#1F4E79;font-size:0.95rem;">🏉 {s_info.get("day_type", s_id)}</div>'
+                f'<div style="font-size:0.75rem;color:#64748B;margin-top:2px;">📅 {date_clean_card}</div>'
+                f'{prov_badge_html}'
+                f'<div style="font-size:0.80rem;color:#334155;margin-top:6px;">'
+                f'👥 <strong>{s_info.get("num_players", 0)}</strong> joueurs<br/>'
+                f'🏃 <strong>{s_info.get("total_distance_km", 0.0)} km</strong> cumulés<br/>'
+                f'🔥 <strong>{s_info.get("total_hi_m", 0.0)} m</strong> haute int.'
+                f'</div>'
+                f'</div>'
             )
+            st.markdown(card_html, unsafe_allow_html=True)
             c_chk, c_del = st.columns([2.5, 1.5])
             with c_chk:
                 is_checked = st.checkbox(
