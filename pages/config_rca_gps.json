@@ -1,8 +1,8 @@
 {
   "mapping": {
-    "1": "FRION Quentin",
-    "2": "SAINTOMER Lucas",
-    "3": "FOURNET Giovanni",
+    "1": "TESSON Gabriel",
+    "2": "Jean-Étienne ( TIJ)",
+    "3": "WALONGO Dominique",
     "4": "SALUA Landry",
     "5": "MARTIN Benjamin",
     "6": "ORION Lucas",
@@ -24,7 +24,7 @@
     "18": "SELTZER Antoine"
   },
   "group_mapping": {
-    "1": "5 de devant",
+    "1": "Demi",
     "5": "5 de devant",
     "7": "3ème ligne",
     "9": "Trois-quarts",
@@ -37,7 +37,7 @@
     "19": "5 de devant",
     "22": "Trois-quarts",
     "8": "3ème ligne",
-    "3": "5 de devant",
+    "3": "Trois-quarts",
     "6": "3ème ligne",
     "15": "Trois-quarts",
     "18": "Trois-quarts",
@@ -47,7 +47,7 @@
     "2": "5 de devant",
     "12": "Trois-quarts"
   },
-  "derniere_mise_a_jour": "16/11/2026 11:37:32",
+  "derniere_mise_a_jour": "18/11/2026 11:03:54",
   "nb_boitiers": 22,
   "last_validated_file_sig": "DB 131126.xlsx_65811",
   "splits_participation": {
