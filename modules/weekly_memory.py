@@ -17,6 +17,7 @@ Module 100% indépendant gérant :
 
 from __future__ import annotations
 
+import copy
 import datetime
 import io
 import json
@@ -273,6 +274,7 @@ def save_session_to_memory(
     group_stats: Optional[Dict[str, Any]] = None,
     adversaire: str = "",
     rpe_stats: Optional[Dict[str, Any]] = None,
+    objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Tuple[bool, str]:
     """
     Sauvegarde manuellement une séance validée dans la mémoire hebdomadaire.
@@ -355,6 +357,7 @@ def save_session_to_memory(
         "pdf_filename": pdf_filename,
         "group_stats": group_stats or {},
         "rpe_stats": rpe_stats or {},
+        "objectifs_config": copy.deepcopy(objectifs_config) if isinstance(objectifs_config, dict) else None,
         "players_data": serialized_players,
     }
 
@@ -522,6 +525,7 @@ def aggregate_weekly_sessions(
     for s in target_sessions:
         s_id = s.get("session_id", "")
         synthese_jours[s_id] = {
+            "session_id": s_id,
             "day_type": s.get("day_type", ""),
             "date": s.get("date", ""),
             "num_players": s.get("num_players", 0),
@@ -529,7 +533,9 @@ def aggregate_weekly_sessions(
             "total_hi_m": s.get("total_hi_m", 0.0),
             "avg_dpm": s.get("avg_dpm", 0.0),
             "adversaire": s.get("adversaire", ""),
+            "group_stats": s.get("group_stats", {}),
             "rpe_stats": s.get("rpe_stats", {}),
+            "objectifs_config": s.get("objectifs_config"),
             "players_data": s.get("players_data", []),
         }
 
@@ -1097,12 +1103,15 @@ def restaurer_archive_backup(uploaded_file: Any) -> Tuple[bool, str]:
 def generer_graphique_hebdo_groupes_matplotlib(
     df_agg: pd.DataFrame,
     figsize: Tuple[float, float] = (6.2, 3.6),
+    synthese_jours: Optional[Dict[str, Any]] = None,
 ) -> io.BytesIO:
     """
     Génère le diagramme combiné à barres comparatif de la semaine pour la Page 1 du PDF et le Dashboard :
     - Distance Moyenne (m) par Groupe (barres bleu marine #1F4E79)
     - HSR Z3 Moyen (m) par Groupe (barres rouge #A30000)
     sur les 3 groupes officiels du RCA : 5 de devant, 3ème Ligne, Trois-quarts.
+    Utilise la somme des moyennes réalisées par séance (Moy_Mardi + Moy_Mercredi + Moy_Vendredi)
+    dès que synthese_jours est fourni afin d'éliminer tout biais lié au turnover d'effectif.
     """
     is_wide = figsize[0] >= 10.0
     fig, ax1 = plt.subplots(figsize=figsize, dpi=140)
@@ -1114,13 +1123,22 @@ def generer_graphique_hebdo_groupes_matplotlib(
     hsr_vals: List[float] = []
 
     for g in groupes:
-        sub = df_agg[df_agg["Groupe"] == g] if not df_agg.empty and "Groupe" in df_agg.columns else pd.DataFrame()
-        if not sub.empty:
-            d_val = float(sub["Distance Totale (m)"].mean()) if "Distance Totale (m)" in sub.columns else (float(sub["Distance Totale (km)"].mean()) * 1000.0 if "Distance Totale (km)" in sub.columns else 0.0)
-            h_val = float(sub["HSR Z3 (m)"].mean()) if "HSR Z3 (m)" in sub.columns else (float(sub["Haute intensité (m)"].mean()) if "Haute intensité (m)" in sub.columns else 0.0)
+        if synthese_jours:
+            m_grp = calculer_metriques_hebdo_groupe_par_seances(
+                sessions_dict=synthese_jours,
+                grp=g,
+                df_fallback=df_agg,
+            )
+            d_val = float(m_grp.get("dist_m", 0.0) or 0.0)
+            h_val = float(m_grp.get("hsr_m", 0.0) or 0.0)
         else:
-            d_val = 0.0
-            h_val = 0.0
+            sub = _filter_df_by_group(df_agg, g) if df_agg is not None and not df_agg.empty else pd.DataFrame()
+            if not sub.empty:
+                d_val = float(sub["Distance Totale (m)"].mean()) if "Distance Totale (m)" in sub.columns else (float(sub["Distance Totale (km)"].mean()) * 1000.0 if "Distance Totale (km)" in sub.columns else 0.0)
+                h_val = float(sub["HSR Z3 (m)"].mean()) if "HSR Z3 (m)" in sub.columns else (float(sub["Haute intensité (m)"].mean()) if "Haute intensité (m)" in sub.columns else 0.0)
+            else:
+                d_val = 0.0
+                h_val = 0.0
         dist_vals.append(d_val)
         hsr_vals.append(h_val)
 
@@ -1264,22 +1282,61 @@ def generer_graphique_hebdo_jauges_matplotlib(
     nb_seances: int = 3,
     objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
     layout: str = "1x4",
+    synthese_jours: Optional[Dict[str, Any]] = None,
+    explicit_targets: Optional[Dict[str, float]] = None,
+    explicit_realized: Optional[Dict[str, float]] = None,
+    isolated_positions: Optional[List[str]] = None,
+    is_isolated: bool = False,
 ) -> io.BytesIO:
     """
     Génère une figure propre (1x4 ou 2x2) regroupant les 4 duels de barres
-    'Objectif Hebdomadaire vs Réalisé Cumulé' pour une ligne de poste ou un poste spécifique RCA :
+    'Objectif Hebdomadaire vs Réalisé Hebdo' pour une ligne de poste ou un poste spécifique RCA :
     1. Distance Totale (m)
     2. HSR Z3 (m)
     3. VHSR Sprint (m)
-    4. ACC / DEC (> 3 m/s²)
+    4. ACC/DEC (nb)
+    Garantit 100 % de cohérence avec le tableau de synthèse lorsqu'on passe explicit_targets/explicit_realized
+    ou synthese_jours.
     """
     active_cfg = objectifs_config or charger_objectifs_config()
-    targets_daily = get_objectifs_for_category(active_cfg, group_name)
 
-    multiplier = max(nb_seances, 1)
+    # 1. Objectifs hebdomadaires (somme exacte des séances fusionnées ou cibles explicites du tableau)
+    if isinstance(explicit_targets, dict):
+        obj_dist = float(explicit_targets.get("Objectif Distance (m)", 0.0) or 0.0)
+        obj_hsr = float(explicit_targets.get("Obj. HSR", 0.0) or 0.0)
+        obj_vhsr = float(explicit_targets.get("Obj. VHSR", 0.0) or 0.0)
+        obj_acc = float(explicit_targets.get("Obj. ACC/DEC", 0.0) or 0.0)
+    else:
+        tgt_hebdo = calculer_objectifs_hebdo_pour_categorie(
+            category_name=group_name,
+            synthese_dict=synthese_jours,
+            fallback_config=active_cfg,
+            nb_seances_fallback=nb_seances,
+        )
+        obj_dist = float(tgt_hebdo.get("Objectif Distance (m)", 0.0) or 0.0)
+        obj_hsr = float(tgt_hebdo.get("Obj. HSR", 0.0) or 0.0)
+        obj_vhsr = float(tgt_hebdo.get("Obj. VHSR", 0.0) or 0.0)
+        obj_acc = float(tgt_hebdo.get("Obj. ACC/DEC", 0.0) or 0.0)
 
-    # Calcul des réalisés moyens par joueur du groupe sur la semaine
-    if not df_grp.empty:
+    # 2. Réalisés hebdomadaires (valeurs explicites du tableau ou somme des moyennes par séance)
+    if isinstance(explicit_realized, dict):
+        val_dist = float(explicit_realized.get("dist_m", 0.0) or 0.0)
+        val_hsr = float(explicit_realized.get("hsr_m", 0.0) or 0.0)
+        val_vhsr = float(explicit_realized.get("vhsr_m", 0.0) or 0.0)
+        val_acc = float(explicit_realized.get("acc_dec", 0.0) or 0.0)
+    elif synthese_jours:
+        m_grp = calculer_metriques_hebdo_groupe_par_seances(
+            sessions_dict=synthese_jours,
+            grp=group_name,
+            df_fallback=df_grp,
+            isolated_positions=isolated_positions,
+            is_isolated=is_isolated,
+        )
+        val_dist = float(m_grp.get("dist_m", 0.0) or 0.0)
+        val_hsr = float(m_grp.get("hsr_m", 0.0) or 0.0)
+        val_vhsr = float(m_grp.get("vhsr_m", 0.0) or 0.0)
+        val_acc = float(m_grp.get("acc_dec", 0.0) or 0.0)
+    elif df_grp is not None and not df_grp.empty:
         def _get_mean(df_m: pd.DataFrame, candidates: List[str], mult: float = 1.0) -> float:
             for col in candidates:
                 if col in df_m.columns:
@@ -1292,7 +1349,7 @@ def generer_graphique_hebdo_jauges_matplotlib(
         if val_dist == 0.0:
             val_dist = _get_mean(df_grp, ["Distance Totale (km)", "Distance (km)"], mult=1000.0)
 
-        val_hsr = _get_mean(df_grp, ["HSR Z3 (m)", "Haute intensité (m)", "HSR_m", "Distance haute intensité (m)"])
+        val_hsr = _get_mean(df_grp, ["HSR Z3 (m)", "HSR_m", "Haute intensité (m)", "Distance haute intensité (m)"])
         if val_hsr == 0.0:
             val_hsr = _get_mean(df_grp, ["Distance in Speed Zone 3  (km)"], mult=1000.0)
 
@@ -1312,10 +1369,10 @@ def generer_graphique_hebdo_jauges_matplotlib(
     val_acc = 0.0 if (val_acc is None or np.isnan(val_acc)) else val_acc
 
     cards_def = [
-        ("Distance Totale (m)", targets_daily["Objectif Distance (m)"] * multiplier, val_dist, "m"),
-        ("HSR Z3 (m)", targets_daily["Obj. HSR"] * multiplier, val_hsr, "m"),
-        ("VHSR Sprint (m)", targets_daily["Obj. VHSR"] * multiplier, val_vhsr, "m"),
-        ("ACC / DEC (> 3 m/s²)", targets_daily["Obj. ACC/DEC"] * multiplier, val_acc, ""),
+        ("Distance Totale (m)", obj_dist, val_dist, "m"),
+        ("HSR Z3 (m)", obj_hsr, val_hsr, "m"),
+        ("VHSR Sprint (m)", obj_vhsr, val_vhsr, "m"),
+        ("ACC/DEC (nb)", obj_acc, val_acc, ""),
     ]
 
     if layout == "2x2":
@@ -1357,10 +1414,7 @@ def generer_graphique_hebdo_jauges_matplotlib(
         ax.tick_params(axis="both", which="both", length=0)
 
         def _fmt(v: float, u: str) -> str:
-            if abs(v - round(v)) < 0.05:
-                s = f"{int(round(v)):,d}".replace(",", " ")
-            else:
-                s = f"{v:.1f}"
+            s = f"{int(round(v)):,d}".replace(",", " ")
             return f"{s} {u}".strip()
 
         ax.text(
@@ -1982,14 +2036,114 @@ def get_objectifs_for_category(
     """
     Retourne les objectifs athlétiques pour un groupe (5 de devant, 3ème Ligne, Trois-quarts)
     ou un poste spécifique (en héritant de son groupe parent).
+    Résistant à la casse, aux accents et aux suffixes '(hors ...)'.
     """
     cfg = config_objectifs or DEFAULT_OBJECTIFS_CONFIG
     if category_name in cfg:
         return cfg[category_name]
-    parent_grp = POSTE_TO_GROUPE_MAP.get(category_name)
-    if parent_grp and parent_grp in cfg:
-        return cfg[parent_grp]
+
+    base_name = re.sub(r"\s*\(hors\s+[^)]*\)", "", str(category_name or ""), flags=re.IGNORECASE).strip()
+    base_norm = _strip_accents_lower(base_name)
+
+    for k, v in cfg.items():
+        if _strip_accents_lower(k) == base_norm:
+            return v
+
+    parent_grp = POSTE_TO_GROUPE_MAP.get(category_name) or POSTE_TO_GROUPE_MAP.get(base_name)
+    if not parent_grp:
+        for p_k, p_g in POSTE_TO_GROUPE_MAP.items():
+            if _strip_accents_lower(p_k) == base_norm:
+                parent_grp = p_g
+                break
+
+    if parent_grp:
+        if parent_grp in cfg:
+            return cfg[parent_grp]
+        parent_norm = _strip_accents_lower(parent_grp)
+        for k, v in cfg.items():
+            if _strip_accents_lower(k) == parent_norm:
+                return v
+
+    # Correspondance souple sur les 3 grandes lignes
+    if "5 de devant" in base_norm or ("devant" in base_norm and "5" in base_norm):
+        for k, v in cfg.items():
+            if "5 de devant" in _strip_accents_lower(k):
+                return v
+    if "3eme" in base_norm or "3e ligne" in base_norm:
+        for k, v in cfg.items():
+            if "3eme" in _strip_accents_lower(k):
+                return v
+    if "trois-quarts" in base_norm or "trois quarts" in base_norm or "3/4" in base_norm:
+        for k, v in cfg.items():
+            if "trois" in _strip_accents_lower(k):
+                return v
+
     return cfg.get("Tous les groupes", DEFAULT_OBJECTIFS_CONFIG["Tous les groupes"])
+
+
+def _get_session_objectifs_config(
+    session_meta: Dict[str, Any],
+    fallback_config: Optional[Dict[str, Dict[str, float]]] = None,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Résout la configuration d'objectifs applicable à une séance spécifique :
+    1. Si la séance possède sa propre 'objectifs_config' enregistrée lors de l'archivage, l'utilise.
+    2. Sinon, associe automatiquement le préréglage RCA correspondant au jour de la séance
+       (Mardi, Mercredi, Vendredi, Dimanche / Match).
+    3. Sinon, retombe sur fallback_config ou Standard / Référence RCA.
+    """
+    if isinstance(session_meta, dict):
+        saved_cfg = session_meta.get("objectifs_config")
+        if isinstance(saved_cfg, dict) and any(k in saved_cfg for k in ("5 de devant", "3ème Ligne", "Trois-quarts")):
+            return saved_cfg
+
+        day_raw = str(session_meta.get("day_type", "") or "").strip()
+        day_norm = _strip_accents_lower(day_raw)
+        date_raw = session_meta.get("date", "")
+        detected_day = detect_day_of_week(day_raw) or detect_day_of_week(date_raw)
+
+        if "match" in day_norm or detected_day == "Dimanche":
+            return PREREGLAGES_OBJECTIFS["Dimanche (Match)"]
+        if detected_day == "Mardi" or "mardi" in day_norm:
+            return PREREGLAGES_OBJECTIFS["Mardi (Aérobie & Volume)"]
+        if detected_day == "Mercredi" or "mercredi" in day_norm:
+            return PREREGLAGES_OBJECTIFS["Mercredi (Intensité & Vitesse)"]
+        if detected_day == "Vendredi" or "vendredi" in day_norm:
+            return PREREGLAGES_OBJECTIFS["Vendredi (Mise en place / Affûtage)"]
+
+    return fallback_config or PREREGLAGES_OBJECTIFS["Standard / Référence RCA"]
+
+
+def calculer_objectifs_hebdo_pour_categorie(
+    category_name: str,
+    synthese_dict: Optional[Dict[str, Any]] = None,
+    fallback_config: Optional[Dict[str, Dict[str, float]]] = None,
+    nb_seances_fallback: int = 1,
+) -> Dict[str, float]:
+    """
+    Calcule l'objectif hebdomadaire exact d'une ligne de poste ou d'un poste spécifique
+    en effectuant la SOMME EXACTE des objectifs de chaque séance fusionnée de la semaine
+    (ex: Objectif_Mardi + Objectif_Mercredi + Objectif_Vendredi).
+    """
+    keys = ["Objectif Distance (m)", "Obj. HSR", "Obj. VHSR", "Obj. ACC/DEC"]
+    sessions_list: List[Dict[str, Any]] = []
+    if isinstance(synthese_dict, dict):
+        sessions_list = [s for s in synthese_dict.values() if isinstance(s, dict)]
+    elif isinstance(synthese_dict, list):
+        sessions_list = [s for s in synthese_dict if isinstance(s, dict)]
+
+    if sessions_list:
+        totals = {k: 0.0 for k in keys}
+        for s_meta in sessions_list:
+            s_cfg = _get_session_objectifs_config(s_meta, fallback_config=fallback_config)
+            s_tgt = get_objectifs_for_category(s_cfg, category_name)
+            for k in keys:
+                totals[k] += float(s_tgt.get(k, 0.0) or 0.0)
+        return totals
+
+    base_tgt = get_objectifs_for_category(fallback_config or charger_objectifs_config(), category_name)
+    mult = max(int(nb_seances_fallback or 1), 1)
+    return {k: float(base_tgt.get(k, 0.0) or 0.0) * mult for k in keys}
 
 
 def _filter_df_by_group(
@@ -2191,11 +2345,156 @@ def _extract_metric_dist_m(row: Any) -> float:
 
 
 def _extract_metric_hsr_m(row: Any) -> float:
-    for col in ["HSR Z3 (m)", " Distance haute intensité (m)", "Haute intensité (m)", "Haute intensité Podium (m)", "HSR_m"]:
+    for col in ["HSR Z3 (m)", "HSR_m"]:
+        if col in row and pd.notna(row[col]):
+            try: return float(row[col])
+            except Exception: pass
+    if "Distance in Speed Zone 3  (km)" in row and pd.notna(row["Distance in Speed Zone 3  (km)"]):
+        try: return float(row["Distance in Speed Zone 3  (km)"]) * 1000.0
+        except Exception: pass
+    for col in [" Distance haute intensité (m)", "Haute intensité (m)", "Haute intensité Podium (m)"]:
         if col in row and pd.notna(row[col]):
             try: return float(row[col])
             except Exception: pass
     return 0.0
+
+
+def _extract_metric_vhsr_m(row: Any) -> float:
+    for col in ["VHSR (m)", "Distance Sprint VHSR (m)", "VHSR_m", "Sprint (m)"]:
+        if col in row and pd.notna(row[col]):
+            try: return float(row[col])
+            except Exception: pass
+    z4 = row.get("Distance in Speed Zone 4  (km)") if hasattr(row, "get") else None
+    z5 = row.get("Distance in Speed Zone 5  (km)") if hasattr(row, "get") else None
+    if (z4 is not None and pd.notna(z4)) or (z5 is not None and pd.notna(z5)):
+        try:
+            v4 = float(z4) if (z4 is not None and pd.notna(z4)) else 0.0
+            v5 = float(z5) if (z5 is not None and pd.notna(z5)) else 0.0
+            return (v4 + v5) * 1000.0
+        except Exception:
+            pass
+    return 0.0
+
+
+def calculer_metriques_hebdo_groupe_par_seances(
+    sessions_dict: Optional[Dict[str, Any]],
+    grp: str,
+    df_fallback: Optional[pd.DataFrame] = None,
+    isolated_positions: Optional[List[str]] = None,
+    is_isolated: bool = False,
+) -> Dict[str, Any]:
+    """
+    Calcule les métriques hebdomadaires d'une ligne de poste ou d'un poste spécifique
+    sans biais lié au turnover d'effectif entre les séances :
+    - Volume (Distance, HSR Z3, VHSR Sprint, ACC/DEC) : SOMME des moyennes réalisées
+      par le groupe à chaque séance fusionnée de la semaine (Moy_Mardi + Moy_Mercredi + Moy_Vendredi).
+    - Intensité relative (m/min) et RPE Moyen : moyenne pondérée par participation
+      sur l'ensemble des séances (en ignorant les 'NR' / NaN).
+    Retourne : {"dist_m", "hsr_m", "vhsr_m", "acc_dec", "dpm", "rpe", "sessions_with_data", "participations"}
+    """
+    sum_dist = 0.0
+    sum_hsr = 0.0
+    sum_vhsr = 0.0
+    sum_acc = 0.0
+    all_dpm: List[float] = []
+    all_rpe: List[float] = []
+    sessions_with_data = 0
+    total_participations = 0
+
+    sessions_list: List[Dict[str, Any]] = []
+    if isinstance(sessions_dict, dict):
+        sessions_list = [s for s in sessions_dict.values() if isinstance(s, dict)]
+    elif isinstance(sessions_dict, list):
+        sessions_list = [s for s in sessions_dict if isinstance(s, dict)]
+
+    iso_arg = isolated_positions if not is_isolated else None
+
+    for s_info in sessions_list:
+        p_data = s_info.get("players_data")
+        if isinstance(p_data, list) and len(p_data) > 0:
+            df_s = pd.DataFrame(p_data)
+            if gsheet_sync and hasattr(gsheet_sync, "filter_out_test_players"):
+                df_s = gsheet_sync.filter_out_test_players(df_s)
+            df_s_grp = _filter_df_by_group(df_s, grp, isolated_positions=iso_arg, is_isolated=is_isolated)
+            if not df_s_grp.empty:
+                dists = [_extract_metric_dist_m(r) for _, r in df_s_grp.iterrows()]
+                hsrs = [_extract_metric_hsr_m(r) for _, r in df_s_grp.iterrows()]
+                vhsrs = [_extract_metric_vhsr_m(r) for _, r in df_s_grp.iterrows()]
+                accs = [_extract_metric_acc_dec(r) for _, r in df_s_grp.iterrows()]
+                sum_dist += float(np.mean(dists)) if dists else 0.0
+                sum_hsr += float(np.mean(hsrs)) if hsrs else 0.0
+                sum_vhsr += float(np.mean(vhsrs)) if vhsrs else 0.0
+                sum_acc += float(np.mean(accs)) if accs else 0.0
+                sessions_with_data += 1
+                total_participations += len(df_s_grp)
+
+                for _, r in df_s_grp.iterrows():
+                    dpm_v = _extract_metric_dpm(r)
+                    if dpm_v > 0:
+                        all_dpm.append(dpm_v)
+                    rpe_v = _extract_metric_rpe(r)
+                    if rpe_v is not None and 1.0 <= rpe_v <= 10.0:
+                        all_rpe.append(rpe_v)
+        elif (
+            not is_isolated
+            and not get_grand_groupe_isolated_excluded(grp, isolated_positions)
+            and isinstance(s_info.get("group_stats"), dict)
+            and grp in s_info["group_stats"]
+        ):
+            gs = s_info["group_stats"][grp]
+            if isinstance(gs, dict):
+                sum_dist += float(gs.get("Dist_m", 0.0) or 0.0)
+                sum_hsr += float(gs.get("HSR_m", 0.0) or 0.0)
+                sum_vhsr += float(gs.get("VHSR_m", 0.0) or 0.0)
+                sum_acc += float(gs.get("Acc_Dec", 0.0) or 0.0)
+                dpm_gs = float(gs.get("Dpm", 0.0) or 0.0)
+                if dpm_gs > 0:
+                    all_dpm.append(dpm_gs)
+                sessions_with_data += 1
+
+    if sessions_with_data > 0:
+        return {
+            "dist_m": round(sum_dist, 1),
+            "hsr_m": round(sum_hsr, 1),
+            "vhsr_m": round(sum_vhsr, 1),
+            "acc_dec": round(sum_acc, 1),
+            "dpm": round(float(np.mean(all_dpm)), 1) if all_dpm else 0.0,
+            "rpe": round(float(np.mean(all_rpe)), 1) if all_rpe else None,
+            "sessions_with_data": sessions_with_data,
+            "participations": total_participations,
+        }
+
+    # Repli sécurisé si aucune séance détaillée (players_data) n'a été fournie
+    if df_fallback is not None and isinstance(df_fallback, pd.DataFrame) and not df_fallback.empty:
+        df_sub = _filter_df_by_group(df_fallback, grp, isolated_positions=iso_arg, is_isolated=is_isolated)
+        if not df_sub.empty:
+            dists = [_extract_metric_dist_m(r) for _, r in df_sub.iterrows()]
+            hsrs = [_extract_metric_hsr_m(r) for _, r in df_sub.iterrows()]
+            vhsrs = [_extract_metric_vhsr_m(r) for _, r in df_sub.iterrows()]
+            accs = [_extract_metric_acc_dec(r) for _, r in df_sub.iterrows()]
+            dpms = [_extract_metric_dpm(r) for _, r in df_sub.iterrows() if _extract_metric_dpm(r) > 0]
+            rpes = [v for v in (_extract_metric_rpe(r) for _, r in df_sub.iterrows()) if v is not None and 1.0 <= v <= 10.0]
+            return {
+                "dist_m": round(float(np.mean(dists)), 1) if dists else 0.0,
+                "hsr_m": round(float(np.mean(hsrs)), 1) if hsrs else 0.0,
+                "vhsr_m": round(float(np.mean(vhsrs)), 1) if vhsrs else 0.0,
+                "acc_dec": round(float(np.mean(accs)), 1) if accs else 0.0,
+                "dpm": round(float(np.mean(dpms)), 1) if dpms else 0.0,
+                "rpe": round(float(np.mean(rpes)), 1) if rpes else None,
+                "sessions_with_data": 0,
+                "participations": len(df_sub),
+            }
+
+    return {
+        "dist_m": 0.0,
+        "hsr_m": 0.0,
+        "vhsr_m": 0.0,
+        "acc_dec": 0.0,
+        "dpm": 0.0,
+        "rpe": None,
+        "sessions_with_data": 0,
+        "participations": 0,
+    }
 
 
 def _extract_metric_acc_dec(row: Any) -> float:
@@ -2570,76 +2869,136 @@ def _calculate_rpe_groups_for_week(
     isolated_positions: Optional[List[str]] = None,
 ) -> Dict[str, Optional[float]]:
     """
-    Calcule les moyennes RPE de la semaine pour l'équipe, les 3 groupes de postes
-    et éventuellement les 9 postes spécifiques. Jamais de faux 'NR' si des données
-    Google Sheets / session / cache existent pour cette semaine.
+    Calcule les moyennes RPE de la semaine de façon 100 % homogène (Pages 1, 3, 5, 7 et 9) :
+    - Méthode prioritaire : moyenne pondérée par participation sur l'ensemble des séances
+      fusionnées de la semaine (toutes les participations joueurs avec RPE valide dans [1..10],
+      en ignorant strictement les 'NR' / NaN), en respectant l'exclusion des postes isolés.
+    - Replis sécurisés si l'archive ne contient pas de RPE individuel : rpe_stats de séance
+      (pondérés par effectif), week_data["rpe_summary"], puis df_week["RPE"].
     """
     cats_extra = [c for c in (categories or CANONICAL_9_POSTES) if c not in ("5 de devant", "3ème Ligne", "Trois-quarts")]
-    res: Dict[str, Optional[float]] = {
-        "Total": None,
-        "5 de devant": None,
-        "3ème Ligne": None,
-        "Trois-quarts": None,
-    }
-    for c in cats_extra:
+    all_target_cats = ["5 de devant", "3ème Ligne", "Trois-quarts"] + cats_extra
+    res: Dict[str, Optional[float]] = {"Total": None}
+    for c in all_target_cats:
         res[c] = None
 
-    # 1. Collecte directe depuis les séances enregistrées (joueurs + rpe_stats)
-    if sessions_dict and rpe_connector:
-        try:
-            w_rpe = rpe_connector.calculate_weekly_rpe_from_sessions(sessions_dict)
-            if w_rpe:
-                res["Total"] = w_rpe.get("rpe_moyen_equipe")
-                res["5 de devant"] = w_rpe.get("rpe_5_devant")
-                res["3ème Ligne"] = w_rpe.get("rpe_3eme_ligne")
-                res["Trois-quarts"] = w_rpe.get("rpe_trois_quarts")
-        except Exception:
-            pass
+    isolated_set = set(isolated_positions or [])
 
-    # 2. Complément depuis df_week (colonnes RPE individuelles normalisées par groupe / poste)
-    if df_week is not None and not df_week.empty and "RPE" in df_week.columns:
-        r_all = pd.to_numeric(df_week["RPE"], errors="coerce").dropna()
-        if not r_all.empty and res["Total"] is None:
-            res["Total"] = round(float(r_all.mean()), 1)
-        isolated_set = set(isolated_positions or [])
-        for cat_k in ["5 de devant", "3ème Ligne", "Trois-quarts"] + cats_extra:
-            if res.get(cat_k) is None:
-                is_iso = cat_k in isolated_set and not is_grand_groupe(cat_k)
-                df_sub = _filter_df_by_group(df_week, cat_k, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
-                if not df_sub.empty and "RPE" in df_sub.columns:
-                    sub_r = pd.to_numeric(df_sub["RPE"], errors="coerce").dropna()
-                    if not sub_r.empty:
-                        res[cat_k] = round(float(sub_r.mean()), 1)
-
-    # 3. Complément depuis rpe_stats / by_poste par séance si toujours manquant
+    # 1. Méthode unifiée prioritaire : moyenne pondérée par participation depuis players_data de toutes les séances
     if sessions_dict:
-        poste_vals: Dict[str, List[float]] = {c: [] for c in cats_extra}
+        all_rows: List[Dict[str, Any]] = []
+        for s_info in sessions_dict.values():
+            if not isinstance(s_info, dict):
+                continue
+            p_data = s_info.get("players_data")
+            if isinstance(p_data, list) and p_data:
+                all_rows.extend(p_data)
+            elif isinstance(s_info.get("df_indiv"), pd.DataFrame) and not s_info["df_indiv"].empty:
+                all_rows.extend(s_info["df_indiv"].to_dict(orient="records"))
+
+        if all_rows:
+            df_part = pd.DataFrame(all_rows)
+            if gsheet_sync and hasattr(gsheet_sync, "filter_out_test_players"):
+                df_part = gsheet_sync.filter_out_test_players(df_part)
+            if not df_part.empty and "RPE" in df_part.columns:
+                s_all = pd.to_numeric(df_part["RPE"], errors="coerce")
+                s_all = s_all[(s_all >= 1.0) & (s_all <= 10.0)].dropna()
+                if not s_all.empty:
+                    res["Total"] = round(float(s_all.mean()), 1)
+
+                for cat_k in all_target_cats:
+                    is_iso = cat_k in isolated_set and not is_grand_groupe(cat_k)
+                    df_sub = _filter_df_by_group(
+                        df_part,
+                        cat_k,
+                        isolated_positions=isolated_positions if not is_iso else None,
+                        is_isolated=is_iso,
+                    )
+                    if not df_sub.empty and "RPE" in df_sub.columns:
+                        s_sub = pd.to_numeric(df_sub["RPE"], errors="coerce")
+                        s_sub = s_sub[(s_sub >= 1.0) & (s_sub <= 10.0)].dropna()
+                        if not s_sub.empty:
+                            res[cat_k] = round(float(s_sub.mean()), 1)
+
+    # 2. Repli depuis rpe_stats / by_poste par séance (pondéré par nb_repondants / effectif de séance)
+    if sessions_dict:
+        w_sum: Dict[str, float] = {k: 0.0 for k in ["Total"] + all_target_cats}
+        w_cnt: Dict[str, float] = {k: 0.0 for k in ["Total"] + all_target_cats}
         for s_info in sessions_dict.values():
             if not isinstance(s_info, dict):
                 continue
             r_st = s_info.get("rpe_stats") or {}
-            by_p = r_st.get("by_poste") if isinstance(r_st, dict) else None
-            if isinstance(by_p, dict):
-                for c in cats_extra:
-                    if by_p.get(c) is not None:
-                        try:
-                            poste_vals[c].append(float(by_p[c]))
-                        except Exception:
-                            pass
-        for c, vals in poste_vals.items():
-            if res.get(c) is None and vals:
-                res[c] = round(float(np.mean(vals)), 1)
+            if not isinstance(r_st, dict):
+                continue
+            weight_s = float(r_st.get("nb_repondants_tot") or s_info.get("num_players") or 1.0)
+            v_eq = r_st.get("equipe") if r_st.get("equipe") is not None else r_st.get("rpe_moyen_equipe")
+            if v_eq is not None:
+                try:
+                    fv = float(v_eq)
+                    if 1.0 <= fv <= 10.0:
+                        w_sum["Total"] += fv * weight_s
+                        w_cnt["Total"] += weight_s
+                except Exception:
+                    pass
+            by_p = r_st.get("by_poste") if isinstance(r_st.get("by_poste"), dict) else {}
+            for cat_k in all_target_cats:
+                if res.get(cat_k) is not None:
+                    continue
+                # Ne pas injecter le rpe_stats global d'une grande ligne si elle est amputée par isolated_positions
+                if get_grand_groupe_isolated_excluded(cat_k, isolated_positions):
+                    continue
+                v_c = (
+                    r_st.get(cat_k)
+                    or by_p.get(cat_k)
+                    or r_st.get(f"rpe_moyen_{cat_k.lower().replace(' ', '_').replace('è', 'e')}")
+                )
+                if v_c is not None:
+                    try:
+                        fv = float(v_c)
+                        if 1.0 <= fv <= 10.0:
+                            w_sum[cat_k] += fv * weight_s
+                            w_cnt[cat_k] += weight_s
+                    except Exception:
+                        pass
+        for k in ["Total"] + all_target_cats:
+            if res.get(k) is None and w_cnt[k] > 0:
+                res[k] = round(w_sum[k] / w_cnt[k], 1)
 
-    # 4. Complément final depuis week_data["rpe_summary"] (agrégation directe Google Sheets de la semaine ISO)
+    # 3. Complément depuis week_data["rpe_summary"] (agrégation directe Google Sheets de la semaine ISO)
     if isinstance(week_data, dict):
         r_sum = week_data.get("rpe_summary")
         if isinstance(r_sum, dict):
             for k in list(res.keys()):
                 if res[k] is None and r_sum.get(k) is not None:
+                    if k != "Total" and get_grand_groupe_isolated_excluded(k, isolated_positions):
+                        continue
                     try:
-                        res[k] = round(float(r_sum[k]), 1)
+                        fv = float(r_sum[k])
+                        if 1.0 <= fv <= 10.0:
+                            res[k] = round(fv, 1)
                     except Exception:
                         pass
+
+    # 4. Repli ultime depuis df_week (uniquement si aucune participation séance n'a fourni de RPE)
+    if df_week is not None and not df_week.empty and "RPE" in df_week.columns:
+        r_all = pd.to_numeric(df_week["RPE"], errors="coerce")
+        r_all = r_all[(r_all >= 1.0) & (r_all <= 10.0)].dropna()
+        if not r_all.empty and res["Total"] is None:
+            res["Total"] = round(float(r_all.mean()), 1)
+        for cat_k in all_target_cats:
+            if res.get(cat_k) is None:
+                is_iso = cat_k in isolated_set and not is_grand_groupe(cat_k)
+                df_sub = _filter_df_by_group(
+                    df_week,
+                    cat_k,
+                    isolated_positions=isolated_positions if not is_iso else None,
+                    is_isolated=is_iso,
+                )
+                if not df_sub.empty and "RPE" in df_sub.columns:
+                    sub_r = pd.to_numeric(df_sub["RPE"], errors="coerce")
+                    sub_r = sub_r[(sub_r >= 1.0) & (sub_r <= 10.0)].dropna()
+                    if not sub_r.empty:
+                        res[cat_k] = round(float(sub_r.mean()), 1)
 
     return res
 
@@ -2656,10 +3015,14 @@ def recuperer_historique_semaines(
     """
     Extrait l'historique des N dernières semaines enregistrées (semaine en cours incluse).
     Rattrape automatiquement les données RPE manquantes (ex: S43) via Google Sheets
-    et prépare `group_metrics` (Volume, HSR, VHSR, RPE) pour le comparatif triptyque.
+    et prépare `group_metrics` (Volume, HSR, VHSR, RPE) pour le comparatif triptyque
+    avec exactement la même logique que les Pages 1, 3, 5 et 7 :
+    - Volume / HSR / VHSR : somme des moyennes de groupe par séance de la semaine.
+    - RPE : moyenne pondérée par participation (ignorant 'NR').
     """
     target_cats = list(categories) if categories else ["5 de devant", "3ème Ligne", "Trois-quarts"]
     all_cats = list(dict.fromkeys(["5 de devant", "3ème Ligne", "Trois-quarts"] + target_cats))
+    isolated_set = set(isolated_positions or [])
 
     saved_weeks = list_saved_weeks()
     saved_weeks_chrono = sorted(saved_weeks, key=lambda x: (x["year"], x["week_num"]))
@@ -2679,6 +3042,30 @@ def recuperer_historique_semaines(
             else:
                 df_rpe_cache = pd.DataFrame()
         return df_rpe_cache
+
+    def _build_weekly_group_metrics(
+        sessions_src: Optional[Dict[str, Any]],
+        df_w_fallback: pd.DataFrame,
+        rpe_grp_map: Dict[str, Optional[float]],
+    ) -> Dict[str, Dict[str, Any]]:
+        g_map: Dict[str, Dict[str, Any]] = {}
+        for cat_k in all_cats:
+            is_iso = cat_k in isolated_set and not is_grand_groupe(cat_k)
+            m = calculer_metriques_hebdo_groupe_par_seances(
+                sessions_dict=sessions_src,
+                grp=cat_k,
+                df_fallback=df_w_fallback,
+                isolated_positions=isolated_positions if not is_iso else None,
+                is_isolated=is_iso,
+            )
+            g_map[cat_k] = {
+                "volume": round(float(m.get("dist_m", 0.0) or 0.0), 1),
+                "hsr": round(float(m.get("hsr_m", 0.0) or 0.0), 1),
+                "vhsr": round(float(m.get("vhsr_m", 0.0) or 0.0), 1),
+                "rpe": rpe_grp_map.get(cat_k) if rpe_grp_map.get(cat_k) is not None else m.get("rpe"),
+                "num_players": int(m.get("participations", 0) or 0),
+            }
+        return g_map
 
     weeks_dict: Dict[str, Dict[str, Any]] = {}
     for w_info in saved_weeks_chrono:
@@ -2716,18 +3103,15 @@ def recuperer_historique_semaines(
                 except Exception:
                     pass
 
-            df_w, _ = aggregate_weekly_sessions(w_data)
+            df_w, synth_w = aggregate_weekly_sessions(w_data)
+            sessions_w_eff = synth_w or w_data.get("sessions", {})
             label_str = f"Semaine {w:02d}"
             short_str = f"S{w:02d}"
             metrics_w = calculer_moyennes_seance(df_w)
             rpe_grp_w = _calculate_rpe_groups_for_week(
-                df_w, w_data.get("sessions", {}), week_data=w_data, categories=all_cats, isolated_positions=isolated_positions
+                df_w, sessions_w_eff, week_data=w_data, categories=all_cats, isolated_positions=isolated_positions
             )
-            g_metrics_w = calculer_metriques_groupes_seance(df_w, categories=all_cats, isolated_positions=isolated_positions)
-            for cat_k in all_cats:
-                if g_metrics_w.get(cat_k, {}).get("rpe") is None and rpe_grp_w.get(cat_k) is not None:
-                    g_metrics_w.setdefault(cat_k, {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0})
-                    g_metrics_w[cat_k]["rpe"] = rpe_grp_w[cat_k]
+            g_metrics_w = _build_weekly_group_metrics(sessions_w_eff, df_w, rpe_grp_w)
 
             r_av = [v for v in [rpe_grp_w.get("5 de devant"), rpe_grp_w.get("3ème Ligne")] if v is not None]
             metrics_w["RPE Moyen (1-10)"] = {
@@ -2773,19 +3157,20 @@ def recuperer_historique_semaines(
 
     curr_label = f"Semaine {week_curr:02d}"
     curr_short = f"S{week_curr:02d}"
+    curr_sessions_eff = (
+        synthese_curr
+        if (isinstance(synthese_curr, dict) and len(synthese_curr) > 0)
+        else curr_w_data.get("sessions", {})
+    )
     curr_metrics = calculer_moyennes_seance(df_curr_hebdo)
     curr_rpe_grp = _calculate_rpe_groups_for_week(
         df_curr_hebdo,
-        synthese_curr if isinstance(synthese_curr, dict) else curr_w_data.get("sessions", {}),
+        curr_sessions_eff,
         week_data=curr_w_data,
         categories=all_cats,
         isolated_positions=isolated_positions,
     )
-    curr_g_metrics = calculer_metriques_groupes_seance(df_curr_hebdo, categories=all_cats, isolated_positions=isolated_positions)
-    for cat_k in all_cats:
-        if curr_g_metrics.get(cat_k, {}).get("rpe") is None and curr_rpe_grp.get(cat_k) is not None:
-            curr_g_metrics.setdefault(cat_k, {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "rpe": None, "num_players": 0})
-            curr_g_metrics[cat_k]["rpe"] = curr_rpe_grp[cat_k]
+    curr_g_metrics = _build_weekly_group_metrics(curr_sessions_eff, df_curr_hebdo, curr_rpe_grp)
 
     curr_r_av = [v for v in [curr_rpe_grp.get("5 de devant"), curr_rpe_grp.get("3ème Ligne")] if v is not None]
     curr_metrics["RPE Moyen (1-10)"] = {
@@ -3086,12 +3471,13 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
         ax.set_xticks(x)
         x_labels = [it.get("label_x", it.get("short_label", it.get("label", ""))) for it in items_comparatif]
         ax.set_xticklabels([str(lbl).replace(" (", "\n(") for lbl in x_labels], fontsize=8.2, fontweight="bold", color="#334155")
-        ax.set_xlim(-0.55, max(float(K) - 0.45, 0.55))
+        ax.set_xlim(-0.75, max(float(K) - 0.25, 0.75))
+        ax_rpe.set_xlim(-0.75, max(float(K) - 0.25, 0.75))
 
         max_v = max(max(v_vol or [100.0]), 100.0)
         ax.set_ylim(0, max_v * 1.25)
         ax.set_ylabel("Mètres (m)", fontsize=7.8, fontweight="bold", color="#0C2340")
-        ax.tick_params(axis="x", length=0)
+        ax.tick_params(axis="x", length=0, pad=6)
         ax.tick_params(axis="y", labelsize=7.5, color="#94A3B8")
 
     leg_elements = [
@@ -3109,9 +3495,9 @@ def generer_graphique_comparatif_triptyque_postes_matplotlib(
         fontsize=9.5,
     )
 
-    fig.subplots_adjust(top=0.88, bottom=0.14, left=0.05, right=0.96, wspace=0.32)
+    fig.subplots_adjust(top=0.88, bottom=0.15, left=0.07, right=0.95, wspace=0.36)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.22)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -3158,7 +3544,8 @@ def render_comparatif_triptyque_seances_pdf_page(
                     is_iso = grp in isolated_set and not is_grand_groupe(grp)
                     df_group = _filter_df_by_group(df_src, grp, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso)
                     if not df_group.empty and "RPE" in df_group.columns:
-                        s_rpe = pd.to_numeric(df_group["RPE"], errors="coerce").dropna()
+                        s_rpe = pd.to_numeric(df_group["RPE"], errors="coerce")
+                        s_rpe = s_rpe[(s_rpe >= 1.0) & (s_rpe <= 10.0)].dropna()
                         rpe_moyen = s_rpe.mean() if not s_rpe.empty else None
                         grp_dict["rpe"] = round(float(rpe_moyen), 1) if pd.notna(rpe_moyen) else None
 
@@ -4187,13 +4574,40 @@ def generate_weekly_pdf_report(
                         pass
             except Exception:
                 pass
-        # Propager les RPE rattrapés sur df_hebdo si la colonne était absente ou vide
+        # Propager les RPE rattrapés sur synthese_dict (en respectant les séances sélectionnées) et df_hebdo
         if isinstance(w_data_curr, dict) and w_data_curr.get("sessions"):
+            w_sess_map = w_data_curr["sessions"]
             if not synthese_dict:
-                synthese_dict = w_data_curr["sessions"]
+                synthese_dict = dict(w_sess_map)
+            else:
+                for sk, sv in list(synthese_dict.items()):
+                    if not isinstance(sv, dict):
+                        continue
+                    matched_s = w_sess_map.get(sk)
+                    if matched_s is None:
+                        sv_sid = sv.get("session_id")
+                        if sv_sid and sv_sid in w_sess_map:
+                            matched_s = w_sess_map[sv_sid]
+                        else:
+                            for cand in w_sess_map.values():
+                                if isinstance(cand, dict) and cand.get("day_type") == sv.get("day_type") and format_readable_date(cand.get("date")) == format_readable_date(sv.get("date")):
+                                    matched_s = cand
+                                    break
+                    if isinstance(matched_s, dict):
+                        sv_copy = dict(sv)
+                        if matched_s.get("players_data"):
+                            sv_copy["players_data"] = matched_s["players_data"]
+                        if matched_s.get("rpe_stats") and not sv_copy.get("rpe_stats"):
+                            sv_copy["rpe_stats"] = matched_s["rpe_stats"]
+                        if matched_s.get("objectifs_config") and not sv_copy.get("objectifs_config"):
+                            sv_copy["objectifs_config"] = matched_s["objectifs_config"]
+                        if matched_s.get("group_stats") and not sv_copy.get("group_stats"):
+                            sv_copy["group_stats"] = matched_s["group_stats"]
+                        synthese_dict[sk] = sv_copy
+
             if ("RPE" not in df_hebdo.columns) or pd.to_numeric(df_hebdo["RPE"], errors="coerce").isna().all():
                 player_rpe_vals: Dict[str, List[float]] = {}
-                for s_info in w_data_curr["sessions"].values():
+                for s_info in synthese_dict.values():
                     if not isinstance(s_info, dict):
                         continue
                     for p in s_info.get("players_data", []):
@@ -4217,7 +4631,7 @@ def generate_weekly_pdf_report(
 
     rpe_groups = _calculate_rpe_groups_for_week(
         df_hebdo,
-        sessions_dict=w_data_curr.get("sessions") if isinstance(w_data_curr, dict) and w_data_curr.get("sessions") else synthese_dict,
+        sessions_dict=synthese_dict if synthese_dict else (w_data_curr.get("sessions") if isinstance(w_data_curr, dict) else None),
         week_data=w_data_curr,
         categories=[it["key"] for it in items_to_render],
         isolated_positions=isolated_arg,
@@ -4303,40 +4717,44 @@ def generate_weekly_pdf_report(
     pdf.set_xy(12, y_mid)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(134, 3.8, safe_latin1("1. SÉANCES ENREGISTRÉES & VOLUMES :"), align="L")
+    pdf.cell(136, 3.8, safe_latin1("1. SÉANCES ENREGISTRÉES & VOLUMES :"), align="L")
 
     y_table = y_mid + 4.2
     pdf.set_xy(12, y_table)
     pdf.set_fill_color(31, 78, 121)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 7.3)
-    pdf.cell(46, 4.8, "Séance / Type", 1, 0, "L", fill=True)
-    pdf.cell(24, 4.8, "Date", 1, 0, "C", fill=True)
-    pdf.cell(20, 4.8, "Effectif", 1, 0, "C", fill=True)
-    pdf.cell(22, 4.8, "Dist. (km)", 1, 0, "C", fill=True)
-    pdf.cell(22, 4.8, "H.I. (m)", 1, 1, "C", fill=True)
+    pdf.set_font("Helvetica", "B", 7.2)
+    # Largeurs optimisées (total 136 mm) : 64 mm pour Séance/Type évite toute troncature
+    pdf.cell(64, 4.8, safe_latin1("Séance / Type"), 1, 0, "L", fill=True)
+    pdf.cell(20, 4.8, safe_latin1("Date"), 1, 0, "C", fill=True)
+    pdf.cell(14, 4.8, safe_latin1("Effectif"), 1, 0, "C", fill=True)
+    pdf.cell(19, 4.8, safe_latin1("Dist. (km)"), 1, 0, "C", fill=True)
+    pdf.cell(19, 4.8, safe_latin1("H.I. (m)"), 1, 1, "C", fill=True)
 
-    pdf.set_font("Helvetica", "", 7.1)
+    pdf.set_font("Helvetica", "", 7.0)
     pdf.set_text_color(15, 23, 42)
     sessions_to_show = list(synthese_dict.items())[:6]
     fill_sess = False
     for _, s in sessions_to_show:
         pdf.set_x(12)
         pdf.set_fill_color(*(248, 250, 252) if fill_sess else (255, 255, 255))
-        pdf.cell(46, 4.6, safe_latin1(str(s.get("day_type", ""))[:22]), 1, 0, "L", fill=True)
-        pdf.cell(24, 4.6, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C", fill=True)
-        pdf.cell(20, 4.6, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C", fill=True)
-        pdf.cell(22, 4.6, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C", fill=True)
-        pdf.cell(22, 4.6, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C", fill=True)
+        day_lbl = str(s.get("day_type", "")).strip()
+        if len(day_lbl) > 36:
+            day_lbl = day_lbl[:35] + "."
+        pdf.cell(64, 4.6, safe_latin1(day_lbl), 1, 0, "L", fill=True)
+        pdf.cell(20, 4.6, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C", fill=True)
+        pdf.cell(14, 4.6, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C", fill=True)
+        pdf.cell(19, 4.6, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C", fill=True)
+        pdf.cell(19, 4.6, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C", fill=True)
         fill_sess = not fill_sess
 
-    pdf.set_xy(151, y_mid)
+    pdf.set_xy(152, y_mid)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(134, 3.8, safe_latin1("2. RÉPARTITION DE CHARGE PAR SÉANCE :"), align="L")
+    pdf.cell(133, 3.8, safe_latin1("2. RÉPARTITION DE CHARGE PAR SÉANCE :"), align="L")
     try:
         buf_days = generer_graphique_hebdo_repartition_jours_matplotlib(synthese_dict)
-        pdf.image(buf_days, x=151, y=y_mid + 4.2, w=134, h=41.0)
+        pdf.image(buf_days, x=152, y=y_mid + 4.2, w=133, h=41.0)
     except Exception as e:
         print(f"Erreur graphique repartition jours PDF : {e}")
 
@@ -4348,7 +4766,9 @@ def generate_weekly_pdf_report(
     pdf.cell(273, 4.0, safe_latin1("3. CHARGE MOYENNE HEBDOMADAIRE PAR LIGNE DE POSTE (5 DE DEVANT | 3ÈME LIGNE | TROIS-QUARTS) :"), align="C")
 
     try:
-        buf_groups = generer_graphique_hebdo_groupes_matplotlib(df_hebdo, figsize=(12.2, 4.7))
+        buf_groups = generer_graphique_hebdo_groupes_matplotlib(
+            df_hebdo, figsize=(12.2, 4.7), synthese_jours=synthese_dict
+        )
         chart_w_main = 255.0
         chart_h_main = 98.5
         chart_x_main = 12.0 + (273.0 - chart_w_main) / 2.0
@@ -4400,39 +4820,32 @@ def generate_weekly_pdf_report(
         pdf.add_page()
         pdf.set_y(19.5)
 
-        targets_daily = get_objectifs_for_category(active_cfg, grp)
-        obj_dist = targets_daily["Objectif Distance (m)"] * multiplier
-        obj_hsr = targets_daily["Obj. HSR"] * multiplier
-        obj_vhsr = targets_daily["Obj. VHSR"] * multiplier
-        obj_acc = targets_daily["Obj. ACC/DEC"] * multiplier
+        # 1. Objectifs hebdomadaires : SOMME EXACTE des objectifs sur chaque séance fusionnée
+        tgt_hebdo = calculer_objectifs_hebdo_pour_categorie(
+            category_name=grp,
+            synthese_dict=synthese_dict,
+            fallback_config=active_cfg,
+            nb_seances_fallback=nb_seances,
+        )
+        obj_dist = float(tgt_hebdo.get("Objectif Distance (m)", 0.0) or 0.0)
+        obj_hsr = float(tgt_hebdo.get("Obj. HSR", 0.0) or 0.0)
+        obj_vhsr = float(tgt_hebdo.get("Obj. VHSR", 0.0) or 0.0)
+        obj_acc = float(tgt_hebdo.get("Obj. ACC/DEC", 0.0) or 0.0)
 
-        if not df_sub.empty:
-            def _extract_metric_mean(df_m: pd.DataFrame, candidates: List[str], mult: float = 1.0) -> float:
-                for col in candidates:
-                    if col in df_m.columns:
-                        s = pd.to_numeric(df_m[col], errors="coerce").dropna()
-                        if not s.empty:
-                            return float(s.mean() * mult)
-                return 0.0
-
-            real_dist = _extract_metric_mean(df_sub, ["Distance Totale (m)", "Distance (m)"])
-            if real_dist == 0.0:
-                real_dist = _extract_metric_mean(df_sub, ["Distance Totale (km)", "Distance (km)"], mult=1000.0)
-
-            real_hsr = _extract_metric_mean(df_sub, ["HSR Z3 (m)", "Haute intensité (m)", "HSR_m", "Distance haute intensité (m)"])
-            if real_hsr == 0.0:
-                real_hsr = _extract_metric_mean(df_sub, ["Distance in Speed Zone 3  (km)"], mult=1000.0)
-
-            real_vhsr = _extract_metric_mean(df_sub, ["Distance Sprint VHSR (m)", "VHSR (m)", "Sprint (m)"])
-            if real_vhsr == 0.0 and "Distance in Speed Zone 4  (km)" in df_sub.columns and "Distance in Speed Zone 5  (km)" in df_sub.columns:
-                s4 = pd.to_numeric(df_sub["Distance in Speed Zone 4  (km)"], errors="coerce").fillna(0.0)
-                s5 = pd.to_numeric(df_sub["Distance in Speed Zone 5  (km)"], errors="coerce").fillna(0.0)
-                real_vhsr = float((s4 + s5).mean() * 1000.0)
-
-            real_dpm = _extract_metric_mean(df_sub, ["Distance/min (m/min)", "Distance Per Min (m/min)", "m/min"])
-            real_acc = _extract_metric_mean(df_sub, ["Accel/Dec total", "Accel/Dec", "ACC/DEC"])
-        else:
-            real_dist = real_hsr = real_vhsr = real_dpm = real_acc = 0.0
+        # 2. Réalisé hebdomadaire : SOMME des moyennes réalisées par le groupe à chaque séance
+        #    (élimine le biais lié au turnover d'effectif entre séances)
+        grp_metrics_hebdo = calculer_metriques_hebdo_groupe_par_seances(
+            sessions_dict=synthese_dict,
+            grp=grp,
+            df_fallback=df_sub,
+            isolated_positions=isolated_arg if not is_iso else None,
+            is_isolated=is_iso,
+        )
+        real_dist = float(grp_metrics_hebdo.get("dist_m", 0.0) or 0.0)
+        real_hsr = float(grp_metrics_hebdo.get("hsr_m", 0.0) or 0.0)
+        real_vhsr = float(grp_metrics_hebdo.get("vhsr_m", 0.0) or 0.0)
+        real_dpm = float(grp_metrics_hebdo.get("dpm", 0.0) or 0.0)
+        real_acc = float(grp_metrics_hebdo.get("acc_dec", 0.0) or 0.0)
 
         real_dist = 0.0 if np.isnan(real_dist) else real_dist
         real_hsr = 0.0 if np.isnan(real_hsr) else real_hsr
@@ -4445,12 +4858,25 @@ def generate_weekly_pdf_report(
         pct_vhsr = (real_vhsr / obj_vhsr * 100.0) if obj_vhsr > 0 else 0.0
         pct_acc = (real_acc / obj_acc * 100.0) if obj_acc > 0 else 0.0
 
+        # 3. RPE moyen hebdomadaire : moyenne pondérée par participation (identique Page 9, ignore 'NR')
         rpe_cat_val = rpe_groups.get(grp)
-        if rpe_cat_val is None and not df_sub.empty and "RPE" in df_sub.columns:
-            s_rpe_c = pd.to_numeric(df_sub["RPE"], errors="coerce").dropna()
-            if not s_rpe_c.empty:
-                rpe_cat_val = round(float(s_rpe_c.mean()), 1)
+        if rpe_cat_val is None:
+            rpe_cat_val = grp_metrics_hebdo.get("rpe")
         rpe_cat_str = f"{rpe_cat_val:.1f} / 10" if (rpe_cat_val is not None and rpe_cat_val > 0) else "NR"
+
+        # Moyenne cumulée distincte par joueur (à titre informatif avec nb moyen de séances)
+        cum_info_txt = ""
+        if not df_sub.empty:
+            avg_sess_p = float(pd.to_numeric(df_sub.get("Nombre de séances", pd.Series([1])), errors="coerce").dropna().mean()) if "Nombre de séances" in df_sub.columns else 1.0
+            c_dist_p = float(pd.to_numeric(df_sub["Distance Totale (m)"], errors="coerce").dropna().mean()) if "Distance Totale (m)" in df_sub.columns else (float(pd.to_numeric(df_sub["Distance Totale (km)"], errors="coerce").dropna().mean()) * 1000.0 if "Distance Totale (km)" in df_sub.columns else 0.0)
+            c_hsr_p = float(pd.to_numeric(df_sub["HSR Z3 (m)"], errors="coerce").dropna().mean()) if "HSR Z3 (m)" in df_sub.columns else 0.0
+            c_vhsr_p = float(pd.to_numeric(df_sub["Distance Sprint VHSR (m)"], errors="coerce").dropna().mean()) if "Distance Sprint VHSR (m)" in df_sub.columns else 0.0
+            c_acc_p = float(pd.to_numeric(df_sub["Accel/Dec total"], errors="coerce").dropna().mean()) if "Accel/Dec total" in df_sub.columns else 0.0
+            cum_info_txt = (
+                f"Moy. cumulée/joueur (moy. {avg_sess_p:.1f} sé.) : "
+                f"{int(round(c_dist_p)):,d} m | HSR {int(round(c_hsr_p)):,d} m | "
+                f"VHSR {int(round(c_vhsr_p)):,d} m | Acc {int(round(c_acc_p))}"
+            ).replace(",", " ")
 
         # 1. Tableau Récapitulatif « RETOUR HEBDOMADAIRE — Objectif vs Réalisé »
         table_x = 12.0
@@ -4471,7 +4897,7 @@ def generate_weekly_pdf_report(
             (col_w_num, "DISTANCE HSR (Z3)", "C"),
             (col_w_num, "DISTANCE VHSR (Sprint)", "C"),
             (col_w_num, "m/min", "C"),
-            (col_w_num, "ACC / DEC n°", "C"),
+            (col_w_num, "ACC/DEC (nb)", "C"),
             (col_w_num, "RPE MOYEN", "C"),
         ]
         for w, h_title, align in headers_tbl:
@@ -4482,7 +4908,7 @@ def generate_weekly_pdf_report(
         pdf.set_draw_color(203, 213, 225)
         pdf.set_text_color(71, 85, 105)
         pdf.set_font("Helvetica", "B", 7.6)
-        pdf.cell(col_w_grp, 5.4, safe_latin1(f"  Objectif ({multiplier}x)"), border=1, align="L", fill=True)
+        pdf.cell(col_w_grp, 5.4, safe_latin1("  Objectif Hebdo"), border=1, align="L", fill=True)
         pdf.set_font("Helvetica", "", 7.6)
         pdf.set_text_color(31, 78, 121)
         pdf.cell(col_w_num, 5.4, f"{int(round(obj_dist)):,d} m".replace(",", " "), border=1, align="C", fill=True)
@@ -4509,10 +4935,19 @@ def generate_weekly_pdf_report(
         pdf.cell(col_w_num, 5.8, f"{int(round(real_acc)):,d} ({pct_acc:.0f}%)".replace(",", " "), border=1, align="C", fill=True)
         pdf.cell(col_w_num, 5.8, safe_latin1(rpe_cat_str), border=1, align="C", fill=True)
 
-        # 2. 4 Graphiques comparatifs 2x2
+        # 2. 4 Graphiques comparatifs 2x2 liés directement aux valeurs exactes du tableau ci-dessus
         try:
             buf_jauges = generer_graphique_hebdo_jauges_matplotlib(
-                disp_name, df_sub, nb_seances=nb_seances, objectifs_config=active_cfg, layout="2x2"
+                grp,
+                df_sub,
+                nb_seances=nb_seances,
+                objectifs_config=active_cfg,
+                layout="2x2",
+                synthese_jours=synthese_dict,
+                explicit_targets=tgt_hebdo,
+                explicit_realized=grp_metrics_hebdo,
+                isolated_positions=isolated_arg if not is_iso else None,
+                is_isolated=is_iso,
             )
             pdf.image(buf_jauges, x=12, y=38.0, w=273, h=60.0)
         except Exception as e:
@@ -4521,9 +4956,14 @@ def generate_weekly_pdf_report(
         # 3. Tableau individuel des statistiques cumulées
         y_sec_tbl = 100.0
         pdf.set_xy(12, y_sec_tbl)
-        pdf.set_font("Helvetica", "B", 8.8)
+        pdf.set_font("Helvetica", "B", 8.4)
         pdf.set_text_color(11, 25, 44)
-        pdf.cell(273, 4.0, safe_latin1(f"STATISTIQUES INDIVIDUELLES CUMULÉES SUR LA SEMAINE — {disp_name} :"), align="L")
+        pdf.cell(135, 4.0, safe_latin1(f"STATISTIQUES INDIVIDUELLES CUMULÉES — {disp_name} :"), align="L")
+        if cum_info_txt:
+            pdf.set_xy(147, y_sec_tbl)
+            pdf.set_font("Helvetica", "I", 7.1)
+            pdf.set_text_color(71, 85, 105)
+            pdf.cell(138, 4.0, safe_latin1(cum_info_txt), align="R")
 
         y_tbl_hdr = y_sec_tbl + 4.4
         pdf.set_xy(12, y_tbl_hdr)

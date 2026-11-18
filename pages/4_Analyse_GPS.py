@@ -5543,7 +5543,7 @@ def render_weekly_reports_view() -> None:
 
     with col_g2:
         st.markdown("##### 🏉 Distance & Haute Intensité Moyennes par Groupe")
-        buf_chart_groupes = weekly_memory.generer_graphique_hebdo_groupes_matplotlib(df_agg)
+        buf_chart_groupes = weekly_memory.generer_graphique_hebdo_groupes_matplotlib(df_agg, synthese_jours=synthese_jours)
         st.image(buf_chart_groupes, use_container_width=True)
 
     # 5. Podiums Hebdomadaires
@@ -5609,9 +5609,13 @@ def render_weekly_reports_view() -> None:
                 st.info(f"Aucun joueur enregistré dans la catégorie {grp_target} cette semaine.")
             else:
                 if grp_target != "ALL":
-                    st.markdown(f"##### 🎯 Objectifs Hebdomadaires vs Réalisé Cumulé ({grp_target})")
+                    st.markdown(f"##### 🎯 Objectifs Hebdomadaires vs Réalisé Hebdo ({grp_target})")
                     buf_grp_jauges = weekly_memory.generer_graphique_hebdo_jauges_matplotlib(
-                        grp_target, sub_df, nb_seances=len(selected_sids), objectifs_config=get_active_objectifs_config()
+                        grp_target,
+                        sub_df,
+                        nb_seances=len(selected_sids),
+                        objectifs_config=get_active_objectifs_config(),
+                        synthese_jours=synthese_jours,
                     )
                     st.image(buf_grp_jauges, use_container_width=True)
                     st.write("")
@@ -7264,6 +7268,7 @@ def main() -> None:
                     group_stats=moyennes_groupes,
                     adversaire=adversaire_input,
                     rpe_stats=rpe_metrics_seance,
+                    objectifs_config=active_objectifs,
                 )
                 if success:
                     st.success(f"🎉 {msg}")
