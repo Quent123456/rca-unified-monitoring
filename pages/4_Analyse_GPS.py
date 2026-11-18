@@ -5587,7 +5587,79 @@ def render_weekly_reports_view() -> None:
                             st.markdown(clean_html, unsafe_allow_html=True)
 
     # 6. Tableaux récapitulatifs & Jauges Objectif vs Réalisé par catégorie de poste
+    # 6. Vérification / Ajustement des Objectifs par Séance (Somme = Objectif Hebdo)
     st.divider()
+    fallback_cfg_w = get_active_objectifs_config()
+    missing_saved_obj = [
+        s.get("day_type", sid)
+        for sid, s in synthese_jours.items()
+        if isinstance(s, dict) and not (isinstance(s.get("objectifs_config"), dict) and "5 de devant" in s["objectifs_config"])
+    ]
+    with st.expander(
+        f"🎯 Objectifs par Séance Fusionnée (Somme = Objectif Hebdo — {len(synthese_jours)} séance{'s' if len(synthese_jours) > 1 else ''})",
+        expanded=False,
+    ):
+        if missing_saved_obj:
+            st.info(
+                f"ℹ️ Les séances suivantes ont été archivées avant la sauvegarde automatique des objectifs par séance : "
+                f"**{', '.join(missing_saved_obj)}**. Vérifiez ou ajustez leurs objectifs ci-dessous puis cliquez sur **Enregistrer** "
+                f"pour figer la somme exacte de la semaine dans l'archive."
+            )
+        edited_sess_objs: Dict[str, Dict[str, Dict[str, float]]] = {}
+        sess_items_w = [(sid, s) for sid, s in synthese_jours.items() if isinstance(s, dict)]
+        if sess_items_w:
+            sess_tabs_w = st.tabs([f"📅 {s.get('day_type', sid)}" for sid, s in sess_items_w])
+            for t_i, (sid, s_meta) in enumerate(sess_items_w):
+                base_s_cfg = weekly_memory._get_session_objectifs_config(
+                    s_meta, fallback_config=fallback_cfg_w, year=year, week_num=week_num
+                )
+                with sess_tabs_w[t_i]:
+                    c_o1, c_o2, c_o3 = st.columns(3)
+                    s_cfg_new: Dict[str, Dict[str, float]] = {}
+                    for col_o, g_lbl in [(c_o1, "5 de devant"), (c_o2, "3ème Ligne"), (c_o3, "Trois-quarts")]:
+                        g_cur = weekly_memory.get_objectifs_for_category(base_s_cfg, g_lbl)
+                        k_pref = f"wobj_{year}_{week_num}_{sid}_{g_lbl}"
+                        with col_o:
+                            st.markdown(f"**🏉 {g_lbl}**")
+                            d_v = st.number_input("Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(g_cur.get("Objectif Distance (m)", 4500.0)), key=f"{k_pref}_d")
+                            h_v = st.number_input("HSR Z3 (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(g_cur.get("Obj. HSR", 300.0)), key=f"{k_pref}_h")
+                            v_v = st.number_input("VHSR Sprint (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(g_cur.get("Obj. VHSR", 100.0)), key=f"{k_pref}_v")
+                            a_v = st.number_input("ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(g_cur.get("Obj. ACC/DEC", 50.0)), key=f"{k_pref}_a")
+                            s_cfg_new[g_lbl] = {
+                                "Objectif Distance (m)": float(d_v),
+                                "Obj. HSR": float(h_v),
+                                "Obj. VHSR": float(v_v),
+                                "Obj. ACC/DEC": float(a_v),
+                            }
+                    s_cfg_new["Tous les groupes"] = weekly_memory._calculer_moyenne_tous_groupes(s_cfg_new)
+                    edited_sess_objs[sid] = s_cfg_new
+                    synthese_jours[sid]["objectifs_config"] = s_cfg_new
+
+            # Récapitulatif de la somme dynamique
+            sum_rows = []
+            for g_lbl in ("5 de devant", "3ème Ligne", "Trois-quarts"):
+                t_sum = weekly_memory.calculer_objectifs_hebdo_pour_categorie(
+                    g_lbl, synthese_jours, fallback_config=fallback_cfg_w, year=year, week_num=week_num
+                )
+                sum_rows.append({
+                    "Ligne de poste": g_lbl,
+                    "Objectif Distance (m)": int(round(t_sum["Objectif Distance (m)"])),
+                    "Obj. HSR Z3 (m)": int(round(t_sum["Obj. HSR"])),
+                    "Obj. VHSR Sprint (m)": int(round(t_sum["Obj. VHSR"])),
+                    "Obj. ACC/DEC (nb)": int(round(t_sum["Obj. ACC/DEC"])),
+                })
+            st.markdown("**📊 Somme Dynamique des Objectifs Hebdomadaires :**")
+            st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
+
+            if st.button("💾 Enregistrer les objectifs de ces séances dans l'archive de la semaine", key=f"btn_save_wobjs_{year}_{week_num}"):
+                ok_o, msg_o = weekly_memory.update_week_sessions_objectifs(year, week_num, edited_sess_objs)
+                if ok_o:
+                    st.success(f"✅ {msg_o}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg_o}")
+
+    # 7. Tableaux récapitulatifs & Jauges Objectif vs Réalisé par catégorie de poste
     st.markdown("#### 📋 Détail par Catégorie de Poste sur la Semaine")
 
     tabs_groupes = st.tabs(["🏉 5 de devant", "🏉 3ème Ligne", "🏉 Trois-quarts", "👥 Tous les joueurs"])
@@ -5614,7 +5686,7 @@ def render_weekly_reports_view() -> None:
                         grp_target,
                         sub_df,
                         nb_seances=len(selected_sids),
-                        objectifs_config=get_active_objectifs_config(),
+                        objectifs_config=fallback_cfg_w,
                         synthese_jours=synthese_jours,
                     )
                     st.image(buf_grp_jauges, use_container_width=True)
@@ -5622,7 +5694,7 @@ def render_weekly_reports_view() -> None:
 
                 st.dataframe(sub_df[cols_valid], use_container_width=True, hide_index=True)
 
-    # 7. Export PDF du Rapport Hebdomadaire
+    # 8. Export PDF du Rapport Hebdomadaire
     st.divider()
     st.markdown("#### 📥 Télécharger le Rapport Hebdomadaire PDF pour les Coachs")
 
@@ -5683,7 +5755,7 @@ def render_weekly_reports_view() -> None:
     selected_meta = [s for s_id, s in sessions.items() if s_id in selected_sids]
     cats_w = active_cats_w
     n_comp_w_pages = ((len(cats_w) + 2) // 3) if inclure_comp_w else 0
-    total_w_pages = 2 + 2 * len(cats_w) + n_comp_w_pages
+    total_w_pages = 2 + 3 * len(cats_w) + n_comp_w_pages
 
     pdf_hebdo_bytes = weekly_memory.generate_weekly_pdf_report(
         df_hebdo=df_agg,
@@ -5692,7 +5764,7 @@ def render_weekly_reports_view() -> None:
         synthese_jours=synthese_jours,
         selected_sessions_meta=selected_meta,
         notes_coach=f"Rapport consolidé sur {len(selected_sids)} séance(s) validée(s).",
-        objectifs_config=get_active_objectifs_config(),
+        objectifs_config=fallback_cfg_w,
         inclure_comparatif=inclure_comp_w,
         nb_comparatif=nb_semaines_comp,
         granularity_mode=granularity_w,
