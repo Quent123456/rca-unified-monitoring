@@ -47,9 +47,9 @@
     "2": "5 de devant",
     "12": "Trois-quarts"
   },
-  "derniere_mise_a_jour": "18/11/2026 11:10:12",
+  "derniere_mise_a_jour": "18/11/2026 12:49:34",
   "nb_boitiers": 22,
-  "last_validated_file_sig": "DB 171126.xlsx_67256",
+  "last_validated_file_sig": "Données brutes -J7.xlsx_58010",
   "splits_participation": {
     "PECQUERY Thomas:::Split 1": true,
     "PECQUERY Thomas:::Split 2": true,
@@ -311,6 +311,20 @@
     "GUIBERT Samuel:::Split 1": true,
     "GUIBERT Samuel:::Split 2": true,
     "GUIBERT Samuel:::Split 3": true,
-    "GUIBERT Samuel:::Split 4": true
+    "GUIBERT Samuel:::Split 4": true,
+    "COZIC Adrien:::1er mi-temps": true,
+    "WALONGO Dominique:::1er mi-temps": true,
+    "FOURNET Giovanni:::1er mi-temps": true,
+    "BOEUF Elliot:::1er mi-temps": true,
+    "CARPENTIER Joseph:::1er mi-temps": true,
+    "LESPINASSE Lucien:::1er mi-temps": true,
+    "BINNINGER Alban:::1er mi-temps": true,
+    "PRÉVOTÉ Oliver:::1er mi-temps": true,
+    "TANTER Edouard:::1er mi-temps": true,
+    "DE BRUYN Octave:::1er mi-temps": true,
+    "DAULT Bastien:::1er mi-temps": true,
+    "D. Anthymme:::1er mi-temps": true,
+    "SAINTOMER Louis:::1er mi-temps": true,
+    "GUIBERT Samuel:::1er mi-temps": true
   }
 }
