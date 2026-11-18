@@ -2261,12 +2261,14 @@ def update_session_in_memory(
     new_objectifs_config: Dict[str, Dict[str, float]],
     new_day_type: Optional[str] = None,
     is_provisional: bool = False,
+    new_adversaire: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     Met à jour à posteriori uniquement la séance ciblée (objectifs isolés, libellé day_type
-    optionnel, statut provisoire) dans data/weekly_memory/week_YYYY_WXX.json sans altérer
-    les autres séances de la semaine, invalide le PDF journalier local obsolète, pousse
-    immédiatement sur GitHub et vide les caches Streamlit concernés.
+    optionnel, adversaire optionnel pour les matchs, statut provisoire) dans
+    data/weekly_memory/week_YYYY_WXX.json sans altérer les autres séances de la semaine,
+    invalide le PDF journalier local obsolète, pousse immédiatement sur GitHub et vide les
+    caches Streamlit concernés.
     """
     if not session_id:
         return False, "Identifiant de séance manquant."
@@ -2282,6 +2284,8 @@ def update_session_in_memory(
     target_session["objectifs_config"] = _normalize_session_objectifs_config(new_objectifs_config)
     if new_day_type is not None and str(new_day_type).strip():
         target_session["day_type"] = str(new_day_type).strip()
+    if new_adversaire is not None:
+        target_session["adversaire"] = str(new_adversaire).strip().upper()
     target_session["is_provisional"] = bool(is_provisional)
     target_session["updated_at"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
@@ -4814,12 +4818,22 @@ def _render_podiums_compact_horizontal(
 
 
 class RCAWeeklyPDFReport(FPDF):
-    """Classe FPDF Landscape dédiée au rapport hebdomadaire du RCA."""
-    def __init__(self, week_label: str, dates_label: str, total_pages: int = 4):
+    """Classe FPDF Landscape dédiée aux rapports hebdomadaires, fusionnés et comparatifs matchs du RCA."""
+    def __init__(
+        self,
+        week_label: str,
+        dates_label: str,
+        total_pages: int = 4,
+        header_title: str = "RUGBY CLUB AMIÉNOIS | Rapport Hebdomadaire de Charge GPS",
+        header_right_label: Optional[str] = None,
+    ):
         super().__init__(orientation="L", unit="mm", format="A4")
         self.week_label = week_label
         self.dates_label = dates_label
         self.current_subtitle = ""
+        self.header_title = header_title
+        self.header_right_label = header_right_label
+        self.date_texte = ""
         self.total_pages = total_pages
         self.set_auto_page_break(auto=False)
         self.set_margins(left=12, top=20, right=12)
@@ -4858,11 +4872,12 @@ class RCAWeeklyPDFReport(FPDF):
                 pass
 
         # 4. Titre officiel et sous-titre dynamique en doré
+        main_title = str(getattr(self, "header_title", "") or "RUGBY CLUB AMIÉNOIS | Rapport Hebdomadaire de Charge GPS")
         if self.current_subtitle:
             self.set_xy(x_title, 2.2)
             self.set_font("Helvetica", "B", 10.0)
             self.set_text_color(255, 255, 255)
-            self.cell(150, 6, safe_latin1("RUGBY CLUB AMIÉNOIS | Rapport Hebdomadaire de Charge GPS"), align="L")
+            self.cell(150, 6, safe_latin1(main_title), align="L")
 
             self.set_xy(x_title, 8.2)
             self.set_font("Helvetica", "B", 9.0)
@@ -4872,14 +4887,21 @@ class RCAWeeklyPDFReport(FPDF):
             self.set_xy(x_title, 3.2)
             self.set_font("Helvetica", "B", 12.0)
             self.set_text_color(255, 255, 255)
-            self.cell(150, 10, safe_latin1("RUGBY CLUB AMIÉNOIS | Rapport Hebdomadaire de Charge GPS"), align="L")
+            self.cell(150, 10, safe_latin1(main_title), align="L")
 
-        # 5. Semaine et dates
+        # 5. Semaine / dates ou libellé droit dynamique
         self.set_font("Helvetica", "B", 9.5)
         self.set_text_color(243, 195, 0)
-        self.set_xy(175, 3.2)
-        dates_disp = f" - {self.dates_label}" if self.dates_label else ""
-        self.cell(110, 10, safe_latin1(f"{self.week_label.upper()}{dates_disp}"), align="R")
+        self.set_xy(170, 3.2)
+        if getattr(self, "header_right_label", None):
+            right_txt = str(self.header_right_label)
+        else:
+            dates_disp = f" - {self.dates_label}" if self.dates_label else ""
+            right_txt = f"{self.week_label.upper()}{dates_disp}"
+        self.cell(115, 10, safe_latin1(right_txt), align="R")
+
+        self.set_text_color(30, 41, 59)
+        self.set_y(20)
 
     def footer(self):
         # Liseré discret jaune or
@@ -4905,6 +4927,8 @@ def generate_weekly_pdf_report(
     granularity_mode: str = "Par ligne de poste",
     target_groups: Optional[List[str]] = None,
     isolated_positions: Optional[List[str]] = None,
+    target_pdf: Optional[Any] = None,
+    header_title: Optional[str] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -4994,13 +5018,27 @@ def generate_weekly_pdf_report(
 
     n_comp_pages = ((len(items_to_render) + 2) // 3) if inclure_comparatif else 0
     total_pages_calc = 2 + 3 * len(items_to_render) + n_comp_pages
-    pdf = RCAWeeklyPDFReport(week_label=week_label, dates_label=dates_str, total_pages=total_pages_calc)
+    dates_disp_w = f" - {dates_str}" if dates_str else ""
+    weekly_header_title = header_title or "RUGBY CLUB AMIÉNOIS | Rapport Hebdomadaire de Charge GPS"
+    if target_pdf is not None:
+        pdf = target_pdf
+        pdf.week_label = week_label
+        pdf.dates_label = dates_str
+        pdf.header_title = weekly_header_title
+        pdf.header_right_label = f"{week_label.upper()}{dates_disp_w}"
+    else:
+        pdf = RCAWeeklyPDFReport(
+            week_label=week_label,
+            dates_label=dates_str,
+            total_pages=total_pages_calc,
+            header_title=weekly_header_title,
+        )
 
     if df_hebdo is None or df_hebdo.empty:
         pdf.add_page()
         pdf.set_font("Helvetica", "", 12)
         pdf.cell(0, 10, safe_latin1("Aucune donnee disponible pour cette semaine."), align="L")
-        return bytes(pdf.output())
+        return b"" if target_pdf is not None else bytes(pdf.output())
 
     # Chargement + rattrapage RPE Google Sheets pour la semaine en cours (ex: S43)
     w_data_curr = load_week_data(year, week_num)
@@ -5158,27 +5196,27 @@ def generate_weekly_pdf_report(
     pdf.set_text_color(51, 65, 85)
     pdf.multi_cell(w=264.0, h=3.4, txt=safe_latin1(note_txt), align="L")
 
-    # 2. Bandeau intermédiaire côte-à-côte (Séances + Volume Journalier) — y=45.0..90.0
-    y_mid = 45.0
+    # 2. Tableau pleine largeur : Séances Enregistrées & Volumes (partie 2 Répartition journalière retirée)
+    y_mid = 45.5
 
     pdf.set_xy(12, y_mid)
-    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_font("Helvetica", "B", 8.8)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(136, 3.8, safe_latin1("1. SÉANCES ENREGISTRÉES & VOLUMES :"), align="L")
+    pdf.cell(273, 4.0, safe_latin1("1. SÉANCES ENREGISTRÉES & VOLUMES :"), align="L")
 
-    y_table = y_mid + 4.2
+    y_table = y_mid + 4.4
     pdf.set_xy(12, y_table)
     pdf.set_fill_color(31, 78, 121)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 7.2)
-    # Largeurs optimisées (total 136 mm) : 64 mm pour Séance/Type évite toute troncature
-    pdf.cell(64, 4.8, safe_latin1("Séance / Type"), 1, 0, "L", fill=True)
-    pdf.cell(20, 4.8, safe_latin1("Date"), 1, 0, "C", fill=True)
-    pdf.cell(14, 4.8, safe_latin1("Effectif"), 1, 0, "C", fill=True)
-    pdf.cell(19, 4.8, safe_latin1("Dist. (km)"), 1, 0, "C", fill=True)
-    pdf.cell(19, 4.8, safe_latin1("H.I. (m)"), 1, 1, "C", fill=True)
+    pdf.set_font("Helvetica", "B", 7.8)
+    # Pleine largeur 273 mm : 105 + 42 + 34 + 46 + 46 = 273 mm
+    pdf.cell(105, 5.4, safe_latin1("  Séance / Type"), 1, 0, "L", fill=True)
+    pdf.cell(42, 5.4, safe_latin1("Date"), 1, 0, "C", fill=True)
+    pdf.cell(34, 5.4, safe_latin1("Effectif"), 1, 0, "C", fill=True)
+    pdf.cell(46, 5.4, safe_latin1("Distance Équipe (km)"), 1, 0, "C", fill=True)
+    pdf.cell(46, 5.4, safe_latin1("Haute Intensité (m)"), 1, 1, "C", fill=True)
 
-    pdf.set_font("Helvetica", "", 7.0)
+    pdf.set_font("Helvetica", "", 7.6)
     pdf.set_text_color(15, 23, 42)
     sessions_to_show = list(synthese_dict.items())[:6]
     fill_sess = False
@@ -5186,40 +5224,32 @@ def generate_weekly_pdf_report(
         pdf.set_x(12)
         pdf.set_fill_color(*(248, 250, 252) if fill_sess else (255, 255, 255))
         day_lbl = str(s.get("day_type", "")).strip()
-        if len(day_lbl) > 36:
-            day_lbl = day_lbl[:35] + "."
-        pdf.cell(64, 4.6, safe_latin1(day_lbl), 1, 0, "L", fill=True)
-        pdf.cell(20, 4.6, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C", fill=True)
-        pdf.cell(14, 4.6, safe_latin1(f"{s.get('num_players', 0)}"), 1, 0, "C", fill=True)
-        pdf.cell(19, 4.6, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C", fill=True)
-        pdf.cell(19, 4.6, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d}".replace(",", " ")), 1, 1, "C", fill=True)
+        if len(day_lbl) > 48:
+            day_lbl = day_lbl[:47] + "."
+        pdf.cell(105, 5.2, safe_latin1(f"  {day_lbl}"), 1, 0, "L", fill=True)
+        pdf.cell(42, 5.2, safe_latin1(format_readable_date(s.get("date", ""))), 1, 0, "C", fill=True)
+        pdf.cell(34, 5.2, safe_latin1(f"{s.get('num_players', 0)} joueurs"), 1, 0, "C", fill=True)
+        pdf.cell(46, 5.2, safe_latin1(f"{float(s.get('total_distance_km', 0.0)):.1f} km"), 1, 0, "C", fill=True)
+        pdf.cell(46, 5.2, safe_latin1(f"{int(round(float(s.get('total_hi_m', 0.0)))):,d} m".replace(",", " ")), 1, 1, "C", fill=True)
         fill_sess = not fill_sess
 
-    pdf.set_xy(152, y_mid)
-    pdf.set_font("Helvetica", "B", 8.5)
-    pdf.set_text_color(11, 25, 44)
-    pdf.cell(133, 3.8, safe_latin1("2. RÉPARTITION DE CHARGE PAR SÉANCE :"), align="L")
-    try:
-        buf_days = generer_graphique_hebdo_repartition_jours_matplotlib(synthese_dict)
-        pdf.image(buf_days, x=152, y=y_mid + 4.2, w=133, h=41.0)
-    except Exception as e:
-        print(f"Erreur graphique repartition jours PDF : {e}")
-
-    # 3. Graphique principal élargi et centré (Charge Moyenne Hebdomadaire par Ligne de Poste)
-    y_main_chart_hdr = 91.5
+    # 3. Graphique principal élargi et centré (renuméroté 2. suite au retrait de la Répartition par séance)
+    y_after_tbl = y_table + 5.4 + len(sessions_to_show) * 5.2
+    y_main_chart_hdr = max(y_after_tbl + 5.5, 76.0)
     pdf.set_xy(12, y_main_chart_hdr)
-    pdf.set_font("Helvetica", "B", 8.8)
+    pdf.set_font("Helvetica", "B", 9.0)
     pdf.set_text_color(11, 25, 44)
-    pdf.cell(273, 4.0, safe_latin1("3. CHARGE MOYENNE HEBDOMADAIRE PAR LIGNE DE POSTE (5 DE DEVANT | 3ÈME LIGNE | TROIS-QUARTS) :"), align="C")
+    pdf.cell(273, 4.2, safe_latin1("2. CHARGE MOYENNE HEBDOMADAIRE PAR LIGNE DE POSTE (5 DE DEVANT | 3ÈME LIGNE | TROIS-QUARTS) :"), align="C")
 
     try:
+        avail_h_chart = max(86.0, min(112.0, 194.5 - (y_main_chart_hdr + 4.8)))
         buf_groups = generer_graphique_hebdo_groupes_matplotlib(
-            df_hebdo, figsize=(12.2, 4.7), synthese_jours=synthese_dict
+            df_hebdo, figsize=(12.2, 4.9), synthese_jours=synthese_dict
         )
-        chart_w_main = 255.0
-        chart_h_main = 98.5
+        chart_w_main = 260.0
+        chart_h_main = avail_h_chart
         chart_x_main = 12.0 + (273.0 - chart_w_main) / 2.0
-        pdf.image(buf_groups, x=chart_x_main, y=y_main_chart_hdr + 4.5, w=chart_w_main, h=chart_h_main)
+        pdf.image(buf_groups, x=chart_x_main, y=y_main_chart_hdr + 4.8, w=chart_w_main, h=chart_h_main)
     except Exception as e:
         print(f"Erreur graphique groupes hebdo PDF : {e}")
 
@@ -5546,5 +5576,851 @@ def generate_weekly_pdf_report(
             df_current=df_hebdo,
             isolated_positions=isolated_arg,
         )
+
+    if target_pdf is not None:
+        return b""
+    return bytes(pdf.output())
+
+
+# ==============================================================================
+# FUSION OPTIONNELLE : RETOUR SÉANCE VENDREDI + RETOUR SEMAINE XX (PDF UNIFIÉ)
+# ==============================================================================
+
+def find_friday_session_in_week(sessions: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Identifie la séance du Vendredi dans une semaine archivée (si présente)."""
+    if not isinstance(sessions, dict):
+        return None
+    for sid, s_meta in sessions.items():
+        if not isinstance(s_meta, dict):
+            continue
+        sid_norm = _strip_accents_lower(sid)
+        day_norm = _strip_accents_lower(s_meta.get("day_type", ""))
+        if "vendredi" in sid_norm or "vendredi" in day_norm:
+            return sid, s_meta
+    return None
+
+
+def generate_fused_friday_weekly_pdf_report(
+    friday_session_meta: Dict[str, Any],
+    df_hebdo: Optional[pd.DataFrame],
+    year: int,
+    week_num: int,
+    synthese_jours: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+    notes_coach: str = "",
+    objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
+    inclure_comparatif: bool = False,
+    nb_comparatif: int = 4,
+    inclure_comparatif_vendredi: bool = False,
+    granularity_mode: str = "Par ligne de poste",
+    target_groups: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
+    **kwargs: Any,
+) -> bytes:
+    """
+    Génère un PDF unique et continu fusionnant :
+      - Partie 1 : Retour Séance Vendredi (rapport journalier complet avec les objectifs isolés du vendredi)
+      - Partie 2 : Retour Semaine XX (rapport hebdomadaire complet + comparatif multi-semaines optionnel)
+    Pagination continue Page 1/N .. Page N/N sur toute l'archive.
+    """
+    week_label = f"Semaine {week_num:02d} - {year}"
+    synthese_dict = _deduplicate_merged_sessions(synthese_jours)
+    raw_dates = [format_readable_date(s.get("date", "")) for s in synthese_dict.values() if isinstance(s, dict) and s.get("date")]
+    raw_dates = [d for d in raw_dates if d]
+    dates_str = f"Du {raw_dates[0]} au {raw_dates[-1]}" if len(raw_dates) >= 2 else (raw_dates[0] if raw_dates else "")
+
+    unified_pdf = RCAWeeklyPDFReport(
+        week_label=week_label,
+        dates_label=dates_str,
+        header_title=f"RUGBY CLUB AMIÉNOIS | Retour Séance Vendredi (S{week_num:02d})",
+    )
+
+    # PARTIE 1 : RETOUR SÉANCE VENDREDI
+    if isinstance(friday_session_meta, dict) and friday_session_meta.get("players_data"):
+        df_fri = pd.DataFrame(friday_session_meta["players_data"])
+        fri_date_val = format_readable_date(friday_session_meta.get("date", "")) or friday_session_meta.get("day_type", "Vendredi")
+        fri_obj_cfg = _get_session_objectifs_config(
+            dict(friday_session_meta),
+            fallback_config=objectifs_config or charger_objectifs_config(),
+            year=year,
+            week_num=week_num,
+        )
+        try:
+            from modules import pdf_reports as _pdf_mod
+        except (ImportError, ModuleNotFoundError):
+            import pdf_reports as _pdf_mod
+
+        _pdf_mod.generer_rapport_pdf_coachs(
+            df_indiv=df_fri,
+            date_seance=fri_date_val,
+            synthese_note=friday_session_meta.get("notes", "") or f"Retour de séance du Vendredi ({fri_date_val}) — Semaine {week_num:02d}.",
+            moyennes_groupes=friday_session_meta.get("group_stats"),
+            config_objectifs=fri_obj_cfg,
+            inclure_comparatif=inclure_comparatif_vendredi,
+            nb_comparatif=min(int(nb_comparatif), 4),
+            adversaire=friday_session_meta.get("adversaire", ""),
+            rpe_stats=friday_session_meta.get("rpe_stats"),
+            granularity_mode=granularity_mode,
+            target_groups=target_groups,
+            isolated_positions=isolated_positions,
+            target_pdf=unified_pdf,
+            header_title=f"RUGBY CLUB AMIÉNOIS | Retour Séance Vendredi + Semaine {week_num:02d}",
+            page1_subtitle="PARTIE 1 — RETOUR SÉANCE VENDREDI (SYNTHÈSE GLOBALE)",
+        )
+
+    # PARTIE 2 : RETOUR SEMAINE XX
+    generate_weekly_pdf_report(
+        df_hebdo=df_hebdo,
+        year=year,
+        week_num=week_num,
+        synthese_jours=synthese_dict,
+        notes_coach=notes_coach,
+        objectifs_config=objectifs_config,
+        inclure_comparatif=inclure_comparatif,
+        nb_comparatif=nb_comparatif,
+        granularity_mode=granularity_mode,
+        target_groups=target_groups,
+        isolated_positions=isolated_positions,
+        target_pdf=unified_pdf,
+        header_title=f"RUGBY CLUB AMIÉNOIS | Retour Semaine {week_num:02d} (Bilan Hebdomadaire)",
+        **kwargs,
+    )
+
+    return bytes(unified_pdf.output())
+
+
+# ==============================================================================
+# MODULE DÉDIÉ : COMPARATIF DES MATCHS (DIMANCHE) — STOCKAGE & RAPPORT PDF
+# ==============================================================================
+
+def is_match_session(session_id: str, session_meta: Optional[Dict[str, Any]] = None) -> bool:
+    """Retourne True si la séance correspond à un rapport de Match (Dimanche)."""
+    sid_norm = _strip_accents_lower(session_id)
+    day_norm = _strip_accents_lower((session_meta or {}).get("day_type", "")) if isinstance(session_meta, dict) else ""
+    return ("match" in sid_norm) or ("match" in day_norm) or ("dimanche" in sid_norm) or ("dimanche" in day_norm)
+
+
+def list_all_match_sessions() -> List[Dict[str, Any]]:
+    """
+    Parcourt l'ensemble de la mémoire hebdomadaire (data/weekly_memory/week_*.json)
+    et retourne uniquement les rapports de Match (Dimanche), triés chronologiquement.
+    """
+    matches: List[Dict[str, Any]] = []
+    weeks = list_available_weeks()
+    for w in weeks:
+        yr = int(w["year"])
+        wk = int(w["week_num"])
+        w_data = load_week_data(yr, wk)
+        sessions = w_data.get("sessions", {}) if isinstance(w_data, dict) else {}
+        for sid, s_meta in sessions.items():
+            if not isinstance(s_meta, dict):
+                continue
+            if not is_match_session(sid, s_meta):
+                continue
+            entry = copy.deepcopy(s_meta)
+            entry["year"] = yr
+            entry["week_num"] = wk
+            entry["session_id"] = sid
+            entry["match_uid"] = f"{yr}_W{wk:02d}_{sid}"
+            # Rattrapage dynamique des KPIs si absents sur d'anciens matchs
+            p_list = entry.get("players_data", [])
+            if p_list:
+                df_m = pd.DataFrame(p_list)
+                if float(entry.get("avg_distance_m") or 0.0) <= 0 and "Distance (km)" in df_m.columns:
+                    sd = pd.to_numeric(df_m["Distance (km)"], errors="coerce").dropna()
+                    if not sd.empty:
+                        entry["avg_distance_m"] = round(float(sd.mean()) * 1000.0, 1)
+                if float(entry.get("max_speed_kmh") or 0.0) <= 0:
+                    sc = next((c for c in ("Top Speed (km/h)", "Top Speed", "Vmax (km/h)") if c in df_m.columns), None)
+                    if sc:
+                        ss = pd.to_numeric(df_m[sc], errors="coerce")
+                        ss = ss[ss > 0].dropna()
+                        if not ss.empty:
+                            imax = ss.idxmax()
+                            entry["max_speed_kmh"] = round(float(ss.loc[imax]), 1)
+                            nc = next((c for c in ("Nom ; Prénom", "Nom", "Joueur") if c in df_m.columns), None)
+                            if nc:
+                                entry["max_speed_player"] = str(df_m.loc[imax, nc]).strip() or "-"
+            matches.append(entry)
+
+    # Tri chronologique croissant (date si parsable, sinon (year, week_num))
+    def _sort_key_match(m: Dict[str, Any]) -> Tuple[int, int, str]:
+        dt_p = parse_session_date(m.get("date", ""))
+        if dt_p is not None:
+            return (dt_p.year, dt_p.timetuple().tm_yday, str(m.get("match_uid", "")))
+        return (int(m.get("year", 0)), int(m.get("week_num", 0)) * 7, str(m.get("match_uid", "")))
+
+    matches.sort(key=_sort_key_match)
+    return matches
+
+
+def _compute_match_group_metrics(
+    match_meta: Dict[str, Any],
+    grp: str,
+    isolated_positions: Optional[List[str]] = None,
+    is_isolated: bool = False,
+) -> Dict[str, Any]:
+    """Calcule les moyennes d'un match pour une ligne de poste ou un poste spécifique."""
+    p_data = match_meta.get("players_data", [])
+    if not p_data:
+        gs = (match_meta.get("group_stats") or {}).get(grp, {}) if isinstance(match_meta.get("group_stats"), dict) else {}
+        rpe_v = (match_meta.get("rpe_stats") or {}).get(grp) if isinstance(match_meta.get("rpe_stats"), dict) else None
+        return {
+            "volume": round(float(gs.get("Dist_m", 0.0) or 0.0), 1),
+            "hsr": round(float(gs.get("HSR_m", 0.0) or 0.0), 1),
+            "vhsr": round(float(gs.get("VHSR_m", 0.0) or 0.0), 1),
+            "acc_dec": round(float(gs.get("Acc_Dec", 0.0) or 0.0), 1),
+            "dpm": round(float(gs.get("Dpm", 0.0) or 0.0), 1),
+            "rpe": round(float(rpe_v), 1) if (rpe_v is not None and pd.notna(rpe_v)) else None,
+            "n_players": 0,
+        }
+
+    df_m = pd.DataFrame(p_data)
+    if gsheet_sync and hasattr(gsheet_sync, "filter_out_test_players"):
+        df_m = gsheet_sync.filter_out_test_players(df_m)
+    df_g = _filter_df_by_group(df_m, grp, isolated_positions=isolated_positions if not is_isolated else None, is_isolated=is_isolated)
+    if df_g.empty:
+        return {"volume": 0.0, "hsr": 0.0, "vhsr": 0.0, "acc_dec": 0.0, "dpm": 0.0, "rpe": None, "n_players": 0}
+
+    vol = float(pd.to_numeric(df_g["Distance (km)"], errors="coerce").dropna().mean() * 1000.0) if "Distance (km)" in df_g.columns else 0.0
+    if "Distance in Speed Zone 3  (km)" in df_g.columns:
+        hsr = float(pd.to_numeric(df_g["Distance in Speed Zone 3  (km)"], errors="coerce").dropna().mean() * 1000.0)
+    elif "HSR Z3 (m)" in df_g.columns:
+        hsr = float(pd.to_numeric(df_g["HSR Z3 (m)"], errors="coerce").dropna().mean())
+    elif "HSR_m" in df_g.columns:
+        hsr = float(pd.to_numeric(df_g["HSR_m"], errors="coerce").dropna().mean())
+    elif " Distance haute intensité (m)" in df_g.columns:
+        hsr = float(pd.to_numeric(df_g[" Distance haute intensité (m)"], errors="coerce").dropna().mean())
+    else:
+        hsr = 0.0
+
+    if "VHSR (m)" in df_g.columns:
+        vhsr = float(pd.to_numeric(df_g["VHSR (m)"], errors="coerce").dropna().mean())
+    elif "Distance in Speed Zone 4  (km)" in df_g.columns and "Distance in Speed Zone 5  (km)" in df_g.columns:
+        vhsr = float((pd.to_numeric(df_g["Distance in Speed Zone 4  (km)"], errors="coerce").fillna(0.0) + pd.to_numeric(df_g["Distance in Speed Zone 5  (km)"], errors="coerce").fillna(0.0)).mean() * 1000.0)
+    else:
+        vhsr = 0.0
+
+    acc = float(pd.to_numeric(df_g["Accel/Dec"], errors="coerce").dropna().mean()) if "Accel/Dec" in df_g.columns else 0.0
+    dpm_col = "Distance Per Min (m/min)" if "Distance Per Min (m/min)" in df_g.columns else ("Distance/min (m/min)" if "Distance/min (m/min)" in df_g.columns else None)
+    dpm = float(pd.to_numeric(df_g[dpm_col], errors="coerce").dropna().mean()) if dpm_col else 0.0
+
+    rpe_val = None
+    if "RPE" in df_g.columns:
+        s_rpe = pd.to_numeric(df_g["RPE"], errors="coerce")
+        s_rpe = s_rpe[(s_rpe >= 1.0) & (s_rpe <= 10.0)].dropna()
+        if not s_rpe.empty:
+            rpe_val = round(float(s_rpe.mean()), 1)
+
+    return {
+        "volume": round(0.0 if np.isnan(vol) else vol, 1),
+        "hsr": round(0.0 if np.isnan(hsr) else hsr, 1),
+        "vhsr": round(0.0 if np.isnan(vhsr) else vhsr, 1),
+        "acc_dec": round(0.0 if np.isnan(acc) else acc, 1),
+        "dpm": round(0.0 if np.isnan(dpm) else dpm, 1),
+        "rpe": rpe_val,
+        "n_players": int(len(df_g)),
+    }
+
+
+def build_match_comparative_items(
+    selected_matches: List[Dict[str, Any]],
+    categories: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Construit la liste normalisée des matchs pour les graphiques triptyques comparatifs
+    (Volume bleu, HSR rouge, VHSR vert + RPE orange) et les tableaux comparatifs PDF.
+    """
+    cats = list(categories) if categories else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    isolated_set = set(isolated_positions or [])
+    items: List[Dict[str, Any]] = []
+
+    for m in selected_matches:
+        wk = int(m.get("week_num", 0) or 0)
+        adv = str(m.get("adversaire", "") or "").strip().upper()
+        date_clean = format_readable_date(m.get("date", ""))
+        date_short = date_clean[:5] if len(date_clean) >= 5 else date_clean
+        if adv:
+            lbl_x = f"S{wk:02d} ({adv[:9]})"
+            lbl_full = f"S{wk:02d} vs {adv}"
+        else:
+            lbl_x = f"S{wk:02d} ({date_short})" if date_short else f"S{wk:02d}"
+            lbl_full = f"Match S{wk:02d} ({date_clean})" if date_clean else f"Match S{wk:02d}"
+
+        grp_metrics: Dict[str, Dict[str, Any]] = {}
+        for grp in cats:
+            is_iso = grp in isolated_set and not is_grand_groupe(grp)
+            grp_metrics[grp] = _compute_match_group_metrics(
+                m, grp, isolated_positions=isolated_positions if not is_iso else None, is_isolated=is_iso
+            )
+
+        items.append({
+            "match_uid": m.get("match_uid", f"S{wk:02d}"),
+            "week_num": wk,
+            "year": int(m.get("year", 2026) or 2026),
+            "date": date_clean,
+            "adversaire": adv,
+            "label": lbl_full,
+            "label_x": lbl_x,
+            "short_label": lbl_x,
+            "num_players": int(m.get("num_players", len(m.get("players_data", []))) or 0),
+            "total_distance_km": float(m.get("total_distance_km", 0.0) or 0.0),
+            "avg_distance_m": float(m.get("avg_distance_m", 0.0) or 0.0),
+            "total_hi_m": float(m.get("total_hi_m", 0.0) or 0.0),
+            "max_speed_kmh": float(m.get("max_speed_kmh", 0.0) or 0.0),
+            "max_speed_player": str(m.get("max_speed_player", "-") or "-"),
+            "players_data": m.get("players_data", []),
+            "group_metrics": grp_metrics,
+        })
+
+    return items
+
+
+def aggregate_match_players(selected_matches: List[Dict[str, Any]]) -> pd.DataFrame:
+    """
+    Consolide les performances individuelles moyennes et cumulées des joueurs
+    sur les matchs sélectionnés (uniquement les matchs Dimanche).
+    """
+    rows: List[Dict[str, Any]] = []
+    j_lookup = _get_effective_joueurs_lookup()
+    for m in selected_matches:
+        wk = int(m.get("week_num", 0) or 0)
+        adv = str(m.get("adversaire", "") or "").strip().upper()
+        tag = f"S{wk:02d} {adv}" if adv else f"S{wk:02d}"
+        for p in m.get("players_data", []):
+            if not isinstance(p, dict):
+                continue
+            r = dict(p)
+            r["_match_tag"] = tag
+            rows.append(r)
+
+    if not rows:
+        return pd.DataFrame()
+
+    df_all = pd.DataFrame(rows)
+    if gsheet_sync and hasattr(gsheet_sync, "filter_out_test_players"):
+        df_all = gsheet_sync.filter_out_test_players(df_all)
+    if df_all.empty:
+        return pd.DataFrame()
+
+    p_col = "Nom ; Prénom" if "Nom ; Prénom" in df_all.columns else ("Nom" if "Nom" in df_all.columns else None)
+    if not p_col:
+        return pd.DataFrame()
+
+    out_rows: List[Dict[str, Any]] = []
+    for pname, grp_df in df_all.groupby(p_col, dropna=True):
+        pname_clean = str(pname).strip()
+        if not pname_clean:
+            continue
+        n_m = len(grp_df)
+        match_tags = ", ".join(dict.fromkeys(str(x) for x in grp_df["_match_tag"].dropna().tolist()))
+
+        raw_pos = str(grp_df["Poste_Detaille"].dropna().iloc[0]) if "Poste_Detaille" in grp_df.columns and not grp_df["Poste_Detaille"].dropna().empty else ""
+        poste_norm = normaliser_poste_specifique(raw_pos, player_name=pname_clean, joueurs_lookup=j_lookup) or raw_pos or "Non spécifié"
+        grp_val = str(grp_df["Groupe"].dropna().iloc[0]) if "Groupe" in grp_df.columns and not grp_df["Groupe"].dropna().empty else get_grand_groupe_from_poste(poste_norm)
+
+        t_col = next((c for c in ("Temps de jeu ", "Temps total (min)") if c in grp_df.columns), None)
+        tps_moy = float(pd.to_numeric(grp_df[t_col], errors="coerce").dropna().mean()) if t_col else 0.0
+
+        dist_km_s = pd.to_numeric(grp_df["Distance (km)"], errors="coerce").dropna() if "Distance (km)" in grp_df.columns else pd.Series(dtype=float)
+        dist_moy_km = float(dist_km_s.mean()) if not dist_km_s.empty else 0.0
+        dist_tot_km = float(dist_km_s.sum()) if not dist_km_s.empty else 0.0
+
+        if "Distance in Speed Zone 3  (km)" in grp_df.columns:
+            hsr_s = pd.to_numeric(grp_df["Distance in Speed Zone 3  (km)"], errors="coerce").dropna() * 1000.0
+        elif "HSR Z3 (m)" in grp_df.columns:
+            hsr_s = pd.to_numeric(grp_df["HSR Z3 (m)"], errors="coerce").dropna()
+        elif " Distance haute intensité (m)" in grp_df.columns:
+            hsr_s = pd.to_numeric(grp_df[" Distance haute intensité (m)"], errors="coerce").dropna()
+        else:
+            hsr_s = pd.Series(dtype=float)
+        hsr_moy = float(hsr_s.mean()) if not hsr_s.empty else 0.0
+
+        if "VHSR (m)" in grp_df.columns:
+            vhsr_s = pd.to_numeric(grp_df["VHSR (m)"], errors="coerce").dropna()
+        elif "Distance in Speed Zone 4  (km)" in grp_df.columns and "Distance in Speed Zone 5  (km)" in grp_df.columns:
+            vhsr_s = (pd.to_numeric(grp_df["Distance in Speed Zone 4  (km)"], errors="coerce").fillna(0.0) + pd.to_numeric(grp_df["Distance in Speed Zone 5  (km)"], errors="coerce").fillna(0.0)) * 1000.0
+        else:
+            vhsr_s = pd.Series(dtype=float)
+        vhsr_moy = float(vhsr_s.mean()) if not vhsr_s.empty else 0.0
+
+        vmax_s = pd.to_numeric(grp_df["Top Speed (km/h)"], errors="coerce").dropna() if "Top Speed (km/h)" in grp_df.columns else pd.Series(dtype=float)
+        vmax_val = float(vmax_s.max()) if not vmax_s.empty else 0.0
+
+        dpm_col = "Distance Per Min (m/min)" if "Distance Per Min (m/min)" in grp_df.columns else ("Distance/min (m/min)" if "Distance/min (m/min)" in grp_df.columns else None)
+        dpm_s = pd.to_numeric(grp_df[dpm_col], errors="coerce").dropna() if dpm_col else pd.Series(dtype=float)
+        dpm_moy = float(dpm_s.mean()) if not dpm_s.empty else 0.0
+
+        acc_s = pd.to_numeric(grp_df["Accel/Dec"], errors="coerce").dropna() if "Accel/Dec" in grp_df.columns else pd.Series(dtype=float)
+        acc_moy = float(acc_s.mean()) if not acc_s.empty else 0.0
+
+        rpe_moy = None
+        if "RPE" in grp_df.columns:
+            sr = pd.to_numeric(grp_df["RPE"], errors="coerce")
+            sr = sr[(sr >= 1.0) & (sr <= 10.0)].dropna()
+            if not sr.empty:
+                rpe_moy = round(float(sr.mean()), 1)
+
+        out_rows.append({
+            "Nom ; Prénom": pname_clean,
+            "Poste_Detaille": poste_norm,
+            "Groupe": grp_val,
+            "Matchs joués": n_m,
+            "Matchs": match_tags,
+            "Temps moy. (min)": round(0.0 if np.isnan(tps_moy) else tps_moy, 0),
+            "Dist. moy. (km)": round(0.0 if np.isnan(dist_moy_km) else dist_moy_km, 2),
+            "Dist. cumulée (km)": round(0.0 if np.isnan(dist_tot_km) else dist_tot_km, 2),
+            "HSR moy. (m)": round(0.0 if np.isnan(hsr_moy) else hsr_moy, 0),
+            "VHSR moy. (m)": round(0.0 if np.isnan(vhsr_moy) else vhsr_moy, 0),
+            "Top Speed (km/h)": round(0.0 if np.isnan(vmax_val) else vmax_val, 1),
+            "m/min moy.": round(0.0 if np.isnan(dpm_moy) else dpm_moy, 1),
+            "Acc/Dec moy.": round(0.0 if np.isnan(acc_moy) else acc_moy, 0),
+            "RPE": rpe_moy,
+        })
+
+    df_out = pd.DataFrame(out_rows)
+    if not df_out.empty:
+        df_out = df_out.sort_values(by=["Dist. moy. (km)", "Matchs joués"], ascending=[False, False]).reset_index(drop=True)
+    return df_out
+
+
+def generer_graphique_matchs_groupes_matplotlib(
+    match_items: List[Dict[str, Any]],
+    figsize: Tuple[float, float] = (12.2, 4.7),
+) -> io.BytesIO:
+    """Graphique en barres : Distance Moyenne & HSR Z3 Moyen par ligne de poste sur l'ensemble des matchs sélectionnés."""
+    grps = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    dist_vals = []
+    hsr_vals = []
+    for g in grps:
+        d_l = [float(it.get("group_metrics", {}).get(g, {}).get("volume", 0.0) or 0.0) for it in match_items if float(it.get("group_metrics", {}).get(g, {}).get("volume", 0.0) or 0.0) > 0]
+        h_l = [float(it.get("group_metrics", {}).get(g, {}).get("hsr", 0.0) or 0.0) for it in match_items if float(it.get("group_metrics", {}).get(g, {}).get("hsr", 0.0) or 0.0) > 0]
+        dist_vals.append(float(np.mean(d_l)) if d_l else 0.0)
+        hsr_vals.append(float(np.mean(h_l)) if h_l else 0.0)
+
+    fig, ax1 = plt.subplots(figsize=figsize, dpi=150)
+    fig.patch.set_facecolor("#FFFFFF")
+    ax1.set_facecolor("#FAFAFA")
+    ax2 = ax1.twinx()
+
+    x = np.arange(len(grps))
+    w = 0.34
+    b1 = ax1.bar(x - w / 2, dist_vals, width=w, color="#1F4E79", label="Distance Moyenne / Match (m)", zorder=3)
+    b2 = ax2.bar(x + w / 2, hsr_vals, width=w, color="#A30000", label="HSR Z3 Moyen / Match (m)", zorder=3)
+
+    max_d = max(dist_vals + [1000.0])
+    max_h = max(hsr_vals + [200.0])
+    ax1.set_ylim(0, max_d * 1.24)
+    ax2.set_ylim(0, max_h * 1.28)
+
+    for r in b1:
+        h = r.get_height()
+        if h > 0:
+            ax1.annotate(f"{int(round(h)):,d} m".replace(",", " "), xy=(r.get_x() + r.get_width() / 2, h), xytext=(0, 4), textcoords="offset points", ha="center", va="bottom", fontsize=9.2, fontweight="bold", color="#1F4E79")
+    for r in b2:
+        h = r.get_height()
+        if h > 0:
+            ax2.annotate(f"{int(round(h)):,d} m".replace(",", " "), xy=(r.get_x() + r.get_width() / 2, h), xytext=(0, 4), textcoords="offset points", ha="center", va="bottom", fontsize=9.2, fontweight="bold", color="#A30000")
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(grps, fontsize=10.5, fontweight="bold", color="#0C2340")
+    ax1.set_ylabel("Distance Moyenne (m)", fontsize=9.5, fontweight="bold", color="#1F4E79")
+    ax2.set_ylabel("HSR Z3 Moyen (m)", fontsize=9.5, fontweight="bold", color="#A30000")
+    ax1.grid(axis="y", linestyle="--", alpha=0.3, color="#CBD5E1", zorder=1)
+    ax1.spines["top"].set_visible(False)
+    ax2.spines["top"].set_visible(False)
+    ax1.set_title("Charge Moyenne par Match et par Ligne de Poste", fontsize=11.5, fontweight="bold", color="#1F4E79", pad=10)
+
+    h1, l1 = ax1.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    fig.legend(h1 + h2, l1 + l2, loc="lower center", bbox_to_anchor=(0.5, 0.01), ncol=2, frameon=False, fontsize=9.2)
+    fig.subplots_adjust(left=0.09, right=0.91, top=0.88, bottom=0.16)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.12)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def generate_match_comparative_pdf_report(
+    selected_matches: List[Dict[str, Any]],
+    notes_coach: str = "",
+    granularity_mode: str = "Par ligne de poste",
+    target_groups: Optional[List[str]] = None,
+    isolated_positions: Optional[List[str]] = None,
+) -> bytes:
+    """
+    Génère le Rapport Comparatif Officiel des Matchs (Dimanche) au format A4 Paysage RCA :
+    - Page 1 : Synthèse Comparative des Matchs (KPIs, Tableau comparatif Match par Match, Graphique par Ligne)
+    - Page(s) 2+ : Triptyque Comparatif Multi-Matchs (Volume, HSR, VHSR + RPE)
+    - Pages suivantes : Détail Comparatif Match par Match + Statistiques Individuelles par Ligne / Poste
+    """
+    if not selected_matches:
+        pdf_empty = RCAWeeklyPDFReport(
+            week_label="COMPARATIF MATCHS",
+            dates_label="",
+            header_title="RUGBY CLUB AMIÉNOIS | Rapport Comparatif des Matchs GPS",
+        )
+        pdf_empty.add_page()
+        pdf_empty.set_font("Helvetica", "", 12)
+        pdf_empty.cell(0, 10, safe_latin1("Aucun match sélectionné pour le comparatif."), align="L")
+        return bytes(pdf_empty.output())
+
+    df_players_m = aggregate_match_players(selected_matches)
+    g_low = _strip_accents_lower(granularity_mode)
+    is_detailed = ("detaille" in g_low) or ("9 poste" in g_low)
+    isolated_arg = isolated_positions
+    isolated_set = set(isolated_arg or [])
+
+    if target_groups:
+        categories = list(target_groups)
+        is_detailed = any(not is_grand_groupe(c) for c in categories)
+    elif is_detailed:
+        categories = get_active_positions(df_players_m) if not df_players_m.empty else ["5 de devant", "3ème Ligne", "Trois-quarts"]
+    else:
+        categories = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    # Filtrage anti-vide des catégories
+    items_to_render = []
+    for idx, grp in enumerate(categories):
+        is_iso = (idx >= 3 and grp in isolated_set) or (grp in isolated_set and not is_grand_groupe(grp))
+        df_sub = _filter_df_by_group(df_players_m, grp, isolated_positions=isolated_arg if not is_iso else None, is_isolated=is_iso) if not df_players_m.empty else pd.DataFrame()
+        if not is_iso and is_grand_groupe(grp) and df_sub.empty and not df_players_m.empty:
+            continue
+        if is_iso and df_sub.empty and len(categories) > 1:
+            continue
+        disp_name = get_group_display_name(grp, isolated_positions=isolated_arg, is_isolated=is_iso)
+        items_to_render.append({"key": grp, "display_name": disp_name, "is_isolated": is_iso, "df_sub": df_sub})
+    if not items_to_render:
+        items_to_render = [{"key": c, "display_name": get_group_display_name(c), "is_isolated": False, "df_sub": _filter_df_by_group(df_players_m, c) if not df_players_m.empty else pd.DataFrame()} for c in categories]
+
+    active_cats = [it["key"] for it in items_to_render]
+    all_cats_for_metrics = list(dict.fromkeys(["5 de devant", "3ème Ligne", "Trois-quarts"] + active_cats))
+    match_items = build_match_comparative_items(selected_matches, categories=all_cats_for_metrics, isolated_positions=isolated_arg)
+
+    raw_dates = [it["date"] for it in match_items if it.get("date")]
+    dates_str = f"Du {raw_dates[0]} au {raw_dates[-1]}" if len(raw_dates) >= 2 else (raw_dates[0] if raw_dates else "")
+    n_matches = len(match_items)
+    right_hdr = f"{n_matches} MATCH{'S' if n_matches > 1 else ''}" + (f" - {dates_str}" if dates_str else "")
+
+    pdf = RCAWeeklyPDFReport(
+        week_label=f"{n_matches} MATCHS",
+        dates_label=dates_str,
+        header_title="RUGBY CLUB AMIÉNOIS | Rapport Comparatif des Matchs GPS",
+        header_right_label=right_hdr,
+    )
+
+    # =========================================================================
+    # PAGE 1 : SYNTHÈSE COMPARATIVE DES MATCHS
+    # =========================================================================
+    pdf.current_subtitle = "SYNTHÈSE COMPARATIVE DES MATCHS (DIMANCHE)"
+    pdf.add_page()
+
+    avg_vol_match = float(np.mean([it["total_distance_km"] for it in match_items])) if match_items else 0.0
+    avg_dist_player = float(np.mean([it["avg_distance_m"] for it in match_items if it["avg_distance_m"] > 0])) if any(it["avg_distance_m"] > 0 for it in match_items) else 0.0
+    avg_hi_match = float(np.mean([it["total_hi_m"] for it in match_items])) if match_items else 0.0
+    best_vmax = max([it["max_speed_kmh"] for it in match_items] or [0.0])
+
+    all_rpes_m = []
+    for m in selected_matches:
+        for p in m.get("players_data", []):
+            if isinstance(p, dict) and p.get("RPE") is not None:
+                try:
+                    rv = float(p["RPE"])
+                    if 1.0 <= rv <= 10.0:
+                        all_rpes_m.append(rv)
+                except Exception:
+                    pass
+    avg_rpe_m = float(np.mean(all_rpes_m)) if all_rpes_m else None
+    rpe_m_str = f"{avg_rpe_m:.1f}/10" if avg_rpe_m is not None else "NR"
+
+    # 6 KPI Cards
+    kpis_m = [
+        ("MATCHS COMPARÉS", f"{n_matches} match{'s' if n_matches > 1 else ''}"),
+        ("VOLUME MOY. / MATCH", f"{avg_vol_match:.1f} km"),
+        ("DISTANCE MOY. / JOUEUR", f"{int(round(avg_dist_player)):,d} m".replace(",", " ")),
+        ("H.I. MOYENNE / MATCH", f"{int(round(avg_hi_match)):,d} m".replace(",", " ")),
+        ("VITESSE MAX MATCHS", f"{best_vmax:.1f} km/h"),
+        ("RPE MOYEN MATCHS", rpe_m_str),
+    ]
+    y_kpi = 20.0
+    kw = 43.5
+    kgap = 2.4
+    for idx_k, (lbl_k, val_k) in enumerate(kpis_m):
+        kx = 12.0 + idx_k * (kw + kgap)
+        pdf.set_fill_color(248, 250, 252)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.rect(kx, y_kpi, kw, 11.8, style="FD")
+        pdf.set_xy(kx, y_kpi + 1.2)
+        pdf.set_font("Helvetica", "B", 6.4)
+        pdf.set_text_color(100, 116, 139)
+        pdf.cell(kw, 3.2, safe_latin1(lbl_k), align="C")
+        pdf.set_xy(kx, y_kpi + 5.0)
+        pdf.set_font("Helvetica", "B", 10.0)
+        pdf.set_text_color(22, 43, 76)
+        pdf.cell(kw, 5.4, safe_latin1(val_k), align="C")
+
+    # Note du préparateur physique
+    y_note = 33.4
+    h_note = 9.5
+    pdf.set_fill_color(248, 250, 252)
+    pdf.set_draw_color(203, 213, 225)
+    pdf.rect(12, y_note, 273.0, h_note, style="FD")
+    pdf.set_fill_color(22, 43, 76)
+    pdf.rect(12, y_note, 3.5, h_note, style="F")
+    pdf.set_fill_color(243, 195, 0)
+    pdf.rect(15.5, y_note, 0.8, h_note, style="F")
+    pdf.set_xy(18, y_note + 1.0)
+    pdf.set_font("Helvetica", "B", 7.4)
+    pdf.set_text_color(22, 43, 76)
+    pdf.cell(180, 3.4, safe_latin1("SYNTHÈSE COMPARATIVE DES MATCHS | PÔLE PRÉPARATION PHYSIQUE"), align="L")
+
+    note_m_txt = str(notes_coach or "").strip() or (
+        f"Comparatif athlétique consolidé sur {n_matches} match(s) ({dates_str}) : "
+        f"volume moyen {avg_vol_match:.1f} km/match, distance moyenne {int(round(avg_dist_player)):,d} m/joueur, Vmax {best_vmax:.1f} km/h.".replace(",", " ")
+    )
+    pdf.set_xy(18, y_note + 4.8)
+    pdf.set_font("Helvetica", "", 7.3)
+    pdf.set_text_color(51, 65, 85)
+    pdf.multi_cell(w=264.0, h=3.4, txt=safe_latin1(note_m_txt), align="L")
+
+    # 1. Tableau comparatif Match par Match (pleine largeur 273 mm)
+    y_mid = 45.0
+    pdf.set_xy(12, y_mid)
+    pdf.set_font("Helvetica", "B", 8.8)
+    pdf.set_text_color(11, 25, 44)
+    pdf.cell(273, 4.0, safe_latin1("1. MATCHS COMPARÉS & VOLUMES GLOBAUX :"), align="L")
+
+    y_tbl = y_mid + 4.4
+    pdf.set_xy(12, y_tbl)
+    pdf.set_fill_color(31, 78, 121)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 7.4)
+    # 72 + 26 + 22 + 22 + 30 + 31 + 30 + 22 + 18 = 273 mm
+    m_cols = [
+        ("  Match / Adversaire", 72, "L"),
+        ("Date", 26, "C"),
+        ("Semaine", 22, "C"),
+        ("Effectif", 22, "C"),
+        ("Dist. Éq. (km)", 30, "C"),
+        ("Dist. Moy./J", 31, "C"),
+        ("H.I. Éq. (m)", 30, "C"),
+        ("Vmax", 22, "C"),
+        ("RPE", 18, "C"),
+    ]
+    for title_c, w_c, al_c in m_cols:
+        pdf.cell(w_c, 5.2, safe_latin1(title_c), 1, 0, al_c, fill=True)
+    pdf.ln(5.2)
+
+    pdf.set_font("Helvetica", "", 7.3)
+    pdf.set_text_color(15, 23, 42)
+    matches_to_show = match_items[:7]
+    fill_r = False
+    for it in matches_to_show:
+        pdf.set_x(12)
+        pdf.set_fill_color(*(248, 250, 252) if fill_r else (255, 255, 255))
+        # RPE moyen de ce match
+        r_list = []
+        for p in it.get("players_data", []):
+            if isinstance(p, dict) and p.get("RPE") is not None:
+                try:
+                    rv = float(p["RPE"])
+                    if 1.0 <= rv <= 10.0:
+                        r_list.append(rv)
+                except Exception:
+                    pass
+        r_str = f"{np.mean(r_list):.1f}" if r_list else "NR"
+        pdf.cell(72, 4.9, safe_latin1(f"  {it['label'][:36]}"), 1, 0, "L", fill=True)
+        pdf.cell(26, 4.9, safe_latin1(it["date"] or "-"), 1, 0, "C", fill=True)
+        pdf.cell(22, 4.9, safe_latin1(f"S{it['week_num']:02d}"), 1, 0, "C", fill=True)
+        pdf.cell(22, 4.9, safe_latin1(f"{it['num_players']}"), 1, 0, "C", fill=True)
+        pdf.cell(30, 4.9, safe_latin1(f"{it['total_distance_km']:.1f} km"), 1, 0, "C", fill=True)
+        pdf.cell(31, 4.9, safe_latin1(f"{int(round(it['avg_distance_m'])):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+        pdf.cell(30, 4.9, safe_latin1(f"{int(round(it['total_hi_m'])):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+        pdf.cell(22, 4.9, safe_latin1(f"{it['max_speed_kmh']:.1f}"), 1, 0, "C", fill=True)
+        pdf.cell(18, 4.9, safe_latin1(r_str), 1, 1, "C", fill=True)
+        fill_r = not fill_r
+
+    # 2. Graphique Charge Moyenne par Match et par Ligne de Poste
+    y_after_m_tbl = y_tbl + 5.2 + len(matches_to_show) * 4.9
+    y_m_chart_hdr = max(y_after_m_tbl + 5.0, 76.0)
+    pdf.set_xy(12, y_m_chart_hdr)
+    pdf.set_font("Helvetica", "B", 9.0)
+    pdf.set_text_color(11, 25, 44)
+    pdf.cell(273, 4.2, safe_latin1("2. CHARGE MOYENNE PAR MATCH ET PAR LIGNE DE POSTE (5 DE DEVANT | 3ÈME LIGNE | TROIS-QUARTS) :"), align="C")
+
+    try:
+        avail_hm = max(80.0, min(110.0, 194.5 - (y_m_chart_hdr + 4.8)))
+        buf_m_grp = generer_graphique_matchs_groupes_matplotlib(match_items, figsize=(12.2, 4.8))
+        pdf.image(buf_m_grp, x=18.5, y=y_m_chart_hdr + 4.8, w=260.0, h=avail_hm)
+    except Exception as e:
+        print(f"Erreur graphique groupes matchs PDF : {e}")
+
+    # =========================================================================
+    # PAGE(S) 2+ : TRIPTYQUE COMPARATIF MULTI-MATCHS (VOLUME / HSR / VHSR / RPE)
+    # =========================================================================
+    render_comparatif_triptyque_pdf_pages(
+        pdf=pdf,
+        items_comparatif=match_items,
+        subtitle_base="ANALYSE COMPARATIVE MULTI-MATCHS — VOLUME, HSR, VHSR & RPE",
+        categories_list=active_cats,
+        target_day="Match",
+        info_banner_text="HISTORIQUE MATCHS : Un seul match sélectionné. Archivez plusieurs matchs (Dimanche) pour visualiser l'évolution comparative." if n_matches < 2 else None,
+        isolated_positions=isolated_arg,
+    )
+
+    # =========================================================================
+    # PAGES DÉTAILLÉES : DÉTAIL COMPARATIF PAR LIGNE / POSTE + STATS JOUEURS
+    # =========================================================================
+    for item in items_to_render:
+        grp = item["key"]
+        disp_name = item["display_name"]
+        is_iso = item["is_isolated"]
+        df_sub = item["df_sub"]
+
+        grp_is_line = not is_iso and is_grand_groupe(grp, is_detailed_context=is_detailed)
+        cat_prefix = "LIGNE" if grp_is_line else "POSTE"
+        pdf.current_subtitle = f"COMPARATIF MATCHS — {cat_prefix} {disp_name}"
+        pdf.add_page()
+
+        # Tableau A : Match par Match pour cette ligne / poste
+        y_t1 = 20.5
+        pdf.set_xy(12, y_t1)
+        pdf.set_font("Helvetica", "B", 8.6)
+        pdf.set_text_color(11, 25, 44)
+        pdf.cell(273, 4.2, safe_latin1(f"1. ÉVOLUTION MATCH PAR MATCH — {disp_name} :"), align="L")
+
+        y_t1_h = y_t1 + 4.6
+        pdf.set_xy(12, y_t1_h)
+        pdf.set_fill_color(31, 78, 121)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 7.6)
+        # 67 + 26 + 22 + 32 + 30 + 30 + 24 + 22 + 20 = 273 mm
+        g_cols = [
+            ("  Match / Adversaire", 67, "L"),
+            ("Date", 26, "C"),
+            ("Effectif", 22, "C"),
+            ("Dist. Moy. (m)", 32, "C"),
+            ("HSR Z3 (m)", 30, "C"),
+            ("VHSR (m)", 30, "C"),
+            ("m/min", 24, "C"),
+            ("Acc/Dec", 22, "C"),
+            ("RPE Moy.", 20, "C"),
+        ]
+        for t_c, w_c, al_c in g_cols:
+            pdf.cell(w_c, 5.4, safe_latin1(t_c), 1, 0, al_c, fill=True)
+        pdf.ln(5.4)
+
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(15, 23, 42)
+        vols, hsrs, vhsrs, dpms, accs, rpes_g = [], [], [], [], [], []
+        fill_g = False
+        for it in match_items[:8]:
+            gm = it.get("group_metrics", {}).get(grp, {})
+            v_m = float(gm.get("volume", 0.0) or 0.0)
+            h_m = float(gm.get("hsr", 0.0) or 0.0)
+            vh_m = float(gm.get("vhsr", 0.0) or 0.0)
+            dp_m = float(gm.get("dpm", 0.0) or 0.0)
+            ac_m = float(gm.get("acc_dec", 0.0) or 0.0)
+            rp_m = gm.get("rpe")
+            np_m = int(gm.get("n_players", 0) or 0)
+            if v_m > 0:
+                vols.append(v_m)
+            if h_m > 0:
+                hsrs.append(h_m)
+            if vh_m > 0:
+                vhsrs.append(vh_m)
+            if dp_m > 0:
+                dpms.append(dp_m)
+            if ac_m > 0:
+                accs.append(ac_m)
+            if rp_m is not None:
+                rpes_g.append(float(rp_m))
+
+            pdf.set_x(12)
+            pdf.set_fill_color(*(248, 250, 252) if fill_g else (255, 255, 255))
+            pdf.cell(67, 5.0, safe_latin1(f"  {it['label'][:34]}"), 1, 0, "L", fill=True)
+            pdf.cell(26, 5.0, safe_latin1(it["date"] or "-"), 1, 0, "C", fill=True)
+            pdf.cell(22, 5.0, safe_latin1(f"{np_m}"), 1, 0, "C", fill=True)
+            pdf.cell(32, 5.0, safe_latin1(f"{int(round(v_m)):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+            pdf.cell(30, 5.0, safe_latin1(f"{int(round(h_m)):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+            pdf.cell(30, 5.0, safe_latin1(f"{int(round(vh_m)):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+            pdf.cell(24, 5.0, safe_latin1(f"{dp_m:.1f}"), 1, 0, "C", fill=True)
+            pdf.cell(22, 5.0, safe_latin1(f"{int(round(ac_m))}"), 1, 0, "C", fill=True)
+            pdf.cell(20, 5.0, safe_latin1(f"{rp_m:.1f}" if rp_m is not None else "NR"), 1, 1, "C", fill=True)
+            fill_g = not fill_g
+
+        # Ligne Moyenne des Matchs
+        pdf.set_x(12)
+        pdf.set_fill_color(239, 246, 255)
+        pdf.set_font("Helvetica", "B", 7.6)
+        pdf.set_text_color(22, 43, 76)
+        pdf.cell(67, 5.4, safe_latin1("  MOYENNE DES MATCHS"), 1, 0, "L", fill=True)
+        pdf.cell(26, 5.4, safe_latin1(f"{n_matches} match(s)"), 1, 0, "C", fill=True)
+        pdf.cell(22, 5.4, safe_latin1("-"), 1, 0, "C", fill=True)
+        pdf.cell(32, 5.4, safe_latin1(f"{int(round(np.mean(vols))):,d} m".replace(",", " ") if vols else "0 m"), 1, 0, "C", fill=True)
+        pdf.cell(30, 5.4, safe_latin1(f"{int(round(np.mean(hsrs))):,d} m".replace(",", " ") if hsrs else "0 m"), 1, 0, "C", fill=True)
+        pdf.cell(30, 5.4, safe_latin1(f"{int(round(np.mean(vhsrs))):,d} m".replace(",", " ") if vhsrs else "0 m"), 1, 0, "C", fill=True)
+        pdf.cell(24, 5.4, safe_latin1(f"{np.mean(dpms):.1f}" if dpms else "0.0"), 1, 0, "C", fill=True)
+        pdf.cell(22, 5.4, safe_latin1(f"{int(round(np.mean(accs)))}" if accs else "0"), 1, 0, "C", fill=True)
+        pdf.cell(20, 5.4, safe_latin1(f"{np.mean(rpes_g):.1f}" if rpes_g else "NR"), 1, 1, "C", fill=True)
+
+        # Tableau B : Statistiques Individuelles Moyennes sur les Matchs sélectionnés
+        y_t2 = pdf.get_y() + 5.5
+        pdf.set_xy(12, y_t2)
+        pdf.set_font("Helvetica", "B", 8.6)
+        pdf.set_text_color(11, 25, 44)
+        pdf.cell(273, 4.2, safe_latin1(f"2. STATISTIQUES INDIVIDUELLES MOYENNES SUR MATCHS — {disp_name} ({len(df_sub)} joueurs) :"), align="L")
+
+        y_t2_h = y_t2 + 4.6
+        pdf.set_xy(12, y_t2_h)
+        pdf.set_fill_color(31, 78, 121)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 7.4)
+        # 48 + 28 + 19 + 22 + 24 + 24 + 24 + 22 + 20 + 22 + 20 = 273 mm
+        p_cols = [
+            ("  Joueur", 48, "L"),
+            ("Poste", 28, "C"),
+            ("Matchs", 19, "C"),
+            ("Tps moy.", 22, "C"),
+            ("Dist. moy.", 24, "C"),
+            ("HSR moy.", 24, "C"),
+            ("VHSR moy.", 24, "C"),
+            ("Vmax", 22, "C"),
+            ("m/min", 20, "C"),
+            ("Acc/Dec", 22, "C"),
+            ("RPE", 20, "C"),
+        ]
+        for t_c, w_c, al_c in p_cols:
+            pdf.cell(w_c, 5.4, safe_latin1(t_c), 1, 0, al_c, fill=True)
+        pdf.ln(5.4)
+
+        if not df_sub.empty:
+            avail_rows_h = max(30.0, 195.0 - pdf.get_y())
+            n_show_p = min(len(df_sub), 18)
+            row_hp = max(4.4, min(6.2, avail_rows_h / max(n_show_p, 1)))
+            font_p = 7.2 if row_hp >= 5.2 else 6.6
+            fill_p = False
+            pdf.set_text_color(15, 23, 42)
+            for _, prow in df_sub.head(n_show_p).iterrows():
+                pdf.set_x(12)
+                pdf.set_fill_color(*(248, 250, 252) if fill_p else (255, 255, 255))
+                pdf.set_font("Helvetica", "B", font_p)
+                pdf.cell(48, row_hp, safe_latin1(f"  {str(prow.get('Nom ; Prénom', '-'))[:24]}"), 1, 0, "L", fill=True)
+                pdf.set_font("Helvetica", "", font_p)
+                pdf.cell(28, row_hp, safe_latin1(str(prow.get("Poste_Detaille", "-"))[:16]), 1, 0, "C", fill=True)
+                pdf.cell(19, row_hp, safe_latin1(f"{int(prow.get('Matchs joués', 1))}"), 1, 0, "C", fill=True)
+                pdf.cell(22, row_hp, safe_latin1(f"{int(round(float(prow.get('Temps moy. (min)', 0) or 0)))} min"), 1, 0, "C", fill=True)
+                pdf.cell(24, row_hp, safe_latin1(f"{float(prow.get('Dist. moy. (km)', 0) or 0):.2f} km"), 1, 0, "C", fill=True)
+                pdf.cell(24, row_hp, safe_latin1(f"{int(round(float(prow.get('HSR moy. (m)', 0) or 0))):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+                pdf.cell(24, row_hp, safe_latin1(f"{int(round(float(prow.get('VHSR moy. (m)', 0) or 0))):,d} m".replace(",", " ")), 1, 0, "C", fill=True)
+                pdf.cell(22, row_hp, safe_latin1(f"{float(prow.get('Top Speed (km/h)', 0) or 0):.1f}"), 1, 0, "C", fill=True)
+                pdf.cell(20, row_hp, safe_latin1(f"{float(prow.get('m/min moy.', 0) or 0):.1f}"), 1, 0, "C", fill=True)
+                pdf.cell(22, row_hp, safe_latin1(f"{int(round(float(prow.get('Acc/Dec moy.', 0) or 0)))}"), 1, 0, "C", fill=True)
+                rpe_raw_p = prow.get("RPE")
+                rpe_p_str = f"{float(rpe_raw_p):.1f}" if (rpe_raw_p is not None and pd.notna(rpe_raw_p)) else "NR"
+                pdf.cell(20, row_hp, safe_latin1(rpe_p_str), 1, 1, "C", fill=True)
+                fill_p = not fill_p
 
     return bytes(pdf.output())

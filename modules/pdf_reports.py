@@ -527,6 +527,8 @@ def generer_rapport_pdf_coachs(
     granularity_mode: str = "Par ligne de poste",
     target_groups: Optional[List[str]] = None,
     isolated_positions: Optional[List[str]] = None,
+    target_pdf: Optional[Any] = None,
+    header_title: Optional[str] = None,
     **kwargs: Any,
 ) -> bytes:
     """
@@ -665,21 +667,27 @@ def generer_rapport_pdf_coachs(
             self.cell(160, 6, safe_latin1("Document Staff Technique RCA — Pôle Préparation Physique"), align="L")
             self.cell(113, 6, safe_latin1("Page {0}/{{nb}}".format(self.page_no())), align="R")
 
-    pdf = RCACoachPDF(orientation="L", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=False)
-    pdf.set_margins(left=12, top=20, right=12)
-    pdf.date_texte = date_texte
+    if target_pdf is not None:
+        pdf = target_pdf
+        pdf.date_texte = date_texte
+        pdf.header_title = header_title or "RUGBY CLUB AMIÉNOIS | Rapport de Séance GPS"
+        pdf.header_right_label = date_texte
+    else:
+        pdf = RCACoachPDF(orientation="L", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=False)
+        pdf.set_margins(left=12, top=20, right=12)
+        pdf.date_texte = date_texte
 
     if df_indiv.empty:
         pdf.add_page()
         pdf.set_font("Helvetica", "", 12)
         pdf.cell(0, 10, "Aucune donnee de joueur disponible pour ce rapport.", align="L")
-        return bytes(pdf.output())
+        return b"" if target_pdf is not None else bytes(pdf.output())
 
     # =========================================================================
     # PAGE 1 : SYNTHÈSE GLOBALE DE LA SÉANCE
     # =========================================================================
-    pdf.current_subtitle = ""
+    pdf.current_subtitle = kwargs.get("page1_subtitle", "")
     pdf.add_page()
 
     # 1. Encarts KPIs globaux de Séance
@@ -1108,6 +1116,8 @@ def generer_rapport_pdf_coachs(
             isolated_positions=isolated_arg,
         )
 
+    if target_pdf is not None:
+        return b""
     return bytes(pdf.output())
 
 

@@ -5358,14 +5358,24 @@ def render_weekly_reports_view() -> None:
         target_col = col_cards[idx % len(col_cards)]
         date_clean_card = format_readable_date(s_info.get("date", "-"))
         is_prov_card = bool(s_info.get("is_provisional", False))
-        card_border = "#F59E0B" if is_prov_card else "#CBD5E1"
-        prov_badge_html = (
-            '<div style="margin-top:4px;"><span style="display:inline-block;background:#FEF3C7;color:#92400E;'
-            'border:1px solid #F59E0B;border-radius:999px;padding:1px 8px;font-size:0.68rem;font-weight:700;">'
-            '⏳ Objectifs provisoires</span></div>'
-            if is_prov_card
-            else ""
-        )
+        is_match_card = weekly_memory.is_match_session(s_id, s_info)
+        card_border = "#F59E0B" if is_prov_card else ("#1F4E79" if is_match_card else "#CBD5E1")
+        badges_list = []
+        if is_match_card:
+            adv_c = str(s_info.get("adversaire", "") or "").strip().upper()
+            m_lbl = f"🏟️ Match vs {adv_c}" if adv_c else "🏟️ Match (Dimanche)"
+            badges_list.append(
+                f'<span style="display:inline-block;background:#E0F2FE;color:#0C4A6E;'
+                f'border:1px solid #38BDF8;border-radius:999px;padding:1px 8px;font-size:0.68rem;font-weight:700;margin-right:4px;">'
+                f'{m_lbl}</span>'
+            )
+        if is_prov_card:
+            badges_list.append(
+                '<span style="display:inline-block;background:#FEF3C7;color:#92400E;'
+                'border:1px solid #F59E0B;border-radius:999px;padding:1px 8px;font-size:0.68rem;font-weight:700;">'
+                '⏳ Objectifs provisoires</span>'
+            )
+        prov_badge_html = f'<div style="margin-top:4px;">{"".join(badges_list)}</div>' if badges_list else ""
         with target_col:
             card_html = (
                 f'<div style="background:#FFFFFF;border:1.5px solid {card_border};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">'
@@ -5384,8 +5394,9 @@ def render_weekly_reports_view() -> None:
             with c_chk:
                 is_checked = st.checkbox(
                     "Inclure",
-                    value=True,
+                    value=(not is_match_card),
                     key=f"chk_session_{year}_{week_num}_{s_id}",
+                    help="Les matchs (Dimanche) sont décochés par défaut du bilan entraînements et analysables dans l'onglet « 🏟️ Comparatif des Matchs »." if is_match_card else None,
                 )
                 if is_checked:
                     selected_sids.append(s_id)
@@ -6000,34 +6011,405 @@ def render_weekly_reports_view() -> None:
                 help="Sélectionne le nombre de semaines à comparer (entre 2 et 8 semaines pour conserver un affichage A4 optimal)."
             )
 
+    # Option de fusion : Retour Séance Vendredi + Retour Semaine XX dans un PDF unique
+    fri_match = weekly_memory.find_friday_session_in_week(sessions)
+    fusionner_vendredi_w = False
+    inclure_comp_vendredi_w = False
+    if fri_match is not None:
+        fri_sid, fri_meta = fri_match
+        fri_date_lbl = format_readable_date(fri_meta.get("date", "")) or fri_meta.get("day_type", "Vendredi")
+        col_fus1, col_fus2 = st.columns([2.0, 1.6])
+        with col_fus1:
+            fusionner_vendredi_w = st.checkbox(
+                f"🔀 Fusionner le rapport du Vendredi ({fri_date_lbl}) avec le rapport hebdomadaire",
+                value=False,
+                key=f"chk_fuse_friday_weekly_{year}_{week_num}",
+                help="Génère un PDF unique « Retour Séance Vendredi + Retour Semaine XX ». Laissez décoché pour générer un rapport hebdomadaire classique (le PDF du vendredi reste téléchargeable séparément sur sa carte ci-dessus).",
+            )
+        if fusionner_vendredi_w:
+            with col_fus2:
+                inclure_comp_vendredi_w = st.checkbox(
+                    "Inclure aussi le comparatif des derniers Vendredis",
+                    value=False,
+                    key=f"chk_fuse_friday_comp_{year}_{week_num}",
+                    help="Ajoute la page comparative des derniers Vendredis à la fin de la Partie 1 (Retour Séance Vendredi).",
+                )
+    else:
+        st.caption("ℹ️ Aucune séance Vendredi archivée cette semaine — option de fusion Vendredi + Hebdo disponible dès l'archivage du vendredi.")
+
     selected_meta = [s for s_id, s in sessions.items() if s_id in selected_sids]
     cats_w = active_cats_w
     n_comp_w_pages = ((len(cats_w) + 2) // 3) if inclure_comp_w else 0
     total_w_pages = 2 + 3 * len(cats_w) + n_comp_w_pages
 
-    pdf_hebdo_bytes = weekly_memory.generate_weekly_pdf_report(
-        df_hebdo=df_agg,
-        year=year,
-        week_num=week_num,
-        synthese_jours=synthese_jours,
-        selected_sessions_meta=selected_meta,
-        notes_coach=f"Rapport consolidé sur {len(selected_sids)} séance(s) validée(s).",
-        objectifs_config=fallback_cfg_w,
-        inclure_comparatif=inclure_comp_w,
-        nb_comparatif=nb_semaines_comp,
-        granularity_mode=granularity_w,
-        target_groups=target_groups_w,
-        isolated_positions=isolated_positions_w if granularity_w == "Sur mesure / Personnalisé (Mixte)" else None,
+    if fusionner_vendredi_w and fri_match is not None:
+        _, fri_meta = fri_match
+        n_comp_fri_pages = ((len(cats_w) + 2) // 3) if inclure_comp_vendredi_w else 0
+        total_fri_pages = 2 + 2 * len(cats_w) + n_comp_fri_pages
+        total_fused_pages = total_fri_pages + total_w_pages
+
+        pdf_out_bytes = weekly_memory.generate_fused_friday_weekly_pdf_report(
+            friday_session_meta=fri_meta,
+            df_hebdo=df_agg,
+            year=year,
+            week_num=week_num,
+            synthese_jours=synthese_jours,
+            selected_sessions_meta=selected_meta,
+            notes_coach=f"Rapport consolidé sur {len(selected_sids)} séance(s) validée(s).",
+            objectifs_config=fallback_cfg_w,
+            inclure_comparatif=inclure_comp_w,
+            nb_comparatif=nb_semaines_comp,
+            inclure_comparatif_vendredi=inclure_comp_vendredi_w,
+            granularity_mode=granularity_w,
+            target_groups=target_groups_w,
+            isolated_positions=isolated_positions_w if granularity_w == "Sur mesure / Personnalisé (Mixte)" else None,
+        )
+        dl_label_w = f"📄 Télécharger le Rapport Fusionné Vendredi + Semaine {week_num:02d} PDF ({total_fused_pages} pages — {year})"
+        dl_filename_w = f"Rapport_Fusionne_Vendredi_Semaine_{week_num:02d}_{year}.pdf"
+        dl_help_w = f"Télécharge le rapport PDF fusionné officiel : Partie 1 (Retour Séance Vendredi) + Partie 2 (Retour Semaine {week_num:02d})."
+    else:
+        pdf_out_bytes = weekly_memory.generate_weekly_pdf_report(
+            df_hebdo=df_agg,
+            year=year,
+            week_num=week_num,
+            synthese_jours=synthese_jours,
+            selected_sessions_meta=selected_meta,
+            notes_coach=f"Rapport consolidé sur {len(selected_sids)} séance(s) validée(s).",
+            objectifs_config=fallback_cfg_w,
+            inclure_comparatif=inclure_comp_w,
+            nb_comparatif=nb_semaines_comp,
+            granularity_mode=granularity_w,
+            target_groups=target_groups_w,
+            isolated_positions=isolated_positions_w if granularity_w == "Sur mesure / Personnalisé (Mixte)" else None,
+        )
+        dl_label_w = f"📄 Télécharger le Bilan Hebdomadaire PDF ({total_w_pages} pages — Semaine {week_num:02d} — {year})"
+        dl_filename_w = f"Rapport_Hebdomadaire_RCA_Semaine_{week_num:02d}_{year}.pdf"
+        dl_help_w = "Télécharge le rapport hebdomadaire PDF complet officiel avec podiums (3 Premiers & 3 Derniers Vigilance), KPIs, bilans et comparatifs multi-semaines."
+
+    st.download_button(
+        label=dl_label_w,
+        data=pdf_out_bytes,
+        file_name=dl_filename_w,
+        mime="application/pdf",
+        help=dl_help_w,
+        key="btn_download_weekly_pdf",
+        type="primary",
     )
 
-    pdf_w_pages_label = f"{total_w_pages} pages"
+
+def render_match_comparative_view() -> None:
+    """
+    Onglet dédié au Comparatif des Matchs (Dimanche) :
+    - Liste exclusivement les rapports de Match (Dimanche) stockés dans la mémoire hebdomadaire.
+    - Permet d'explorer, éditer (objectifs, adversaire, libellé, provisoire) ou supprimer un match.
+    - Génère les tableaux, triptyques comparatifs multi-matchs et le Rapport Comparatif Matchs PDF.
+    """
+    st.markdown(
+        '<div class="section-header">🏟️ COMPARATIF DES MATCHS (DIMANCHE) — SUIVI & RAPPORT PDF</div>',
+        unsafe_allow_html=True,
+    )
+
+    flash_match_msg = st.session_state.pop("match_comp_save_flash", None)
+    if flash_match_msg:
+        st.success(flash_match_msg)
+
+    all_matches = weekly_memory.list_all_match_sessions()
+    if not all_matches:
+        st.info(
+            "📭 Aucun rapport de match (Dimanche) n'est encore archivé dans la mémoire.\n\n"
+            "Pour ajouter un match :\n"
+            "1. Allez dans l'onglet **« 🏉 Séance du jour (Workflow 3 étapes) »** et importez le CSV GPS du match.\n"
+            "2. Renseignez l'adversaire (optionnel) et ouvrez **« 💾 Archiver cette séance dans la mémoire hebdomadaire »**.\n"
+            "3. Sélectionnez **« Dimanche (Match) »** dans *Jour / Type de séance* puis cliquez sur **Enregistrer**."
+        )
+        return
+
+    st.markdown("#### 🏟️ Matchs (Dimanche) enregistrés")
+    st.caption("Cochez les matchs à comparer (jusqu'à 8 matchs recommandés pour un triptyque optimal), téléchargez le PDF individuel ou explorez/modifiez chaque match :")
+
+    selected_matches: List[Dict[str, Any]] = []
+    nb_m_cols = min(len(all_matches), 4)
+    col_m_cards = st.columns(nb_m_cols if nb_m_cols > 0 else 1)
+
+    for idx, m_info in enumerate(all_matches):
+        m_uid = m_info["match_uid"]
+        yr_m = int(m_info["year"])
+        wk_m = int(m_info["week_num"])
+        sid_m = m_info["session_id"]
+        date_m = format_readable_date(m_info.get("date", "-"))
+        adv_m = str(m_info.get("adversaire", "") or "").strip().upper()
+        title_m = f"Match vs {adv_m}" if adv_m else str(m_info.get("day_type", "Dimanche (Match)"))
+        is_prov_m = bool(m_info.get("is_provisional", False))
+        border_m = "#F59E0B" if is_prov_m else "#1F4E79"
+        badges_m = [
+            f'<span style="display:inline-block;background:#E0F2FE;color:#0C4A6E;border:1px solid #38BDF8;'
+            f'border-radius:999px;padding:1px 8px;font-size:0.68rem;font-weight:700;margin-right:4px;">'
+            f'Semaine {wk_m:02d} — {yr_m}</span>'
+        ]
+        if is_prov_m:
+            badges_m.append(
+                '<span style="display:inline-block;background:#FEF3C7;color:#92400E;border:1px solid #F59E0B;'
+                'border-radius:999px;padding:1px 8px;font-size:0.68rem;font-weight:700;">⏳ Provisoire</span>'
+            )
+        badge_m_html = f'<div style="margin-top:4px;">{"".join(badges_m)}</div>'
+
+        with col_m_cards[idx % len(col_m_cards)]:
+            card_m_html = (
+                f'<div style="background:#FFFFFF;border:1.5px solid {border_m};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">'
+                f'<div style="font-weight:800;color:#1F4E79;font-size:0.95rem;">🏟️ {title_m}</div>'
+                f'<div style="font-size:0.75rem;color:#64748B;margin-top:2px;">📅 {date_m}</div>'
+                f'{badge_m_html}'
+                f'<div style="font-size:0.80rem;color:#334155;margin-top:6px;">'
+                f'👥 <strong>{m_info.get("num_players", 0)}</strong> joueurs<br/>'
+                f'🏃 <strong>{float(m_info.get("total_distance_km", 0.0)):.1f} km</strong> cumulés<br/>'
+                f'🔥 <strong>{int(round(float(m_info.get("total_hi_m", 0.0))))} m</strong> haute int.'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(card_m_html, unsafe_allow_html=True)
+
+            cm_chk, cm_del = st.columns([2.5, 1.5])
+            with cm_chk:
+                if st.checkbox("Comparer", value=True, key=f"chk_match_{m_uid}"):
+                    selected_matches.append(m_info)
+            with cm_del:
+                if st.button("🗑️", key=f"btn_del_match_{m_uid}", help=f"Supprimer {title_m}"):
+                    weekly_memory.delete_session_from_memory(yr_m, wk_m, sid_m)
+                    st.toast(f"Match « {title_m} » supprimé.")
+                    st.rerun()
+
+            cm_pdf, cm_exp = st.columns([1.9, 2.1])
+            with cm_pdf:
+                pdf_m_b = weekly_memory.get_session_pdf_bytes(yr_m, wk_m, sid_m, generate_if_missing=True)
+                clean_m_tag = (adv_m or date_m).replace("/", "_").replace(" ", "_")
+                if pdf_m_b:
+                    st.download_button(
+                        label="📄 PDF",
+                        data=pdf_m_b,
+                        file_name=f"Rapport_Match_RCA_S{wk_m:02d}_{clean_m_tag}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_pdf_match_{m_uid}",
+                        use_container_width=True,
+                    )
+            with cm_exp:
+                is_exp_m = st.session_state.get("explored_match_uid") == m_uid
+                if st.button(
+                    "🔼 Masquer" if is_exp_m else "🔍 Explorer",
+                    key=f"btn_exp_match_{m_uid}",
+                    use_container_width=True,
+                ):
+                    st.session_state["explored_match_uid"] = None if is_exp_m else m_uid
+                    st.rerun()
+
+    # Drill-Down Explorer dédié au match sélectionné
+    exp_m_uid = st.session_state.get("explored_match_uid")
+    exp_m_obj = next((m for m in all_matches if m["match_uid"] == exp_m_uid), None) if exp_m_uid else None
+    if exp_m_obj is not None:
+        em_yr = int(exp_m_obj["year"])
+        em_wk = int(exp_m_obj["week_num"])
+        em_sid = exp_m_obj["session_id"]
+        em_date = format_readable_date(exp_m_obj.get("date", "-"))
+        em_adv = str(exp_m_obj.get("adversaire", "") or "").strip().upper()
+        em_day = str(exp_m_obj.get("day_type", "Dimanche (Match)"))
+        df_em = pd.DataFrame(exp_m_obj.get("players_data", []))
+        em_has_iso = isinstance(exp_m_obj.get("objectifs_config"), dict) and any(
+            k in exp_m_obj["objectifs_config"] for k in ("5 de devant", "3ème Ligne", "Trois-quarts")
+        )
+        em_obj_cfg = weekly_memory._get_session_objectifs_config(
+            dict(exp_m_obj), fallback_config=get_active_objectifs_config(), year=em_yr, week_num=em_wk
+        )
+
+        with st.expander(f"🔍 DÉTAILS DU MATCH : {em_day.upper()}{' vs ' + em_adv if em_adv else ''} ({em_date} — S{em_wk:02d})", expanded=True):
+            ch1, ch2 = st.columns([4, 1])
+            with ch1:
+                st.markdown(f"**{em_day}{' vs ' + em_adv if em_adv else ''} ({em_date})** — *{exp_m_obj.get('notes', '') or 'Aucune note'}*")
+            with ch2:
+                if st.button("❌ Fermer", key=f"btn_close_em_{exp_m_uid}", use_container_width=True):
+                    st.session_state["explored_match_uid"] = None
+                    st.rerun()
+
+            mk1, mk2, mk3, mk4, mk5 = st.columns(5)
+            mk1.metric("Joueurs présents", f"{exp_m_obj.get('num_players', len(df_em))}")
+            mk2.metric("Volume Total (km)", f"{float(exp_m_obj.get('total_distance_km', 0.0)):.1f} km")
+            mk3.metric("Distance Moy./Joueur", f"{float(exp_m_obj.get('avg_distance_m', 0.0)):,.0f} m".replace(",", " "))
+            mk4.metric("Haute Intensité", f"{float(exp_m_obj.get('total_hi_m', 0.0)):,.0f} m".replace(",", " "))
+            mk5.metric("Vitesse Max", f"{float(exp_m_obj.get('max_speed_kmh', 0.0)):.1f} km/h", f"{exp_m_obj.get('max_speed_player', '-')}")
+
+            if not df_em.empty:
+                mt_jauges, mt_edit, mt_pod, mt_eff = st.tabs([
+                    "📊 Jauges & Graphiques",
+                    "✏️ Modifier objectifs / adversaire / détails",
+                    "🏆 Podiums du Match",
+                    "👥 Effectif du Match",
+                ])
+                with mt_jauges:
+                    grp_mt = st.tabs(["🏉 5 de devant", "🏉 3ème Ligne", "🏉 Trois-quarts"])
+                    for gi, gn in enumerate(["5 de devant", "3ème Ligne", "Trois-quarts"]):
+                        with grp_mt[gi]:
+                            sub_mg = df_em[df_em["Groupe"] == gn] if "Groupe" in df_em.columns else pd.DataFrame()
+                            if not sub_mg.empty:
+                                m_j = calculer_metriques_jauges(sub_mg, gn, mode_calc="Moyenne / joueur", config_objectifs=em_obj_cfg)
+                                render_dashboard_objectifs(gn, m_j)
+                            else:
+                                st.info(f"Aucun joueur du groupe {gn} sur ce match.")
+                with mt_edit:
+                    cm1, cm2, cm3 = st.columns([1.8, 1.5, 2.0])
+                    with cm1:
+                        new_m_day = st.text_input("Libellé du match :", value=em_day, key=f"em_day_{exp_m_uid}")
+                    with cm2:
+                        new_m_adv = st.text_input("Adversaire :", value=em_adv, placeholder="Ex: CAEN, RHEU...", key=f"em_adv_{exp_m_uid}")
+                    with cm3:
+                        st.write("")
+                        new_m_prov = st.checkbox("⏳ Objectifs provisoires", value=bool(exp_m_obj.get("is_provisional", False)), key=f"em_prov_{exp_m_uid}")
+                    cmo1, cmo2, cmo3 = st.columns(3)
+                    new_m_cfg: Dict[str, Dict[str, float]] = {}
+                    for col_mo, gl_m in [(cmo1, "5 de devant"), (cmo2, "3ème Ligne"), (cmo3, "Trois-quarts")]:
+                        gc_m = weekly_memory.get_objectifs_for_category(em_obj_cfg, gl_m)
+                        km_p = f"em_obj_{exp_m_uid}_{gl_m}"
+                        with col_mo:
+                            st.markdown(f"**🏉 {gl_m}**")
+                            md_v = st.number_input("Objectif Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(gc_m.get("Objectif Distance (m)", 5500.0)), key=f"{km_p}_d")
+                            mh_v = st.number_input("Obj. HSR (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(gc_m.get("Obj. HSR", 450.0)), key=f"{km_p}_h")
+                            mv_v = st.number_input("Obj. VHSR (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(gc_m.get("Obj. VHSR", 150.0)), key=f"{km_p}_v")
+                            ma_v = st.number_input("Obj. ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(gc_m.get("Obj. ACC/DEC", 55.0)), key=f"{km_p}_a")
+                            new_m_cfg[gl_m] = {
+                                "Objectif Distance (m)": float(md_v),
+                                "Obj. HSR": float(mh_v),
+                                "Obj. VHSR": float(mv_v),
+                                "Obj. ACC/DEC": float(ma_v),
+                            }
+                    if st.button("💾 Enregistrer les modifications du match (JSON + GitHub)", key=f"btn_save_em_{exp_m_uid}", type="primary"):
+                        ok_em, msg_em = weekly_memory.update_session_in_memory(
+                            year=em_yr,
+                            week_num=em_wk,
+                            session_id=em_sid,
+                            new_objectifs_config=new_m_cfg,
+                            new_day_type=new_m_day.strip() or em_day,
+                            is_provisional=bool(new_m_prov),
+                            new_adversaire=new_m_adv.strip().upper(),
+                        )
+                        if ok_em:
+                            st.session_state["match_comp_save_flash"] = f"✅ {msg_em}"
+                            st.toast(f"✅ {msg_em}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg_em}")
+                with mt_pod:
+                    render_podium_section(generer_podium_dynamique(df_em))
+                with mt_eff:
+                    cols_em = [c for c in ["Nom ; Prénom", "Poste_Detaille", "Groupe", "Distance (km)", "Haute intensité Podium (m)", "VHSR (m)", "Top Speed (km/h)", "Distance Per Min (m/min)", "Temps de jeu ", "Accel/Dec", "RPE"] if c in df_em.columns]
+                    st.dataframe(df_em[cols_em], use_container_width=True, hide_index=True)
+
+    if not selected_matches:
+        st.warning("⚠️ Veuillez cocher au moins un match pour générer l'analyse comparative.")
+        return
+
+    st.divider()
+    match_items_ui = weekly_memory.build_match_comparative_items(selected_matches, categories=["5 de devant", "3ème Ligne", "Trois-quarts"])
+    df_match_players = weekly_memory.aggregate_match_players(selected_matches)
+
+    # KPIs globaux des matchs comparés
+    avg_vol_m = float(np.mean([it["total_distance_km"] for it in match_items_ui]))
+    avg_dist_pm = float(np.mean([it["avg_distance_m"] for it in match_items_ui if it["avg_distance_m"] > 0])) if any(it["avg_distance_m"] > 0 for it in match_items_ui) else 0.0
+    avg_hi_m = float(np.mean([it["total_hi_m"] for it in match_items_ui]))
+    best_vmax_m = max([it["max_speed_kmh"] for it in match_items_ui] or [0.0])
+
+    km1, km2, km3, km4 = st.columns(4)
+    km1.metric("Matchs comparés", f"{len(match_items_ui)}")
+    km2.metric("Volume Moy. / Match", f"{avg_vol_m:.1f} km")
+    km3.metric("Distance Moy. / Joueur", f"{avg_dist_pm:,.0f} m".replace(",", " "))
+    km4.metric("Vitesse Max Matchs", f"{best_vmax_m:.1f} km/h")
+
+    # Tableau synthétique comparatif Match par Match
+    st.markdown("#### 📊 Synthèse Comparative Match par Match")
+    tbl_m_rows = []
+    for it in match_items_ui:
+        tbl_m_rows.append({
+            "Match / Adversaire": it["label"],
+            "Date": it["date"],
+            "Semaine": f"S{it['week_num']:02d}",
+            "Effectif": it["num_players"],
+            "Dist. Équipe (km)": round(it["total_distance_km"], 1),
+            "Dist. Moy./Joueur (m)": int(round(it["avg_distance_m"])),
+            "H.I. Équipe (m)": int(round(it["total_hi_m"])),
+            "5D Dist. (m)": int(round(it["group_metrics"]["5 de devant"]["volume"])),
+            "3L Dist. (m)": int(round(it["group_metrics"]["3ème Ligne"]["volume"])),
+            "3/4 Dist. (m)": int(round(it["group_metrics"]["Trois-quarts"]["volume"])),
+            "Vmax (km/h)": round(it["max_speed_kmh"], 1),
+        })
+    st.dataframe(pd.DataFrame(tbl_m_rows), use_container_width=True, hide_index=True)
+
+    # Triptyque Comparatif Multi-Matchs
+    st.markdown("#### 📈 Triptyque Comparatif Multi-Matchs par Ligne de Poste")
+    buf_m_trip = weekly_memory.generer_graphique_comparatif_triptyque_postes_matplotlib(
+        items_comparatif=match_items_ui,
+        target_day="Match",
+        categories_list=["5 de devant", "3ème Ligne", "Trois-quarts"],
+    )
+    st.image(buf_m_trip, use_container_width=True)
+
+    # Détail individuel consolidé sur les matchs sélectionnés
+    if not df_match_players.empty:
+        st.markdown("#### 👥 Statistiques Individuelles Moyennes sur les Matchs Sélectionnés")
+        tabs_mp = st.tabs(["🏉 5 de devant", "🏉 3ème Ligne", "🏉 Trois-quarts", "👥 Tous les joueurs"])
+        for t_i, g_t in enumerate(["5 de devant", "3ème Ligne", "Trois-quarts", "ALL"]):
+            with tabs_mp[t_i]:
+                sub_mp = df_match_players if g_t == "ALL" else df_match_players[df_match_players["Groupe"] == g_t]
+                if sub_mp.empty:
+                    st.info(f"Aucun joueur enregistré dans la catégorie {g_t} sur ces matchs.")
+                else:
+                    st.dataframe(sub_mp, use_container_width=True, hide_index=True)
+
+    # Export PDF Comparatif des Matchs
+    st.divider()
+    st.markdown("#### 📥 Télécharger le Rapport Comparatif des Matchs PDF")
+    granularity_m = st.radio(
+        "Granularité du rapport PDF Comparatif Matchs :",
+        options=[
+            "Par ligne de poste (3 groupes classiques)",
+            "Détaillé par poste (Tous les postes séparés)",
+            "Sur mesure / Personnalisé (Mixte)",
+        ],
+        horizontal=True,
+        key="radio_granularity_matchs",
+    )
+
+    target_groups_m = None
+    isolated_positions_m: List[str] = []
+    if granularity_m == "Sur mesure / Personnalisé (Mixte)":
+        isolated_positions_m = st.multiselect(
+            "Sélectionnez les postes spécifiques à isoler de leur ligne :",
+            options=weekly_memory.CANONICAL_9_POSTES,
+            default=[],
+            key="multiselect_custom_m_isolated",
+        )
+        target_groups_m = ["5 de devant", "3ème Ligne", "Trois-quarts"] + list(isolated_positions_m)
+    elif "détaillé" in granularity_m.lower() or "séparés" in granularity_m.lower():
+        target_groups_m = weekly_memory.get_active_positions(df_match_players) or list(weekly_memory.CANONICAL_9_POSTES)
+    else:
+        target_groups_m = ["5 de devant", "3ème Ligne", "Trois-quarts"]
+
+    notes_match_pdf = st.text_input(
+        "Note / Synthèse du préparateur physique (optionnel) :",
+        value="",
+        placeholder="Ex: Comparatif des exigences athlétiques sur le bloc de matchs automnal...",
+        key="txt_notes_match_comp_pdf",
+    )
+
+    pdf_match_comp_bytes = weekly_memory.generate_match_comparative_pdf_report(
+        selected_matches=selected_matches,
+        notes_coach=notes_match_pdf,
+        granularity_mode=granularity_m,
+        target_groups=target_groups_m,
+        isolated_positions=isolated_positions_m if granularity_m == "Sur mesure / Personnalisé (Mixte)" else None,
+    )
+
     st.download_button(
-        label=f"📄 Télécharger le Bilan Hebdomadaire PDF ({pdf_w_pages_label} — Semaine {week_num:02d} — {year})",
-        data=pdf_hebdo_bytes,
-        file_name=f"Rapport_Hebdomadaire_RCA_Semaine_{week_num:02d}_{year}.pdf",
+        label=f"📄 Télécharger le Rapport Comparatif des Matchs PDF ({len(selected_matches)} match{'s' if len(selected_matches) > 1 else ''})",
+        data=pdf_match_comp_bytes,
+        file_name=f"Rapport_Comparatif_Matchs_RCA_{len(selected_matches)}_Matchs.pdf",
         mime="application/pdf",
-        help="Télécharge le rapport hebdomadaire PDF complet officiel avec podiums (3 Premiers & 3 Derniers Vigilance), KPIs, bilans et comparatifs multi-semaines.",
-        key="btn_download_weekly_pdf",
+        key="btn_download_match_comp_pdf",
         type="primary",
     )
 
@@ -6425,10 +6807,14 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # Navigation principale : Basculement instantané entre la séance du jour et les rapports hebdomadaires
+    # Navigation principale : Séance du jour, Rapports Hebdomadaires, Comparatif des Matchs (Dimanche)
     mode_vue = st.radio(
         "Navigation principale :",
-        options=["🏉 Séance du jour (Workflow 3 étapes)", "📅 Rapports Hebdomadaires"],
+        options=[
+            "🏉 Séance du jour (Workflow 3 étapes)",
+            "📅 Rapports Hebdomadaires",
+            "🏟️ Comparatif des Matchs (Dimanche)",
+        ],
         horizontal=True,
         label_visibility="collapsed",
         key="nav_mode_principal",
@@ -6436,6 +6822,9 @@ def main() -> None:
 
     if mode_vue == "📅 Rapports Hebdomadaires":
         render_weekly_reports_view()
+        return
+    if mode_vue == "🏟️ Comparatif des Matchs (Dimanche)":
+        render_match_comparative_view()
         return
 
     # --------------------------------------------------------------------------
