@@ -319,6 +319,7 @@ def save_session_to_memory(
     adversaire: str = "",
     rpe_stats: Optional[Dict[str, Any]] = None,
     objectifs_config: Optional[Dict[str, Dict[str, float]]] = None,
+    is_provisional: bool = False,
 ) -> Tuple[bool, str]:
     """
     Sauvegarde manuellement une séance validée dans la mémoire hebdomadaire.
@@ -432,6 +433,7 @@ def save_session_to_memory(
         "group_stats": group_stats or {},
         "rpe_stats": rpe_stats or {},
         "objectifs_config": frozen_objectifs,
+        "is_provisional": bool(is_provisional),
         "players_data": serialized_players,
     }
 
@@ -457,7 +459,14 @@ def save_session_to_memory(
         except Exception:
             pass
 
-        return True, f"Séance « {clean_day} » archivée avec objectifs figés en Semaine {week_num} ({len(df_indiv)} joueurs){gh_suffix}."
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+        prov_txt = " [objectifs provisoires]" if is_provisional else ""
+        return True, f"Séance « {clean_day} » archivée avec objectifs figés{prov_txt} en Semaine {week_num} ({len(df_indiv)} joueurs){gh_suffix}."
     except Exception as e:
         return False, f"Erreur lors de la sauvegarde : {str(e)}"
 
@@ -610,6 +619,7 @@ def aggregate_weekly_sessions(
             "group_stats": s.get("group_stats", {}),
             "rpe_stats": s.get("rpe_stats", {}),
             "objectifs_config": s.get("objectifs_config"),
+            "is_provisional": bool(s.get("is_provisional", False)),
             "pdf_filename": s.get("pdf_filename", ""),
             "players_data": s.get("players_data", []),
         }
@@ -2244,15 +2254,96 @@ def _extract_objectifs_from_daily_pdf(pdf_path: str) -> Optional[Dict[str, Dict[
     return None
 
 
+def update_session_in_memory(
+    year: int,
+    week_num: int,
+    session_id: str,
+    new_objectifs_config: Dict[str, Dict[str, float]],
+    new_day_type: Optional[str] = None,
+    is_provisional: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Met à jour à posteriori uniquement la séance ciblée (objectifs isolés, libellé day_type
+    optionnel, statut provisoire) dans data/weekly_memory/week_YYYY_WXX.json sans altérer
+    les autres séances de la semaine, invalide le PDF journalier local obsolète, pousse
+    immédiatement sur GitHub et vide les caches Streamlit concernés.
+    """
+    if not session_id:
+        return False, "Identifiant de séance manquant."
+    if not isinstance(new_objectifs_config, dict) or not new_objectifs_config:
+        return False, "Configuration d'objectifs invalide."
+
+    week_data = load_week_data(year, week_num)
+    sessions = week_data.get("sessions", {})
+    if not sessions or session_id not in sessions:
+        return False, f"Séance « {session_id} » introuvable en Semaine {week_num:02d} — {year}."
+
+    target_session = sessions[session_id]
+    target_session["objectifs_config"] = _normalize_session_objectifs_config(new_objectifs_config)
+    if new_day_type is not None and str(new_day_type).strip():
+        target_session["day_type"] = str(new_day_type).strip()
+    target_session["is_provisional"] = bool(is_provisional)
+    target_session["updated_at"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    # Invalider le PDF journalier en cache disque pour que le téléchargement PDF reflète les nouveaux objectifs
+    stale_pdf = get_session_pdf_path(year, week_num, session_id)
+    if os.path.exists(stale_pdf):
+        try:
+            os.remove(stale_pdf)
+        except Exception:
+            pass
+
+    week_data["last_updated"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    fp = get_week_file_path(year, week_num)
+    disp_day = target_session.get("day_type", session_id)
+
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(week_data, f, ensure_ascii=False, indent=2)
+
+        gh_status = ""
+        try:
+            try:
+                import github_sync
+            except (ImportError, ModuleNotFoundError):
+                from modules import github_sync
+            gh_ok, gh_msg = github_sync.push_file_to_github(
+                fp,
+                commit_message=f"config: mise à jour séance {disp_day} (Semaine {week_num:02d} — {year})",
+            )
+            if gh_ok:
+                gh_status = " et synchronisée sur GitHub"
+            elif github_sync.is_github_sync_available():
+                gh_status = f" (local OK, erreur GitHub : {gh_msg})"
+            else:
+                gh_status = " (mode local — token GitHub non configuré)"
+        except Exception as gh_err:
+            gh_status = f" (local OK, sync GitHub ignorée : {gh_err})"
+
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+        statut_txt = " (objectifs provisoires)" if is_provisional else " (objectifs validés)"
+        return True, f"Séance « {disp_day} » mise à jour{statut_txt} pour la Semaine {week_num:02d}{gh_status}."
+    except Exception as e:
+        return False, f"Erreur lors de la mise à jour de la séance : {e}"
+
+
 def update_week_sessions_objectifs(
     year: int,
     week_num: int,
     session_objectifs_map: Dict[str, Dict[str, Dict[str, float]]],
+    provisional_map: Optional[Dict[str, bool]] = None,
+    day_type_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[bool, str]:
     """
-    Enregistre de façon persistante les objectifs spécifiques (copie isolée et figée)
-    de chaque séance dans data/weekly_memory/week_YYYY_WXX.json, invalide tout PDF
-    journalier local obsolète pour ces séances, et synchronise immédiatement sur GitHub.
+    Enregistre de façon persistante les objectifs spécifiques (copie isolée et figée),
+    et éventuellement le statut provisoire et le libellé day_type, de chaque séance dans
+    data/weekly_memory/week_YYYY_WXX.json, invalide tout PDF journalier local obsolète,
+    pousse immédiatement sur GitHub et vide les caches Streamlit.
     """
     if not isinstance(session_objectifs_map, dict) or not session_objectifs_map:
         return False, "Aucun objectif de séance à enregistrer."
@@ -2266,6 +2357,11 @@ def update_week_sessions_objectifs(
     for sid, cfg in session_objectifs_map.items():
         if sid in sessions and isinstance(cfg, dict):
             sessions[sid]["objectifs_config"] = _normalize_session_objectifs_config(cfg)
+            if isinstance(provisional_map, dict) and sid in provisional_map:
+                sessions[sid]["is_provisional"] = bool(provisional_map[sid])
+            if isinstance(day_type_map, dict) and sid in day_type_map and str(day_type_map[sid]).strip():
+                sessions[sid]["day_type"] = str(day_type_map[sid]).strip()
+            sessions[sid]["updated_at"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             updated_sids.append(sid)
             # Invalider le PDF journalier en cache disque pour que le bouton PDF reflète les nouveaux objectifs
             stale_pdf = get_session_pdf_path(year, week_num, sid)
@@ -2302,6 +2398,12 @@ def update_week_sessions_objectifs(
                 gh_status = " (mode local — token GitHub non configuré)"
         except Exception as gh_err:
             gh_status = f" (local OK, sync GitHub ignorée : {gh_err})"
+
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
 
         return True, f"Objectifs enregistrés pour {len(updated_sids)} séance(s) de la Semaine {week_num:02d}{gh_status}."
     except Exception as e:

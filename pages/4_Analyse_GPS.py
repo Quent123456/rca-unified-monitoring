@@ -5345,7 +5345,10 @@ def render_weekly_reports_view() -> None:
 
     # 2. Sélection et nettoyage des séances
     st.markdown("#### 📋 Séances enregistrées pour cette semaine")
-    st.caption("Cochez les séances à inclure dans le calcul du rapport hebdomadaire, téléchargez le PDF de chaque séance ou explorez son détail :")
+    flash_obj_top = st.session_state.pop("weekly_obj_save_flash", None)
+    if flash_obj_top:
+        st.success(flash_obj_top)
+    st.caption("Cochez les séances à inclure dans le calcul du rapport hebdomadaire, téléchargez le PDF de chaque séance, explorez son détail ou modifiez ses objectifs à posteriori :")
 
     selected_sids = []
     nb_cols = min(len(sessions), 4)
@@ -5354,12 +5357,22 @@ def render_weekly_reports_view() -> None:
     for idx, (s_id, s_info) in enumerate(sessions.items()):
         target_col = col_cards[idx % len(col_cards)]
         date_clean_card = format_readable_date(s_info.get("date", "-"))
+        is_prov_card = bool(s_info.get("is_provisional", False))
+        card_border = "#F59E0B" if is_prov_card else "#CBD5E1"
+        prov_badge_html = (
+            '<div style="margin-top:4px;"><span style="display:inline-block;background:#FEF3C7;color:#92400E;'
+            'border:1px solid #F59E0B;border-radius:999px;padding:1px 8px;font-size:0.68rem;font-weight:700;">'
+            '⏳ Objectifs provisoires</span></div>'
+            if is_prov_card
+            else ""
+        )
         with target_col:
             st.markdown(
                 f"""
-                <div style="background:#FFFFFF;border:1.5px solid #CBD5E1;border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
+                <div style="background:#FFFFFF;border:1.5px solid {card_border};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04);">
                     <div style="font-weight:800;color:#1F4E79;font-size:0.95rem;">🏉 {s_info.get('day_type', s_id)}</div>
                     <div style="font-size:0.75rem;color:#64748B;margin-top:2px;">📅 {date_clean_card}</div>
+                    {prov_badge_html}
                     <div style="font-size:0.80rem;color:#334155;margin-top:6px;">
                         👥 <strong>{s_info.get('num_players', 0)}</strong> joueurs<br/>
                         🏃 <strong>{s_info.get('total_distance_km', 0.0)} km</strong> cumulés<br/>
@@ -5512,18 +5525,23 @@ def render_weekly_reports_view() -> None:
             if not df_exp_session.empty:
                 exp_tab_jauges, exp_tab_obj, exp_tab_podiums, exp_tab_effectif = st.tabs([
                     "📊 Jauges & Graphiques par Groupe",
-                    "🎯 Objectifs de la Séance",
+                    "✏️ Modifier les objectifs / détails de la séance",
                     "🏆 Podiums de la Séance",
                     "👥 Tableau de l'Effectif Présent",
                 ])
 
                 with exp_tab_jauges:
-                    if exp_has_isolated_obj:
+                    if exp_sinfo.get("is_provisional", False):
+                        st.warning(
+                            "⏳ **Objectifs provisoires** (en attente de validation par la préparatrice physique). "
+                            "Rendez-vous dans l'onglet **« ✏️ Modifier les objectifs / détails de la séance »** pour saisir les objectifs définitifs et décocher le statut provisoire."
+                        )
+                    elif exp_has_isolated_obj:
                         st.caption("✅ Objectifs propres à cette séance (isolés et figés dans le JSON de la semaine).")
                     else:
                         st.warning(
                             "⚠️ Cette séance a été enregistrée avant l'isolation des objectifs par séance (affichage en repli sur la configuration globale). "
-                            "Ouvrez l'onglet **« 🎯 Objectifs de la Séance »** pour saisir et sauvegarder ses vrais objectifs."
+                            "Ouvrez l'onglet **« ✏️ Modifier les objectifs / détails de la séance »** pour saisir et sauvegarder ses vrais objectifs."
                         )
                     grp_tabs = st.tabs(["🏉 5 de devant", "🏉 3ème Ligne", "🏉 Trois-quarts", "📊 Comparatif Barres"])
                     for g_idx, g_name in enumerate(["5 de devant", "3ème Ligne", "Trois-quarts"]):
@@ -5544,11 +5562,28 @@ def render_weekly_reports_view() -> None:
                         st.image(buf_seance_chart, use_container_width=True)
 
                 with exp_tab_obj:
-                    st.markdown(f"##### 🎯 Édition directe des objectifs propres à « {exp_day_type} » ({exp_date_str})")
+                    st.markdown(f"##### ✏️ Modifier les objectifs et détails de « {exp_day_type} » ({exp_date_str})")
                     if exp_has_isolated_obj:
-                        st.caption("Ces objectifs sont stockés indépendamment dans `week_YYYY_WXX.json` et n'affectent aucune autre séance ni `targets_config.json`.")
+                        st.caption("Ces réglages sont isolés dans `week_YYYY_WXX.json` pour cette séance uniquement : aucune autre séance ni `targets_config.json` ne seront modifiés.")
                     else:
-                        st.info("ℹ️ Cette séance utilise encore le repli global. Ajustez ci-dessous ses vrais objectifs et enregistrez pour les figer définitivement dans le JSON + GitHub.")
+                        st.info("ℹ️ Cette séance utilise encore le repli global (`targets_config.json`). Ajustez ci-dessous ses vrais objectifs et enregistrez pour les figer définitivement dans le JSON + GitHub.")
+
+                    c_meta1, c_meta2 = st.columns([2.0, 2.2])
+                    with c_meta1:
+                        new_exp_day_type = st.text_input(
+                            "Libellé de la séance (day_type) :",
+                            value=str(exp_day_type),
+                            placeholder="Ex: Mardi (Entraînement)",
+                            key=f"exp_daytype_{year}_{week_num}_{exp_sid}",
+                        )
+                    with c_meta2:
+                        st.write("")
+                        new_exp_prov = st.checkbox(
+                            "⏳ Objectifs provisoires (en attente préparatrice physique)",
+                            value=bool(exp_sinfo.get("is_provisional", False)),
+                            key=f"exp_prov_{year}_{week_num}_{exp_sid}",
+                            help="Affiche un badge discret sur la carte de la séance tant que les objectifs définitifs ne sont pas validés.",
+                        )
 
                     c_eo1, c_eo2, c_eo3 = st.columns(3)
                     new_exp_cfg: Dict[str, Dict[str, float]] = {}
@@ -5557,10 +5592,10 @@ def render_weekly_reports_view() -> None:
                         k_ep = f"exp_obj_{year}_{week_num}_{exp_sid}_{g_lbl}"
                         with col_eo:
                             st.markdown(f"**🏉 {g_lbl}**")
-                            ed_v = st.number_input("Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(g_cur_e.get("Objectif Distance (m)", 4500.0)), key=f"{k_ep}_d")
-                            eh_v = st.number_input("HSR Z3 (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(g_cur_e.get("Obj. HSR", 300.0)), key=f"{k_ep}_h")
-                            ev_v = st.number_input("VHSR Sprint (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(g_cur_e.get("Obj. VHSR", 100.0)), key=f"{k_ep}_v")
-                            ea_v = st.number_input("ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(g_cur_e.get("Obj. ACC/DEC", 50.0)), key=f"{k_ep}_a")
+                            ed_v = st.number_input("Objectif Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(g_cur_e.get("Objectif Distance (m)", 4500.0)), key=f"{k_ep}_d")
+                            eh_v = st.number_input("Obj. HSR (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(g_cur_e.get("Obj. HSR", 300.0)), key=f"{k_ep}_h")
+                            ev_v = st.number_input("Obj. VHSR (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(g_cur_e.get("Obj. VHSR", 100.0)), key=f"{k_ep}_v")
+                            ea_v = st.number_input("Obj. ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(g_cur_e.get("Obj. ACC/DEC", 50.0)), key=f"{k_ep}_a")
                             new_exp_cfg[g_lbl] = {
                                 "Objectif Distance (m)": float(ed_v),
                                 "Obj. HSR": float(eh_v),
@@ -5569,16 +5604,27 @@ def render_weekly_reports_view() -> None:
                             }
 
                     if st.button(
-                        f"💾 Enregistrer les objectifs de « {exp_day_type} » (JSON + GitHub)",
+                        f"💾 Enregistrer les modifications de « {new_exp_day_type.strip() or exp_day_type} » (JSON + GitHub)",
                         key=f"btn_save_exp_obj_{year}_{week_num}_{exp_sid}",
                         type="primary",
                     ):
-                        ok_eo, msg_eo = weekly_memory.update_week_sessions_objectifs(year, week_num, {exp_sid: new_exp_cfg})
+                        ok_eo, msg_eo = weekly_memory.update_session_in_memory(
+                            year=year,
+                            week_num=week_num,
+                            session_id=exp_sid,
+                            new_objectifs_config=new_exp_cfg,
+                            new_day_type=new_exp_day_type.strip() or exp_day_type,
+                            is_provisional=bool(new_exp_prov),
+                        )
                         if ok_eo:
                             # Synchroniser immédiatement les widgets de l'expander hebdomadaire pour cette séance
-                            w_pref = f"wobj_{year}_{week_num}_{exp_sid}_"
-                            for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(w_pref)]:
-                                del st.session_state[sk_del]
+                            for pref_del in (
+                                f"wobj_{year}_{week_num}_{exp_sid}_",
+                                f"wday_{year}_{week_num}_{exp_sid}",
+                                f"wprov_{year}_{week_num}_{exp_sid}",
+                            ):
+                                for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(pref_del)]:
+                                    del st.session_state[sk_del]
                             st.session_state["weekly_obj_save_flash"] = f"✅ {msg_eo}"
                             st.toast(f"✅ {msg_eo}")
                             st.rerun()
@@ -5688,47 +5734,87 @@ def render_weekly_reports_view() -> None:
                         else:
                             st.markdown(clean_html, unsafe_allow_html=True)
 
-    # 6. Vérification / Édition des Objectifs Isolés par Séance (Somme = Objectif Hebdo)
+    # 6. Vérification / Édition à posteriori des Objectifs & Détails par Séance (Somme = Objectif Hebdo)
     st.divider()
-    flash_obj_msg = st.session_state.pop("weekly_obj_save_flash", None)
-    if flash_obj_msg:
-        st.success(flash_obj_msg)
-
     fallback_cfg_w = get_active_objectifs_config()
     missing_saved_obj = [
         s.get("day_type", sid)
         for sid, s in synthese_jours.items()
         if isinstance(s, dict) and not (isinstance(s.get("objectifs_config"), dict) and "5 de devant" in s["objectifs_config"])
     ]
+    provisional_objs = [
+        s.get("day_type", sid)
+        for sid, s in synthese_jours.items()
+        if isinstance(s, dict) and bool(s.get("is_provisional", False))
+    ]
+    status_badges_w = []
+    if missing_saved_obj:
+        status_badges_w.append(f"⚠️ {len(missing_saved_obj)} à figer")
+    if provisional_objs:
+        status_badges_w.append(f"⏳ {len(provisional_objs)} provisoire{'s' if len(provisional_objs) > 1 else ''}")
+    status_suffix_w = " · ".join(status_badges_w) if status_badges_w else "✅ tous validés"
+
     exp_title_obj = (
-        f"🎯 Objectifs par Séance Fusionnée (Somme = Objectif Hebdo — {len(synthese_jours)} séance{'s' if len(synthese_jours) > 1 else ''}"
-        + (f" — ⚠️ {len(missing_saved_obj)} à figer" if missing_saved_obj else " — ✅ tous figés")
-        + ")"
+        f"🎯 Objectifs par Séance Fusionnée — ✏️ Modifier objectifs / détails "
+        f"({len(synthese_jours)} séance{'s' if len(synthese_jours) > 1 else ''} — {status_suffix_w})"
     )
-    with st.expander(exp_title_obj, expanded=bool(missing_saved_obj)):
+    with st.expander(exp_title_obj, expanded=bool(missing_saved_obj or provisional_objs)):
         if missing_saved_obj:
             st.warning(
                 f"⚠️ Les séances suivantes ont été archivées avant l'isolation des objectifs par séance : "
                 f"**{', '.join(missing_saved_obj)}**. Saisissez leurs vrais objectifs ci-dessous puis cliquez sur **Enregistrer** "
                 f"pour les figer définitivement dans `week_{year}_W{week_num:02d}.json` (avec synchronisation GitHub automatique)."
             )
+        if provisional_objs:
+            st.info(
+                f"⏳ Objectifs provisoires en attente de validation pour : **{', '.join(provisional_objs)}**. "
+                f"Dès réception des chiffres de la préparatrice physique, modifiez-les ci-dessous, décochez la case provisoire et enregistrez."
+            )
         edited_sess_objs: Dict[str, Dict[str, Dict[str, float]]] = {}
+        edited_prov_map: Dict[str, bool] = {}
+        edited_day_map: Dict[str, str] = {}
         sess_items_w = [(sid, s) for sid, s in synthese_jours.items() if isinstance(s, dict)]
         if sess_items_w:
+            def _tab_icon_for_session(s_dict: Dict[str, Any]) -> str:
+                if bool(s_dict.get("is_provisional", False)):
+                    return "⏳"
+                if isinstance(s_dict.get("objectifs_config"), dict) and "5 de devant" in s_dict["objectifs_config"]:
+                    return "✅"
+                return "⚠️"
+
             sess_tabs_w = st.tabs([
-                f"{'✅' if (isinstance(s.get('objectifs_config'), dict) and '5 de devant' in s['objectifs_config']) else '⚠️'} {s.get('day_type', sid)}"
+                f"{_tab_icon_for_session(s)} {s.get('day_type', sid)}"
                 for sid, s in sess_items_w
             ])
             for t_i, (sid, s_meta) in enumerate(sess_items_w):
                 has_own_cfg = isinstance(s_meta.get("objectifs_config"), dict) and "5 de devant" in s_meta["objectifs_config"]
+                is_prov_s = bool(s_meta.get("is_provisional", False))
                 base_s_cfg = weekly_memory._get_session_objectifs_config(
                     dict(s_meta), fallback_config=fallback_cfg_w, year=year, week_num=week_num
                 )
                 with sess_tabs_w[t_i]:
-                    if has_own_cfg:
+                    if is_prov_s:
+                        st.caption(f"⏳ « {s_meta.get('day_type', sid)} » marquée en **objectifs provisoires** (en attente préparatrice physique).")
+                    elif has_own_cfg:
                         st.caption(f"✅ Objectifs propres à « {s_meta.get('day_type', sid)} » figés dans le JSON (isolés des autres séances).")
                     else:
-                        st.caption(f"⚠️ Non encore figés dans le JSON pour « {s_meta.get('day_type', sid)} » — valeurs pré-remplies depuis le repli actif.")
+                        st.caption(f"⚠️ Non encore figés dans le JSON pour « {s_meta.get('day_type', sid)} » — valeurs pré-remplies depuis `targets_config.json`.")
+
+                    c_wm1, c_wm2 = st.columns([2.0, 2.2])
+                    with c_wm1:
+                        w_day_val = st.text_input(
+                            "Libellé de la séance (day_type) :",
+                            value=str(s_meta.get("day_type", sid)),
+                            key=f"wday_{year}_{week_num}_{sid}",
+                        )
+                    with c_wm2:
+                        st.write("")
+                        w_prov_val = st.checkbox(
+                            "⏳ Objectifs provisoires (en attente préparatrice physique)",
+                            value=is_prov_s,
+                            key=f"wprov_{year}_{week_num}_{sid}",
+                        )
+
                     c_o1, c_o2, c_o3 = st.columns(3)
                     s_cfg_new: Dict[str, Dict[str, float]] = {}
                     for col_o, g_lbl in [(c_o1, "5 de devant"), (c_o2, "3ème Ligne"), (c_o3, "Trois-quarts")]:
@@ -5736,10 +5822,10 @@ def render_weekly_reports_view() -> None:
                         k_pref = f"wobj_{year}_{week_num}_{sid}_{g_lbl}"
                         with col_o:
                             st.markdown(f"**🏉 {g_lbl}**")
-                            d_v = st.number_input("Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(g_cur.get("Objectif Distance (m)", 4500.0)), key=f"{k_pref}_d")
-                            h_v = st.number_input("HSR Z3 (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(g_cur.get("Obj. HSR", 300.0)), key=f"{k_pref}_h")
-                            v_v = st.number_input("VHSR Sprint (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(g_cur.get("Obj. VHSR", 100.0)), key=f"{k_pref}_v")
-                            a_v = st.number_input("ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(g_cur.get("Obj. ACC/DEC", 50.0)), key=f"{k_pref}_a")
+                            d_v = st.number_input("Objectif Distance (m)", min_value=0.0, max_value=15000.0, step=50.0, value=float(g_cur.get("Objectif Distance (m)", 4500.0)), key=f"{k_pref}_d")
+                            h_v = st.number_input("Obj. HSR (m)", min_value=0.0, max_value=4000.0, step=10.0, value=float(g_cur.get("Obj. HSR", 300.0)), key=f"{k_pref}_h")
+                            v_v = st.number_input("Obj. VHSR (m)", min_value=0.0, max_value=2500.0, step=10.0, value=float(g_cur.get("Obj. VHSR", 100.0)), key=f"{k_pref}_v")
+                            a_v = st.number_input("Obj. ACC/DEC (nb)", min_value=0.0, max_value=300.0, step=1.0, value=float(g_cur.get("Obj. ACC/DEC", 50.0)), key=f"{k_pref}_a")
                             s_cfg_new[g_lbl] = {
                                 "Objectif Distance (m)": float(d_v),
                                 "Obj. HSR": float(h_v),
@@ -5748,7 +5834,37 @@ def render_weekly_reports_view() -> None:
                             }
                     s_cfg_new["Tous les groupes"] = weekly_memory._calculer_moyenne_tous_groupes(s_cfg_new)
                     edited_sess_objs[sid] = s_cfg_new
+                    edited_prov_map[sid] = bool(w_prov_val)
+                    edited_day_map[sid] = w_day_val.strip() or str(s_meta.get("day_type", sid))
                     synthese_jours[sid]["objectifs_config"] = s_cfg_new
+                    synthese_jours[sid]["is_provisional"] = bool(w_prov_val)
+                    synthese_jours[sid]["day_type"] = edited_day_map[sid]
+
+                    if st.button(
+                        f"💾 Enregistrer uniquement « {edited_day_map[sid]} » (JSON + GitHub)",
+                        key=f"btn_save_one_wobj_{year}_{week_num}_{sid}",
+                    ):
+                        ok_one, msg_one = weekly_memory.update_session_in_memory(
+                            year=year,
+                            week_num=week_num,
+                            session_id=sid,
+                            new_objectifs_config=s_cfg_new,
+                            new_day_type=edited_day_map[sid],
+                            is_provisional=bool(w_prov_val),
+                        )
+                        if ok_one:
+                            for pref_del in (
+                                f"exp_obj_{year}_{week_num}_{sid}_",
+                                f"exp_daytype_{year}_{week_num}_{sid}",
+                                f"exp_prov_{year}_{week_num}_{sid}",
+                            ):
+                                for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(pref_del)]:
+                                    del st.session_state[sk_del]
+                            st.session_state["weekly_obj_save_flash"] = f"✅ {msg_one}"
+                            st.toast(f"✅ {msg_one}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg_one}")
 
             # Récapitulatif de la somme dynamique
             sum_rows = []
@@ -5767,16 +5883,26 @@ def render_weekly_reports_view() -> None:
             st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
 
             if st.button(
-                "💾 Enregistrer les objectifs de ces séances dans l'archive (JSON + GitHub)",
+                "💾 Enregistrer toutes les séances de la semaine dans l'archive (JSON + GitHub)",
                 key=f"btn_save_wobjs_{year}_{week_num}",
                 type="primary",
             ):
-                ok_o, msg_o = weekly_memory.update_week_sessions_objectifs(year, week_num, edited_sess_objs)
+                ok_o, msg_o = weekly_memory.update_week_sessions_objectifs(
+                    year,
+                    week_num,
+                    edited_sess_objs,
+                    provisional_map=edited_prov_map,
+                    day_type_map=edited_day_map,
+                )
                 if ok_o:
                     # Synchroniser immédiatement les widgets de la vue Explorer pour ces séances
-                    e_pref = f"exp_obj_{year}_{week_num}_"
-                    for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(e_pref)]:
-                        del st.session_state[sk_del]
+                    for pref_del in (
+                        f"exp_obj_{year}_{week_num}_",
+                        f"exp_daytype_{year}_{week_num}_",
+                        f"exp_prov_{year}_{week_num}_",
+                    ):
+                        for sk_del in [k for k in list(st.session_state.keys()) if str(k).startswith(pref_del)]:
+                            del st.session_state[sk_del]
                     st.session_state["weekly_obj_save_flash"] = f"✅ {msg_o}"
                     st.toast(f"✅ {msg_o}")
                     st.rerun()
@@ -7450,6 +7576,13 @@ def main() -> None:
                     help="Si cochée, écrase les données précédemment enregistrées pour ce jour.",
                 )
 
+            arch_is_provisional = st.checkbox(
+                "⏳ Objectifs provisoires (en attente préparatrice physique)",
+                value=False,
+                key="arch_chk_provisional",
+                help="Cochez cette case si vous archivez la séance avant de recevoir les objectifs définitifs : un badge discret apparaîtra sur sa carte et vous pourrez les modifier à tout moment.",
+            )
+
             if st.button("✅ Enregistrer ce rapport dans la mémoire de la semaine", type="primary", use_container_width=True, key="btn_save_weekly_memory"):
                 clean_date_val = selected_session_date.strftime("%d/%m/%Y") if selected_session_date else datetime.date(2026, 11, 6).strftime("%d/%m/%Y")
                 frozen_session_objectifs = copy.deepcopy(get_active_objectifs_config())
@@ -7466,6 +7599,7 @@ def main() -> None:
                     adversaire=adversaire_input,
                     rpe_stats=rpe_metrics_seance,
                     objectifs_config=frozen_session_objectifs,
+                    is_provisional=bool(arch_is_provisional),
                 )
                 if success:
                     st.success(f"🎉 {msg}")
