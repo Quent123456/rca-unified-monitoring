@@ -7259,19 +7259,9 @@ def main() -> None:
                 session_date=selected_date,
                 df_rpe=df_rpe_raw,
                 mapping_gps=st.session_state.get("mapping_gps", current_mapping),
-                week_number=w_num_target or 45,
-                weekday=w_day_target or "Vendredi",
+                week_number=w_num_target,
+                weekday=w_day_target,
             )
-            # Repli systématique sur Semaine 45 Vendredi si aucun résultat (cas de test ou horodateur décalé)
-            if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
-                df_indiv = enrich_gps_dataframe_with_rpe(
-                    df_gps=df_indiv,
-                    session_date=datetime.date(2026, 11, 6),
-                    df_rpe=df_rpe_raw,
-                    mapping_gps=st.session_state.get("mapping_gps", current_mapping),
-                    week_number=45,
-                    weekday="Vendredi",
-                )
         except Exception as e:
             print(f"Avertissement : Enrichissement RPE initial impossible : {e}")
 
@@ -7613,26 +7603,17 @@ def main() -> None:
     try:
         df_rpe_raw = rpe_connector.fetch_raw_rpe_data()
         current_map_ui = st.session_state.get("mapping_gps") or st.session_state.get("mapping_gps_joueurs") or mapping_gps
-        w_num = active_date_for_rpe.isocalendar()[1] if isinstance(active_date_for_rpe, (datetime.date, datetime.datetime)) else 45
-        w_day = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][active_date_for_rpe.weekday()] if isinstance(active_date_for_rpe, (datetime.date, datetime.datetime)) else "Vendredi"
+        w_num = active_date_for_rpe.isocalendar()[1] if isinstance(active_date_for_rpe, (datetime.date, datetime.datetime)) else None
+        w_day = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][active_date_for_rpe.weekday()] if isinstance(active_date_for_rpe, (datetime.date, datetime.datetime)) else None
 
         df_indiv = rpe_connector.enrich_gps_dataframe_with_rpe(
             df_gps=df_indiv,
             session_date=active_date_for_rpe,
             df_rpe=df_rpe_raw,
             mapping_gps=st.session_state.get("mapping_gps", current_map_ui),
-            week_number=w_num or 45,
-            weekday=w_day or "Vendredi",
+            week_number=w_num,
+            weekday=w_day,
         )
-        if "RPE" not in df_indiv.columns or df_indiv["RPE"].dropna().empty:
-            df_indiv = rpe_connector.enrich_gps_dataframe_with_rpe(
-                df_gps=df_indiv,
-                session_date=datetime.date(2026, 11, 6),
-                df_rpe=df_rpe_raw,
-                mapping_gps=st.session_state.get("mapping_gps", current_map_ui),
-                week_number=45,
-                weekday="Vendredi",
-            )
 
         # Réassignation explicite dans st.session_state['df_indiv']
         st.session_state["df_indiv"] = df_indiv
@@ -7665,7 +7646,78 @@ def main() -> None:
         lbl_kpi_rpe = f"RPE Moyen ({groupe_selectionne})" if groupe_selectionne != "Tous les groupes" else "RPE Moyen Séance"
         st.metric(lbl_kpi_rpe, rpe_disp_str, help="Charge interne RPE moyenne (Google Sheet suivi-charge-rca)")
 
-    st.caption(f"🔗 Statut RPE : {len(df_rpe_raw) if df_rpe_raw is not None else 0} saisies lues dans Google Sheets | {int(df_indiv['RPE'].notna().sum()) if 'RPE' in df_indiv.columns else 0}/{len(df_indiv)} joueurs associés (Date : {active_date_for_rpe})")
+    col_stat_rpe, col_btn_rpe = st.columns([3, 1])
+    with col_stat_rpe:
+        st.caption(f"🔗 Statut RPE : {len(df_rpe_raw) if df_rpe_raw is not None else 0} saisies lues dans Google Sheets | {int(df_indiv['RPE'].notna().sum()) if 'RPE' in df_indiv.columns else 0}/{len(df_indiv)} joueurs associés (Date : {active_date_for_rpe})")
+    with col_btn_rpe:
+        if st.button("🔄 Actualiser les données RPE", use_container_width=True, key="btn_refresh_rpe_gps"):
+            st.cache_data.clear()
+            st.rerun()
+
+    with st.expander("🔍 Détail du matching RPE", expanded=False):
+        rep = st.session_state.get("rpe_matching_report", {})
+        matched_items = list(rep.get("matched", []))
+        unmatched_items = list(rep.get("unmatched", []))
+
+        # Si le rapport n'est pas en session_state, le construire depuis df_indiv
+        if not matched_items and not unmatched_items and df_indiv is not None and not df_indiv.empty:
+            c_p = "Nom ; Prénom" if "Nom ; Prénom" in df_indiv.columns else ("Nom" if "Nom" in df_indiv.columns else None)
+            for _, r_row in df_indiv.iterrows():
+                p_n = str(r_row[c_p]) if c_p else ""
+                r_val = r_row.get("RPE")
+                if pd.notna(r_val) and str(r_val) != "NR":
+                    matched_items.append({
+                        "gps_name": p_n,
+                        "sheet_name": r_row.get("RPE_Matched_Name", p_n),
+                        "score": r_row.get("RPE_Match_Score", 1.0),
+                        "method": r_row.get("RPE_Match_Method", "Associé"),
+                        "rpe": r_val,
+                        "duree": r_row.get("RPE_Duration", "-"),
+                        "session_rpe": r_row.get("Session_RPE", "-"),
+                    })
+                else:
+                    unmatched_items.append({
+                        "gps_name": p_n,
+                        "reason": "Aucune saisie RPE trouvée",
+                    })
+
+        tab_matched, tab_nr = st.tabs([
+            f"✅ Joueurs associés ({len(matched_items)})",
+            f"⏳ En attente / NR ({len(unmatched_items)})"
+        ])
+
+        with tab_matched:
+            if matched_items:
+                df_match_display = pd.DataFrame([
+                    {
+                        "Nom GPS": m.get("gps_name", ""),
+                        "Nom Saisie Sheets": m.get("sheet_name", ""),
+                        "Score": f"{float(m.get('score', 1.0)):.2f}",
+                        "Méthode": m.get("method", "Exact"),
+                        "RPE": m.get("rpe"),
+                        "Durée (min)": m.get("duree") if pd.notna(m.get("duree")) and m.get("duree") != "-" else "-",
+                        "Charge (sRPE)": m.get("session_rpe") if pd.notna(m.get("session_rpe")) and m.get("session_rpe") != "-" else "-",
+                    }
+                    for m in matched_items
+                ])
+                st.dataframe(df_match_display, use_container_width=True, hide_index=True)
+            else:
+                st.info("Aucun joueur associé pour cette séance.")
+
+        with tab_nr:
+            if unmatched_items:
+                st.caption("Ces joueurs GPS n'ont pas de saisie RPE enregistrée dans Google Sheets à la date de la séance (ou semaine) :")
+                df_nr_display = pd.DataFrame([
+                    {
+                        "Nom GPS": u.get("gps_name", ""),
+                        "Statut": "NR (Non renseigné)",
+                        "Remarque": u.get("reason", "Pas de formulaire soumis"),
+                    }
+                    for u in unmatched_items
+                ])
+                st.dataframe(df_nr_display, use_container_width=True, hide_index=True)
+            else:
+                st.success("🎉 Tous les joueurs de la séance ont une saisie RPE associée !")
     st.markdown("### 📋 Tableau de Bord Joueurs (`df_indiv`)")
 
     # Utilisation explicite du DataFrame enrichi stocké dans st.session_state['df_indiv']

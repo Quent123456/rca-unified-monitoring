@@ -952,27 +952,28 @@
         }
       },
       "rpe_stats": {
-        "equipe": 4.7,
+        "equipe": 4.8,
         "5 de devant": 4.0,
         "3ème Ligne": 4.0,
-        "Trois-quarts": 6.0,
-        "foster_equipe": 280.0,
+        "Trois-quarts": 6.2,
+        "foster_equipe": 289.1,
         "foster_5_devant": 240.0,
         "foster_3eme_ligne": 240.0,
-        "foster_trois_quarts": 360.0,
-        "rpe_moyen_equipe": 4.7,
+        "foster_trois_quarts": 375.0,
+        "rpe_moyen_equipe": 4.8,
         "rpe_moyen_5_devant": 4.0,
         "rpe_moyen_3eme_ligne": 4.0,
-        "rpe_moyen_trois_quarts": 6.0,
-        "nb_repondants_tot": 9,
+        "rpe_moyen_trois_quarts": 6.2,
+        "nb_repondants_tot": 11,
         "nb_joueurs_tot": 20,
-        "taux_reponse_pct": 45.0,
+        "taux_reponse_pct": 55.0,
         "by_poste": {
           "Pilier": 4.0,
+          "Talonneur": 4.0,
           "2ème ligne": 4.0,
           "3ème ligne": 4.0,
           "Demi d'ouverture": 5.0,
-          "Centre": 6.0,
+          "Centre": 6.3,
           "Ailier": 5.0
         }
       },
@@ -1036,10 +1037,13 @@
           "Hr Max (bpm)": 0.0,
           "Poste_Detaille": "Demi de mêlée",
           "Groupe": "Trois-quarts",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "BOEUF Elliot",
@@ -1073,10 +1077,13 @@
           "Hr Max (bpm)": 195.0,
           "Poste_Detaille": "Demi de mêlée",
           "Groupe": "Trois-quarts",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "CARPENTIER Maël",
@@ -1113,7 +1120,10 @@
           "RPE": 5.0,
           "Session_RPE": 300.0,
           "RPE_Display": "5",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "CARPENTIER Maël",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "CARPENTIER Simon",
@@ -1147,10 +1157,13 @@
           "Hr Max (bpm)": 196.0,
           "Poste_Detaille": "3ème ligne",
           "Groupe": "3ème Ligne",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "D. Anthymme",
@@ -1184,10 +1197,13 @@
           "Hr Max (bpm)": 195.0,
           "Poste_Detaille": "Talonneur",
           "Groupe": "5 de devant",
-          "RPE": null,
-          "Session_RPE": null,
-          "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE": 4.0,
+          "Session_RPE": 240.0,
+          "RPE_Display": "4",
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "DUBUS Anthyme",
+          "RPE_Match_Method": "Initiale + Nom/Prénom (0.93)",
+          "RPE_Match_Score": 0.9333333333333333
         },
         {
           "Nom ; Prénom": "DE BRUYN Octave",
@@ -1221,10 +1237,13 @@
           "Hr Max (bpm)": 42.0,
           "Poste_Detaille": "Centre",
           "Groupe": "Trois-quarts",
-          "RPE": null,
-          "Session_RPE": null,
-          "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE": 7.0,
+          "Session_RPE": 420.0,
+          "RPE_Display": "7",
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "DE BRYUN Octave",
+          "RPE_Match_Method": "Fuzzy matching (0.93)",
+          "RPE_Match_Score": 0.9333333333333333
         },
         {
           "Nom ; Prénom": "FOURNET Giovanni",
@@ -1261,7 +1280,10 @@
           "RPE": 3.0,
           "Session_RPE": 180.0,
           "RPE_Display": "3",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "FOURNET Giovanni",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "GRENET Paul",
@@ -1298,7 +1320,10 @@
           "RPE": 3.0,
           "Session_RPE": 180.0,
           "RPE_Display": "3",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "GRENET Paul",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "Jean-Étienne ( TIJ)",
@@ -1332,10 +1357,13 @@
           "Hr Max (bpm)": 0.0,
           "Poste_Detaille": "Talonneur",
           "Groupe": "5 de devant",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "MARTIN Benjamin",
@@ -1369,10 +1397,13 @@
           "Hr Max (bpm)": 0.0,
           "Poste_Detaille": "2ème ligne",
           "Groupe": "5 de devant",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "MZE Mouhayam",
@@ -1409,7 +1440,10 @@
           "RPE": 5.0,
           "Session_RPE": 300.0,
           "RPE_Display": "5",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "MZE Mouhayam",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "OPE",
@@ -1446,7 +1480,10 @@
           "RPE": 8.0,
           "Session_RPE": 480.0,
           "RPE_Display": "8",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "PELEUSEUMA Ope",
+          "RPE_Match_Method": "Token unique (1.00)",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "ORION Lucas",
@@ -1480,10 +1517,13 @@
           "Hr Max (bpm)": 0.0,
           "Poste_Detaille": "3ème ligne",
           "Groupe": "3ème Ligne",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "PECQUERY Thomas",
@@ -1520,7 +1560,10 @@
           "RPE": 5.0,
           "Session_RPE": 300.0,
           "RPE_Display": "5",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "PECQUERY Thomas",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "SOTILLO Alejo",
@@ -1554,10 +1597,13 @@
           "Hr Max (bpm)": 194.0,
           "Poste_Detaille": "3ème ligne",
           "Groupe": "3ème Ligne",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "TESSON Gabriel",
@@ -1591,10 +1637,13 @@
           "Hr Max (bpm)": 0.0,
           "Poste_Detaille": "Demi de mêlée",
           "Groupe": "Trois-quarts",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "ULMUCK Victor",
@@ -1628,10 +1677,13 @@
           "Hr Max (bpm)": 196.0,
           "Poste_Detaille": "Demi d'ouverture",
           "Groupe": "Trois-quarts",
-          "RPE": null,
-          "Session_RPE": null,
+          "RPE": NaN,
+          "Session_RPE": NaN,
           "RPE_Display": "NR",
-          "RPE_Duration": null
+          "RPE_Duration": NaN,
+          "RPE_Matched_Name": "",
+          "RPE_Match_Method": "NR",
+          "RPE_Match_Score": 0.0
         },
         {
           "Nom ; Prénom": "VASELLI Enzo",
@@ -1668,7 +1720,10 @@
           "RPE": 4.0,
           "Session_RPE": 240.0,
           "RPE_Display": "4",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "VASELLI Enzo",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "VENIN Benoît",
@@ -1705,7 +1760,10 @@
           "RPE": 4.0,
           "Session_RPE": 240.0,
           "RPE_Display": "4",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "VENIN Benoît",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         },
         {
           "Nom ; Prénom": "WAEYAERT Thomas",
@@ -1742,9 +1800,13 @@
           "RPE": 5.0,
           "Session_RPE": 300.0,
           "RPE_Display": "5",
-          "RPE_Duration": 60.0
+          "RPE_Duration": 60.0,
+          "RPE_Matched_Name": "WAEYAERT Thomas",
+          "RPE_Match_Method": "Exact / Inversion",
+          "RPE_Match_Score": 1.0
         }
-      ]
+      ],
+      "date_seance": "18/11/2026"
     }
   },
   "last_updated": "19/11/2026 14:21:46"

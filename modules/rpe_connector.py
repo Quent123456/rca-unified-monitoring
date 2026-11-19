@@ -18,6 +18,7 @@ Règles de jointure & robustesse :
 from __future__ import annotations
 
 import datetime
+import difflib
 import os
 import re
 import unicodedata
@@ -64,40 +65,39 @@ JOURS_MAP_CLEAN: Dict[str, str] = {
 }
 
 
+def normalize_player_identity(raw_name: Any) -> Tuple[str, List[str]]:
+    r"""Nettoyage et normalisation automatique de toutes les chaînes d'identité :
+    - Convertir en minuscules et supprimer les accents (unicodedata NFKD).
+    - Supprimer toute annotation entre parenthèses ou crochets (ex: (TIJ), (U21), [A]) via regex r"\([^)]*\)|\[[^\]]*\]".
+    - Supprimer la ponctuation (., -, ', _, ;, :, /) et normaliser les espaces multiples.
+    - Découper en liste de tokens (split).
+    """
+    if raw_name is None or pd.isna(raw_name):
+        return "", []
+    s = str(raw_name).strip()
+    # Supprimer parenthèses et crochets avec leur contenu (ex: (TIJ), [A])
+    s = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", s)
+    # Décomposer et supprimer les accents
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    # Supprimer la ponctuation
+    s = re.sub(r"[._\-',;:/]+", " ", s)
+    # Minuscules et espaces
+    s = " ".join(s.lower().split())
+    tokens = s.split()
+    return s, tokens
+
+
 def normalize_text_key(text: Any) -> str:
-    """
-    Normalise une chaîne de texte pour la comparaison :
-    - Nettoyage des parenthèses et préfixes boîtiers (ex: 'Jean-Étienne ( TIJ)' -> 'Jean-Étienne')
-    - Suppression totale des accents (NFKD)
-    - Remplacement des tirets, apostrophes, ponctuations par des espaces
-    - Passage en minuscules et suppression des espaces superflus début/milieu/fin
-    """
-    if text is None or pd.isna(text):
-        return ""
-    s = str(text).strip()
-    # Supprime le contenu entre parenthèses (diminutifs, surnoms comme TIJ, annotations)
-    s = re.sub(r"\(.*?\)", " ", s)
-    s = s.strip().lower()
-    # Décomposition Unicode pour éliminer les accents (é, è, ê, ï, à, etc.)
-    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-    # Remplacement des caractères non-alphanumériques par des espaces
-    s = re.sub(r"[^a-z0-9]+", " ", s)
-    return " ".join(s.split())
+    """Normalise une chaîne de texte (wrapper rétrocompatible)."""
+    norm, _ = normalize_player_identity(text)
+    return norm
 
 
 def normalize_player_name_key(name: Any) -> str:
-    """
-    Normalise impérativement le nom du joueur en majuscules sans accents ni ponctuation :
-    ex. 'LESUEUR Jean-Étienne' -> 'LESUEUR JEAN ETIENNE'
-    ex. 'Jean-Étienne ( TIJ)' -> 'JEAN ETIENNE'
-    """
-    if name is None or pd.isna(name):
-        return ""
-    s = str(name).strip()
-    s = re.sub(r"\(.*?\)", " ", s)
-    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-    s = re.sub(r"[^A-Za-z0-9]+", " ", s)
-    return " ".join(s.strip().upper().split())
+    """Normalise un nom de joueur (wrapper rétrocompatible en majuscules)."""
+    norm, _ = normalize_player_identity(name)
+    return norm.upper()
 
 
 def parse_week_number(val: Any) -> Optional[int]:
@@ -140,83 +140,243 @@ def parse_week_number(val: Any) -> Optional[int]:
 
 def normalize_weekday_str(val: Any) -> Optional[str]:
     """
-    Normalise le jour de la séance en chaîne majuscule standard :
-    'LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI', 'SAMEDI', 'DIMANCHE'.
+    Normalise une chaîne de jour de semaine en français majuscule ('MARDI', 'MERCREDI', etc.).
+    Supporte les formats 'Mardi', 'mar', 'tuesday', '2026-11-06', datetime.date, etc.
     """
     if val is None or pd.isna(val):
         return None
     if isinstance(val, (datetime.date, datetime.datetime)):
-        return JOURS_FR_STANDARDS[val.weekday()]
+        idx = val.weekday()
+        if 0 <= idx < len(JOURS_FR_STANDARDS):
+            return JOURS_FR_STANDARDS[idx]
     s = str(val).strip().lower()
-    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-    s = re.sub(r"[^a-z0-9]+", " ", s).strip()
-    for token in s.split():
-        if token in JOURS_MAP_CLEAN:
-            return JOURS_MAP_CLEAN[token]
+    if not s or s in ("nan", "none", "nat"):
+        return None
+    s_clean = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    s_clean = re.sub(r"[^a-z]+", "", s_clean)
+    if s_clean in JOURS_MAP_CLEAN:
+        return JOURS_MAP_CLEAN[s_clean]
+    for k, v in JOURS_MAP_CLEAN.items():
+        if k in s_clean:
+            return v
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            dt = datetime.datetime.strptime(str(val).strip()[:10], fmt)
+            return JOURS_FR_STANDARDS[dt.weekday()]
+        except Exception:
+            pass
     return None
 
 
-# Alias et variantes orthographiques spécifiques à l'effectif sénior RCA
-RCA_NAME_ALIASES: Dict[str, str] = {
-    "tij": "lesueur jean etienne",
-    "jean etienne tij": "lesueur jean etienne",
-    "jean etienne": "lesueur jean etienne",
-    "gabin d": "denier gabin",
-    "d anthymme": "demonchy anthymme",
-    "anthymme d": "demonchy anthymme",
-    "vdh simon": "van der heijden simon",
-    "simon vdh": "van der heijden simon",
-    "salua makatea": "salua landry",
-    "harry maxence": "harry max",
-    "maxence harry": "harry max",
-    "bams": "panizzo demian",
-    "bam s": "panizzo demian",
-    "demian panizzo": "panizzo demian",
-}
+def compare_identities(norm_g: str, tokens_g: List[str], norm_c: str, tokens_c: List[str]) -> Tuple[float, str]:
+    """Compare deux identités normalisées selon la cascade générique multi-critères (zéro hardcoding) :
+    - Niveau 1 : Match exact ou inversion Nom/Prénom
+    - Niveau 2 : Match par initiale + prénom/nom
+    - Niveau 3 : Match par token unique (prénom seul ou nom seul)
+    - Niveau 4 : Similarité floue (Fuzzy matching)
+    """
+    if not norm_g or not norm_c:
+        return 0.0, "None"
+
+    # Niveau 1 — Match exact ou inversion Nom/Prénom
+    if norm_g == norm_c or (len(tokens_g) >= 2 and len(tokens_c) >= 2 and set(tokens_g) == set(tokens_c)):
+        return 1.0, "Exact / Inversion"
+
+    # Niveau 2 — Match par initiale + prénom/nom (ex: 'd anthymme' vs 'dubus anthyme')
+    def _check_initial_match(t_short: List[str], t_long: List[str]) -> Tuple[float, bool]:
+        inits = [t for t in t_short if len(t) == 1]
+        words = [t for t in t_short if len(t) >= 3]
+        if len(inits) == 1 and len(words) >= 1 and len(t_long) >= 2:
+            init = inits[0]
+            matching_init_cand = [t for t in t_long if t.startswith(init)]
+            if matching_init_cand:
+                other_long = [t for t in t_long if t not in matching_init_cand]
+                best_sim = 0.0
+                for w in words:
+                    for o in other_long:
+                        sim = difflib.SequenceMatcher(None, w, o).ratio()
+                        if sim > best_sim:
+                            best_sim = sim
+                if best_sim >= 0.80:
+                    return best_sim, True
+        return 0.0, False
+
+    sim_init, ok_init = _check_initial_match(tokens_g, tokens_c)
+    if not ok_init:
+        sim_init, ok_init = _check_initial_match(tokens_c, tokens_g)
+    if ok_init:
+        return sim_init, f"Initiale + Nom/Prénom ({sim_init:.2f})"
+
+    # Niveau 3 — Match par token unique (prénom seul ou nom seul)
+    if len(tokens_g) == 1 and len(tokens_g[0]) >= 3:
+        w = tokens_g[0]
+        best_sim = 0.0
+        for c_tok in tokens_c:
+            sim = difflib.SequenceMatcher(None, w, c_tok).ratio()
+            if sim > best_sim:
+                best_sim = sim
+        if best_sim >= 0.85:
+            return best_sim, f"Token unique ({best_sim:.2f})"
+
+    # Niveau 4 — Similarité floue (Fuzzy matching)
+    ratio_full = difflib.SequenceMatcher(None, norm_g, norm_c).ratio()
+
+    if len(tokens_g) >= 2 and len(tokens_c) >= 2:
+        tok_scores = []
+        for tg in tokens_g:
+            best_t = max(difflib.SequenceMatcher(None, tg, tc).ratio() for tc in tokens_c)
+            tok_scores.append(best_t)
+        ratio_tokens = sum(tok_scores) / len(tok_scores)
+    else:
+        ratio_tokens = ratio_full
+
+    score_combined = max(ratio_full, ratio_tokens)
+    if score_combined >= 0.82:
+        return score_combined, f"Fuzzy matching ({score_combined:.2f})"
+
+    return score_combined, "None"
 
 
 def are_player_names_matching(name_gps: str, name_rpe: str) -> bool:
-    """
-    Vérifie si le nom du joueur GPS (issu du mapping de séance) correspond au nom
-    saisi dans le Google Sheets RPE :
-    1. Égalité stricte après normalisation textuelle (sans accents, sans ponctuation, minuscules).
-    2. Correspondance canonique d'alias RCA (ex: 'Jean-Étienne ( TIJ)' <-> 'LESUEUR Jean-Étienne').
-    3. Permutation libre des tokens (ex: 'DUPONT Antoine' == 'Antoine DUPONT').
-    3. Permutation libre des tokens (ex: 'VASELLI Enzo' == 'Enzo VASELLI').
-    4. Inclusion mutuelle de tokens (ex: 'PECQUERY Thomas' vs 'Pecquery').
-    """
-    norm_g = normalize_text_key(name_gps)
-    norm_r = normalize_text_key(name_rpe)
+    """Vérifie si deux noms de joueurs correspondent (100% générique, sans aucun alias en dur)."""
+    norm_g, tokens_g = normalize_player_identity(name_gps)
+    norm_r, tokens_r = normalize_player_identity(name_rpe)
     if not norm_g or not norm_r:
         return False
+    score, method = compare_identities(norm_g, tokens_g, norm_r, tokens_r)
+    return method != "None" and score >= 0.82
 
-    # 1. Égalité directe
-    if norm_g == norm_r:
-        return True
 
-    # 2. Alias canoniques RCA
-    canon_g = RCA_NAME_ALIASES.get(norm_g, norm_g)
-    canon_r = RCA_NAME_ALIASES.get(norm_r, norm_r)
-    if canon_g == canon_r:
-        return True
+def match_player_rpe(
+    gps_name: str,
+    candidates_df: Any,
+    effectif_df: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    """Associe un joueur GPS à un enregistrement RPE de manière 100% automatique et générique (zéro hardcoding).
+    
+    Retourne un dict avec les détails du matching ou None si non trouvé.
+    """
+    norm_g, tokens_g = normalize_player_identity(gps_name)
+    if not norm_g:
+        return None
 
-    # 3. Correspondance par ensemble de tokens (tolérance totale inversion Nom/Prénom)
-    tokens_g = set(norm_g.split())
-    tokens_r = set(norm_r.split())
-    if tokens_g and tokens_r and tokens_g == tokens_r:
-        return True
+    # Conversion des candidats en liste standardisée de dicts
+    candidates: List[Dict[str, Any]] = []
+    if isinstance(candidates_df, pd.DataFrame):
+        for _, row in candidates_df.iterrows():
+            c_name = str(row.get("Nom / Prenom", row.get("nom_complet", row.get("Nom", "")))).strip()
+            rpe_val = parse_rpe_value(row.get("RPE (Chiffre)", row.get("rpe", row.get("RPE"))))
+            dur_val = parse_duration_minutes(row.get("Duree (min)", row.get("duree", row.get("Duree", 60))))
+            s_rpe = round(float(rpe_val) * float(dur_val), 1) if rpe_val is not None else 0.0
+            candidates.append({
+                "nom_complet": c_name,
+                "rpe": float(rpe_val) if rpe_val is not None else None,
+                "duree": float(dur_val),
+                "session_rpe": s_rpe,
+            })
+    elif isinstance(candidates_df, list):
+        for item in candidates_df:
+            if isinstance(item, dict):
+                c_name = str(item.get("nom_complet", item.get("Nom / Prenom", item.get("Nom", "")))).strip()
+                rpe_val = item.get("rpe", item.get("RPE"))
+                dur_val = item.get("duree", item.get("Duree", 60))
+                s_rpe = item.get("session_rpe", round(float(rpe_val or 0) * float(dur_val or 60), 1))
+                candidates.append({
+                    "nom_complet": c_name,
+                    "rpe": float(rpe_val) if rpe_val is not None else None,
+                    "duree": float(dur_val),
+                    "session_rpe": float(s_rpe),
+                })
 
-    # 4. Inclusion si un prénom ou un nom seul est renseigné
-    if tokens_g and tokens_r and (tokens_g.issubset(tokens_r) or tokens_r.issubset(tokens_g)):
-        return True
+    # Étape 1 : Rapprochement direct avec les candidats RPE du jour
+    ranked_candidates = []
+    for c in candidates:
+        norm_c, tokens_c = normalize_player_identity(c.get("nom_complet", ""))
+        score, method = compare_identities(norm_g, tokens_g, norm_c, tokens_c)
+        if method != "None":
+            ranked_candidates.append({
+                "candidate": c,
+                "score": score,
+                "method": method,
+                "norm_c": norm_c,
+            })
 
-    # 5. Tokens sur noms canonisés
-    tokens_cg = set(canon_g.split())
-    tokens_cr = set(canon_r.split())
-    if tokens_cg and tokens_cr and (tokens_cg == tokens_cr or tokens_cg.issubset(tokens_cr) or tokens_cr.issubset(tokens_cg)):
-        return True
+    if ranked_candidates:
+        ranked_candidates.sort(key=lambda x: x["score"], reverse=True)
+        top = ranked_candidates[0]
 
-    return False
+        # Si Niveau 3 (Token unique) : rejet si ambiguïté entre 2 candidats du jour (ex: deux "Thomas")
+        if "Token unique" in top["method"]:
+            if len(ranked_candidates) > 1 and ranked_candidates[1]["score"] >= 0.85:
+                return None
+            return {
+                "matched_name": top["candidate"]["nom_complet"],
+                "score": top["score"],
+                "method": top["method"],
+                "rpe": top["candidate"].get("rpe"),
+                "duree": top["candidate"].get("duree"),
+                "session_rpe": top["candidate"].get("session_rpe"),
+            }
+
+        # Si Niveau 4 (Fuzzy matching) : rejet si trop proche du 2e candidat
+        if "Fuzzy matching" in top["method"]:
+            if len(ranked_candidates) > 1 and (top["score"] - ranked_candidates[1]["score"] < 0.08):
+                return None
+            return {
+                "matched_name": top["candidate"]["nom_complet"],
+                "score": top["score"],
+                "method": top["method"],
+                "rpe": top["candidate"].get("rpe"),
+                "duree": top["candidate"].get("duree"),
+                "session_rpe": top["candidate"].get("session_rpe"),
+            }
+
+        return {
+            "matched_name": top["candidate"]["nom_complet"],
+            "score": top["score"],
+            "method": top["method"],
+            "rpe": top["candidate"].get("rpe"),
+            "duree": top["candidate"].get("duree"),
+            "session_rpe": top["candidate"].get("session_rpe"),
+        }
+
+    # Étape 2 : Enrichissement dynamique via l'onglet Effectif
+    eff_list: List[Dict[str, Any]] = []
+    if effectif_df is not None:
+        if isinstance(effectif_df, pd.DataFrame):
+            eff_list = effectif_df.to_dict(orient="records")
+        elif isinstance(effectif_df, list):
+            eff_list = effectif_df
+
+    if eff_list:
+        matched_eff = []
+        for p in eff_list:
+            nom_p = f"{p.get('nom', p.get('Nom', ''))} {p.get('prenom', p.get('Prénom', p.get('Prenom', '')))}".strip()
+            norm_e, tokens_e = normalize_player_identity(nom_p)
+            score_e, method_e = compare_identities(norm_g, tokens_g, norm_e, tokens_e)
+            if method_e != "None":
+                matched_eff.append({"player": p, "score": score_e, "method": method_e, "full_name": nom_p})
+
+        if matched_eff:
+            matched_eff.sort(key=lambda x: x["score"], reverse=True)
+            # Vérifier qu'il y a unicité dans Effectif
+            if len(matched_eff) == 1 or (matched_eff[0]["score"] >= 0.90 and matched_eff[0]["score"] - matched_eff[1]["score"] >= 0.10):
+                target_eff_p = matched_eff[0]
+                norm_eff_p, tokens_eff_p = normalize_player_identity(target_eff_p["full_name"])
+                for c in candidates:
+                    norm_c, tokens_c = normalize_player_identity(c.get("nom_complet", ""))
+                    sc_c, meth_c = compare_identities(norm_eff_p, tokens_eff_p, norm_c, tokens_c)
+                    if meth_c != "None" and sc_c >= 0.85:
+                        return {
+                            "matched_name": c["nom_complet"],
+                            "score": sc_c,
+                            "method": f"Via Effectif ({target_eff_p['method']})",
+                            "rpe": c.get("rpe"),
+                            "duree": c.get("duree"),
+                            "session_rpe": c.get("session_rpe"),
+                        }
+
+    return None
 
 
 def parse_and_normalize_date(date_val: Any) -> Optional[datetime.date]:
@@ -447,6 +607,35 @@ def fetch_raw_rpe_data() -> pd.DataFrame:
             return df
     except Exception as e:
         print(f"Erreur lecture CSV direct : {e}")
+    try:
+        from modules.gsheets import read_saisies_as_df
+        df_sec = read_saisies_as_df()
+        if df_sec is not None and not df_sec.empty:
+            return df_sec
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_effectif_data() -> pd.DataFrame:
+    """Charge dynamiquement l'onglet Effectif depuis Google Sheets comme table de référence vivante."""
+    try:
+        from modules.gsheet_sync import get_players
+        df = get_players()
+        if df is not None and not df.empty:
+            return df
+    except Exception:
+        pass
+    try:
+        from modules.gsheets import get_spreadsheet, execute_with_retry
+        sh = get_spreadsheet()
+        if sh:
+            ws = execute_with_retry(lambda: sh.worksheet("Effectif"))
+            records = execute_with_retry(lambda: ws.get_all_records())
+            return pd.DataFrame(records)
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
@@ -574,15 +763,15 @@ def enrich_gps_dataframe_with_rpe(
     mapping_gps: Optional[Dict[Any, str]] = None,
     week_number: Optional[int] = None,
     weekday: Optional[str] = None,
+    effectif_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Enrichit le DataFrame GPS Catapult (df_indiv) avec les valeurs RPE individuelles :
-    - Correspondance obligatoire par croisement du Nom du Joueur (résolu via le mapping de séance),
-      du Numéro de Semaine (week_number, ex. 45) et du Jour de séance (weekday, ex. 'Vendredi').
-    - Normalisation stricte des chaînes des deux côtés (majuscules, suppression des accents et des espaces superflus).
+    - Rapprochement 100% automatique et générique via match_player_rpe() (zéro hardcoding).
     - Note de difficulté RPE castée impérativement en float numérique.
     - Si un joueur n'a pas répondu : RPE = np.nan, RPE_Display = 'NR'.
     - Charge Foster calculée : Session_RPE = RPE × Durée (min).
+    - Stocke les détails du matching dans df_out et dans st.session_state["rpe_matching_report"].
     """
     if df_gps is None or not isinstance(df_gps, pd.DataFrame) or df_gps.empty:
         return df_gps
@@ -601,7 +790,6 @@ def enrich_gps_dataframe_with_rpe(
         if target_weekday is None:
             target_weekday = normalize_weekday_str(session_date)
         if target_week is None:
-            target_week = parse_week_number(session_date) or 45
             target_week = parse_week_number(session_date)
 
     c_gps_player = find_column_by_aliases(df_out, ["Nom ; Prénom", "Player Name", "Athlete Name", "Joueur", "Nom"])
@@ -659,12 +847,18 @@ def enrich_gps_dataframe_with_rpe(
     if df_rpe is None or df_rpe.empty:
         df_rpe = fetch_raw_rpe_data()
 
+    if effectif_df is None or (isinstance(effectif_df, pd.DataFrame) and effectif_df.empty):
+        effectif_df = fetch_effectif_data()
+
     # Si aucune donnée RPE n'est disponible
     if df_rpe is None or df_rpe.empty:
         df_out["RPE"] = np.nan
         df_out["Session_RPE"] = np.nan
         df_out["RPE_Display"] = "NR"
         df_out["RPE_Duration"] = np.nan
+        df_out["RPE_Matched_Name"] = ""
+        df_out["RPE_Match_Method"] = "NR"
+        df_out["RPE_Match_Score"] = 0.0
         return df_out
 
     cols_map = identify_rpe_columns(df_rpe)
@@ -677,16 +871,11 @@ def enrich_gps_dataframe_with_rpe(
     col_rpe = cols_map["col_rpe"]
     col_dur = cols_map["col_duration"]
 
-    # Construction de la liste des réponses RPE pour la séance cible
-    # [(raw_player_name, (rpe_val, session_rpe, duration))]
-    rpe_entries_for_date: List[Tuple[str, Tuple[float, float, float]]] = []
-    # Construction des listes de réponses RPE (Exact jour/date prioritaire, sinon même semaine)
-    rpe_entries_exact: List[Tuple[str, Tuple[float, float, float]]] = []
-    rpe_entries_week: List[Tuple[str, Tuple[float, float, float]]] = []
-    target_year = target_dt.year if target_dt is not None else None
+    # Construction des candidats RPE prioritaires (exact date/jour) et secondaires (même semaine)
+    candidates_exact: List[Dict[str, Any]] = []
+    candidates_week: List[Dict[str, Any]] = []
 
     for _, r in df_rpe.iterrows():
-        # 1. Extraction souple Semaine / Jour / Date
         r_week = parse_week_number(r[col_week]) if col_week and col_week in r else None
         r_day = normalize_weekday_str(r[col_day]) if col_day and col_day in r else None
         r_date = parse_and_normalize_date(r[col_date]) if col_date and col_date in r else None
@@ -694,26 +883,7 @@ def enrich_gps_dataframe_with_rpe(
         if r_date is not None and r_week is None:
             r_week = r_date.isocalendar()[1]
 
-        # CORRECTION TOLÉRANTE : Match si la semaine correspond, 
-        # ou si aucune semaine n'est spécifiée, ou par défaut sur la semaine active (45)
-        match_session = False
-        if target_week is not None:
-            if r_week is not None and int(r_week) == int(target_week):
-                match_session = True
-            elif r_week is None:
-                # Si la semaine n'est pas remplie dans le GSheet, on inclut par défaut
-                match_session = True
-        else:
-            match_session = True
-        # Exclure les lignes dont la date appartient clairement à une autre année
-        if target_year is not None and r_date is not None:
-            if abs(r_date.isocalendar()[0] - target_dt.isocalendar()[0]) > 0:
-                continue
-
-        if not match_session:
-            continue
-
-        # 3. Construction du nom complet du joueur
+        # Extraire le nom du joueur dans Saisies
         full_name_str = ""
         if col_player and col_player in r and pd.notna(r[col_player]):
             full_name_str = str(r[col_player]).strip()
@@ -727,7 +897,6 @@ def enrich_gps_dataframe_with_rpe(
         if not full_name_str:
             continue
 
-        # 4. Extraction de la valeur RPE (castée en float) et de la durée
         try:
             from modules.gsheet_sync import is_fictional_test_player
             if is_fictional_test_player(full_name_str):
@@ -739,90 +908,114 @@ def enrich_gps_dataframe_with_rpe(
         if rpe_val is None:
             continue
 
-        dur_val = parse_duration_minutes(r[col_dur]) if col_dur and col_dur in r else 80.0
-        session_rpe = round(float(rpe_val) * float(dur_val), 1)
-        payload = (float(rpe_val), session_rpe, float(dur_val))
+        dur_val = parse_duration_minutes(r[col_dur]) if col_dur and col_dur in r else 60.0
+        s_rpe = round(float(rpe_val) * float(dur_val), 1)
+        payload = {
+            "nom_complet": full_name_str,
+            "rpe": float(rpe_val),
+            "duree": float(dur_val),
+            "session_rpe": s_rpe,
+        }
 
-        rpe_entries_for_date.append((full_name_str, (float(rpe_val), session_rpe, float(dur_val))))
-        is_same_week = (target_week is None) or (r_week is not None and int(r_week) == int(target_week))
-        if not is_same_week and target_dt is not None and r_date is not None and r_date == target_dt:
-            is_same_week = True
-        if not is_same_week:
-            continue
-
-    # SÉCURITÉ ABSOLUE : Si toujours 0 entrée trouvée, on prend les 30 dernières lignes de la feuille brute
-    if not rpe_entries_for_date and not df_rpe.empty:
-        for _, r in df_rpe.tail(30).iterrows():
-            full_name_str = ""
-            if col_player and col_player in r and pd.notna(r[col_player]):
-                full_name_str = str(r[col_player]).strip()
-            elif col_nom and col_prenom and col_nom in r and col_prenom in r:
-                full_name_str = f"{r[col_nom]} {r[col_prenom]}".strip()
-            elif col_nom and col_nom in r and pd.notna(r[col_nom]):
-                full_name_str = str(r[col_nom]).strip()
+        # Filtrage par date/séance
         is_exact_day = (
             (target_dt is not None and r_date is not None and r_date == target_dt)
-            or (target_weekday is not None and r_day is not None and r_day == target_weekday)
+            or (target_weekday is not None and r_day is not None and r_day == target_weekday and target_week is not None and r_week == target_week)
         )
+        is_same_week = (target_week is not None and r_week is not None and int(r_week) == int(target_week))
+
         if is_exact_day:
-            rpe_entries_exact.append((full_name_str, payload))
-        else:
-            rpe_entries_week.append((full_name_str, payload))
+            candidates_exact.append(payload)
+        elif is_same_week:
+            candidates_week.append(payload)
 
-            rpe_val = parse_rpe_value(r[col_rpe]) if col_rpe and col_rpe in r else None
-            if full_name_str and rpe_val is not None:
-                dur_val = parse_duration_minutes(r[col_dur]) if col_dur and col_dur in r else 80.0
-                session_rpe = round(float(rpe_val) * float(dur_val), 1)
-                rpe_entries_for_date.append((full_name_str, (float(rpe_val), session_rpe, float(dur_val))))
+    # Si des candidats pour le jour exact existent, on s'y restreint strictement.
+    # Sinon (ex: date inconnue ou aucun horodateur précis), repli sur la semaine.
+    pool_primary = candidates_exact if candidates_exact else candidates_week
+    pool_secondary = []
 
-    # 5. Jointure sécurisée avec le tableau GPS (normalisation des deux côtés)
-    # 5. Jointure sécurisée avec le tableau GPS (exact jour d'abord, puis semaine si absent)
     rpe_col_vals: List[Optional[float]] = []
     srpe_col_vals: List[Optional[float]] = []
     disp_col_vals: List[str] = []
     dur_col_vals: List[Optional[float]] = []
+    matched_names: List[str] = []
+    match_methods: List[str] = []
+    match_scores: List[float] = []
 
-    def _find_best_match(p_name: str, entries: List[Tuple[str, Tuple[float, float, float]]]) -> Optional[Tuple[float, float, float]]:
-        norm_g = normalize_player_name_key(p_name)
-        for r_name_raw, entry in reversed(entries):
-            norm_r = normalize_player_name_key(r_name_raw)
-            if norm_g and norm_r and (
-                norm_g == norm_r
-                or set(norm_g.split()) == set(norm_r.split())
-                or are_player_names_matching(p_name, r_name_raw)
-            ):
-                return entry
-        return None
+    matched_report_list: List[Dict[str, Any]] = []
+    unmatched_report_list: List[Dict[str, Any]] = []
 
     for _, row in df_out.iterrows():
         p_name = str(row[c_gps_player]).strip() if c_gps_player and c_gps_player in row else ""
-        norm_g = normalize_player_name_key(p_name)
-        matched_entry: Optional[Tuple[float, float, float]] = None
-        matched_entry = _find_best_match(p_name, rpe_entries_exact) or _find_best_match(p_name, rpe_entries_week)
+        if not p_name:
+            rpe_col_vals.append(np.nan)
+            srpe_col_vals.append(np.nan)
+            disp_col_vals.append("NR")
+            dur_col_vals.append(np.nan)
+            matched_names.append("")
+            match_methods.append("NR")
+            match_scores.append(0.0)
+            continue
 
-        # Recherche de correspondance par algorithme tolérant nom/prénom/alias
-        for r_name_raw, entry in reversed(rpe_entries_for_date):
-            norm_r = normalize_player_name_key(r_name_raw)
-            if norm_g and norm_r and (norm_g == norm_r or set(norm_g.split()) == set(norm_r.split()) or are_player_names_matching(p_name, r_name_raw)):
-                matched_entry = entry
-                break
+        match_res = match_player_rpe(p_name, pool_primary, effectif_df)
+        if not match_res and pool_secondary:
+            match_res = match_player_rpe(p_name, pool_secondary, effectif_df)
 
-        if matched_entry is not None:
-            r_val, s_rpe, dur = matched_entry
+        if match_res:
+            r_val = match_res["rpe"]
+            s_rpe = match_res["session_rpe"]
+            dur = match_res["duree"]
             rpe_col_vals.append(r_val)
             srpe_col_vals.append(s_rpe)
             disp_col_vals.append(f"{r_val:.1f}" if abs(r_val - round(r_val)) > 0.05 else f"{int(round(r_val))}")
             dur_col_vals.append(dur)
+            matched_names.append(match_res["matched_name"])
+            match_methods.append(match_res["method"])
+            match_scores.append(match_res["score"])
+
+            matched_report_list.append({
+                "gps_name": p_name,
+                "sheet_name": match_res["matched_name"],
+                "score": match_res["score"],
+                "method": match_res["method"],
+                "rpe": r_val,
+                "duree": dur,
+                "session_rpe": s_rpe,
+            })
         else:
             rpe_col_vals.append(np.nan)
             srpe_col_vals.append(np.nan)
             disp_col_vals.append("NR")
             dur_col_vals.append(np.nan)
+            matched_names.append("")
+            match_methods.append("NR")
+            match_scores.append(0.0)
+
+            unmatched_report_list.append({
+                "gps_name": p_name,
+                "reason": "Aucune saisie RPE trouvée pour cette séance",
+            })
 
     df_out["RPE"] = rpe_col_vals
     df_out["Session_RPE"] = srpe_col_vals
     df_out["RPE_Display"] = disp_col_vals
     df_out["RPE_Duration"] = dur_col_vals
+    df_out["RPE_Matched_Name"] = matched_names
+    df_out["RPE_Match_Method"] = match_methods
+    df_out["RPE_Match_Score"] = match_scores
+
+    # Enregistrer le rapport de matching dans st.session_state
+    try:
+        st.session_state["rpe_matching_report"] = {
+            "session_date": str(session_date),
+            "matched": matched_report_list,
+            "unmatched": unmatched_report_list,
+            "total_gps": len(df_out),
+            "total_matched": len(matched_report_list),
+            "total_nr": len(unmatched_report_list),
+        }
+    except Exception:
+        pass
 
     return df_out
 
