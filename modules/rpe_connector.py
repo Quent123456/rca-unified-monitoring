@@ -442,6 +442,8 @@ def fetch_raw_rpe_data() -> pd.DataFrame:
     try:
         df = pd.read_csv(csv_url)
         if df is not None and not df.empty:
+            if "Cle de recherche" in df.columns:
+                df = df.drop_duplicates(subset=["Cle de recherche"], keep="last")
             return df
     except Exception as e:
         print(f"Erreur lecture CSV direct : {e}")
@@ -1060,7 +1062,10 @@ def filter_rpe_rows_for_week(
         if match_week:
             kept_idx.append(idx)
 
-    return df_rpe.loc[kept_idx].copy() if kept_idx else pd.DataFrame()
+    res = df_rpe.loc[kept_idx].copy() if kept_idx else pd.DataFrame()
+    if not res.empty and "Cle de recherche" in res.columns:
+        res = res.drop_duplicates(subset=["Cle de recherche"], keep="last")
+    return res
 
 
 def compute_direct_week_rpe_by_category(

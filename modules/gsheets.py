@@ -77,37 +77,113 @@ JOUR_COLUMN_MAP = {
 }
 
 
+# ── Retry & Backoff Google Sheets API ──────────────────────────────────────────
+
+def execute_with_retry(
+    func: Callable[..., Any],
+    max_attempts: int = 3,
+    initial_delay: float = 1.0,
+    backoff_factor: float = 2.0,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Exécute une fonction avec retry exponentiel (3 tentatives) en cas d'erreur 429 / APIError / réseau."""
+    delay = initial_delay
+    last_err: Optional[Exception] = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            is_transient = (
+                isinstance(e, gspread.exceptions.APIError)
+                or "429" in err_str
+                or "quota" in err_str
+                or "rate limit" in err_str
+                or "resource_exhausted" in err_str
+                or "503" in err_str
+                or "500" in err_str
+                or "502" in err_str
+                or "timeout" in err_str
+                or "connection" in err_str
+            )
+            if attempt < max_attempts and is_transient:
+                time.sleep(delay)
+                delay *= backoff_factor
+            else:
+                raise last_err
+
+
 # ── Authentification ───────────────────────────────────────────────────────────
 
 @st.cache_resource(ttl=3600)
 def get_gspread_client() -> Optional[gspread.Client]:
     """
     Retourne un client gspread authentifié via Service Account.
-    Les credentials sont lus depuis st.secrets["gcp_service_account"].
+    Prend en charge st.secrets["gcp_service_account"] et st.secrets["connections"]["gsheets"].
     Retourne None si les secrets ne sont pas configurés.
     """
     try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds_dict: Optional[dict] = None
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+        elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+            conn_conf = st.secrets["connections"]["gsheets"]
+            if isinstance(conn_conf, dict):
+                if "project_id" in conn_conf and "private_key" in conn_conf:
+                    creds_dict = dict(conn_conf)
+                elif "service_account" in conn_conf:
+                    sa = conn_conf["service_account"]
+                    creds_dict = dict(sa) if isinstance(sa, dict) else json.loads(sa)
+
+        if not creds_dict:
+            return None
+
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         client = gspread.authorize(creds)
         return client
-    except KeyError:
-        return None
     except Exception as e:
         st.error(f"Erreur d'authentification Google : {e}")
         return None
 
 
 def get_spreadsheet() -> Optional[gspread.Spreadsheet]:
-    """Ouvre le fichier Google Sheets cible."""
+    """Ouvre le fichier Google Sheets cible avec retry exponentiel."""
     client = get_gspread_client()
     if client is None:
         return None
+
+    target_sheet = None
+    if "spreadsheet_url" in st.secrets:
+        target_sheet = str(st.secrets["spreadsheet_url"]).strip()
+    elif "spreadsheet_name" in st.secrets:
+        target_sheet = str(st.secrets["spreadsheet_name"]).strip()
+    elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        conn_conf = st.secrets["connections"]["gsheets"]
+        if isinstance(conn_conf, dict) and "spreadsheet" in conn_conf:
+            target_sheet = str(conn_conf["spreadsheet"]).strip()
+
+    if not target_sheet:
+        target_sheet = SPREADSHEET_NAME
+
+    def _open():
+        if target_sheet.startswith("http"):
+            return client.open_by_url(target_sheet)
+        elif len(target_sheet) > 30 and "/" not in target_sheet and " " not in target_sheet:
+            try:
+                return client.open_by_key(target_sheet)
+            except Exception:
+                return client.open(target_sheet)
+        else:
+            return client.open(target_sheet)
+
     try:
-        return client.open(SPREADSHEET_NAME)
+        return execute_with_retry(_open, max_attempts=3, initial_delay=1.0)
     except gspread.SpreadsheetNotFound:
         st.error(
-            f"Fichier '{SPREADSHEET_NAME}' introuvable. "
+            f"Fichier '{target_sheet}' introuvable. "
             "Vérifiez qu'il est partagé avec le Service Account."
         )
         return None
@@ -122,9 +198,9 @@ def _get_or_create_sheet(spreadsheet: gspread.Spreadsheet,
                           title: str) -> gspread.Worksheet:
     """Retourne l'onglet s'il existe, le crée sinon."""
     try:
-        return spreadsheet.worksheet(title)
+        return execute_with_retry(lambda: spreadsheet.worksheet(title), max_attempts=3)
     except gspread.WorksheetNotFound:
-        return spreadsheet.add_worksheet(title=title, rows=1000, cols=30)
+        return execute_with_retry(lambda: spreadsheet.add_worksheet(title=title, rows=1000, cols=30), max_attempts=3)
 
 
 def init_sheets() -> bool:
@@ -144,29 +220,35 @@ def init_sheets() -> bool:
 
 
 def _init_saisies(spreadsheet: gspread.Spreadsheet) -> None:
-    """Initialise l'onglet Saisies avec les en-têtes de Form_Responses."""
+    """Initialise l'onglet Saisies avec les 12 en-têtes officiels."""
     ws = _get_or_create_sheet(spreadsheet, SHEET_SAISIES)
-    headers = ws.row_values(1)
-    if not headers:
-        ws.update(
-            "A1:L1",
-            [[
-                "Clé de recherche",
-                "Horodateur",
-                "Difficulté séance (RPE texte)",
-                "Ressenti / Notes",
-                "Nom / Prénom",
-                "Poste",
-                "Numéro Semaine",
-                "Jour semaine",
-                "RPE (Chiffre)",
-                "Durée (min)",
-                "Charge (UA)",
-                "Fatigue | Courbatures | Sommeil",
-            ]],
+    headers = execute_with_retry(lambda: ws.row_values(1), max_attempts=3)
+    if not headers or headers[0] != "Cle de recherche":
+        execute_with_retry(
+            lambda: ws.update(
+                "A1:L1",
+                [[
+                    "Cle de recherche",
+                    "Horodateur",
+                    "Difficulte seance",
+                    "Ressenti / Notes",
+                    "Nom / Prenom",
+                    "Poste",
+                    "Numero Semaine",
+                    "Jour seance",
+                    "RPE (Chiffre)",
+                    "Duree (min)",
+                    "Charge (UA)",
+                    "Fatigue | Courbatures | Sommeil",
+                ]],
+            ),
+            max_attempts=3
         )
         # Formatage en-têtes (gras)
-        ws.format("A1:L1", {"textFormat": {"bold": True}})
+        try:
+            ws.format("A1:L1", {"textFormat": {"bold": True}})
+        except Exception:
+            pass
 
 
 def _init_rpe_indv(spreadsheet: gspread.Spreadsheet) -> None:
@@ -249,6 +331,125 @@ def _init_rpe_ligne_mois(spreadsheet: gspread.Spreadsheet) -> None:
 
 # ── ÉCRITURE — Onglet Saisies ──────────────────────────────────────────────────
 
+def append_or_update_saisie(
+    nom_prenom: str,
+    poste: str,
+    semaine: int,
+    jour: str,
+    rpe: float,
+    duree: float,
+    charge: float,
+    fatigue: int = 3,
+    courbatures: int = 3,
+    sommeil: int = 3,
+    notes: str = "",
+    is_rest: bool = False,
+    groupe_entrainement: str = "",
+) -> bool:
+    """
+    Enregistre une saisie dans l'onglet 'Saisies' de façon 100% sécurisée :
+    - N'ÉCRASE JAMAIS la feuille entière (aucun clear/update global).
+    - Si la clé de recherche existe déjà (doublon / modification), met à jour uniquement la ligne ciblée A{row}:L{row}.
+    - Sinon, ajoute la nouvelle ligne en fin de feuille via append_rows (append-only).
+    - Protégé par retry exponentiel (3 tentatives) contre les erreurs 429 / APIError.
+    """
+    spreadsheet = get_spreadsheet()
+    if spreadsheet is None:
+        return False
+
+    try:
+        ws = execute_with_retry(lambda: spreadsheet.worksheet(SHEET_SAISIES), max_attempts=3)
+    except gspread.WorksheetNotFound:
+        init_sheets()
+        ws = execute_with_retry(lambda: spreadsheet.worksheet(SHEET_SAISIES), max_attempts=3)
+
+    horodateur = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cle = f"{semaine}{nom_prenom.replace(' ', '')}"
+    rpe_int = int(rpe) if not is_rest else 0
+    difficulte = RPE_LABELS.get(rpe_int, str(rpe)) if not is_rest else "Repos"
+
+    clean_notes = str(notes or "").strip()
+    if clean_notes and groupe_entrainement:
+        notes_formatted = f"[{groupe_entrainement}] {clean_notes}"
+    elif groupe_entrainement:
+        notes_formatted = f"[{groupe_entrainement}]"
+    else:
+        notes_formatted = clean_notes
+
+    bien_etre = f"Fatigue:{fatigue} | Courbatures:{courbatures} | Sommeil:{sommeil}"
+
+    actual_rpe = rpe if not is_rest else 0
+    actual_duree = duree if not is_rest else 0
+    actual_charge = charge if not is_rest else 0
+
+    row = [
+        cle,
+        horodateur,
+        difficulte,
+        notes_formatted,
+        nom_prenom,
+        poste,
+        int(semaine),
+        jour,
+        actual_rpe,
+        actual_duree,
+        actual_charge,
+        bien_etre,
+    ]
+
+    try:
+        # Recherche ciblée de la ligne existante par Cle de recherche
+        existing_keys = []
+        try:
+            existing_keys = execute_with_retry(lambda: ws.col_values(1), max_attempts=3)
+        except Exception:
+            # Fallback direct en append si col_values échoue
+            existing_keys = []
+
+        target_row_idx = None
+        if cle in existing_keys:
+            target_row_idx = existing_keys.index(cle) + 1  # 1-based index
+
+        if target_row_idx and target_row_idx > 1:
+            # Modification ciblée de la ligne uniquement
+            execute_with_retry(
+                lambda: ws.update(
+                    f"A{target_row_idx}:L{target_row_idx}",
+                    [row],
+                    value_input_option="USER_ENTERED",
+                ),
+                max_attempts=3,
+            )
+        else:
+            # Ajout sécurisé en fin de feuille (append-only)
+            execute_with_retry(
+                lambda: ws.append_rows([row], value_input_option="USER_ENTERED"),
+                max_attempts=3,
+            )
+
+        # Invalidation immédiate du cache Streamlit
+        st.cache_data.clear()
+
+        # Mise à jour synchronisée de l'onglet RPE INDV
+        try:
+            update_rpe_indv(
+                nom_prenom=nom_prenom,
+                poste=poste,
+                semaine=int(semaine),
+                jour=jour,
+                rpe=float(actual_rpe),
+                duree=float(actual_duree),
+                charge=float(actual_charge),
+            )
+        except Exception:
+            pass
+
+        return True
+    except Exception as e:
+        st.error(f"Erreur écriture Saisies : {e}")
+        return False
+
+
 def append_saisie_row(
     nom_prenom: str,
     poste: str,
@@ -263,60 +464,21 @@ def append_saisie_row(
     notes: str = "",
     is_rest: bool = False,
 ) -> bool:
-    """
-    Ajoute une ligne dans l'onglet 'Saisies' lors de la validation du formulaire.
-    Retourne True si succès, False sinon.
-
-    Structure de la ligne (colonnes A→L) :
-    A: Clé de recherche = semaine + nom (ex: "42CARPENTIER Maël")
-    B: Horodateur
-    C: Difficulté texte (ex: "4 : Effort modéré")
-    D: Ressenti / Notes
-    E: Nom / Prénom
-    F: Poste
-    G: Numéro Semaine
-    H: Jour séance
-    I: RPE (chiffre)
-    J: Durée (min)
-    K: Charge (UA)
-    L: Fatigue | Courbatures | Sommeil
-    """
-    spreadsheet = get_spreadsheet()
-    if spreadsheet is None:
-        return False
-
-    try:
-        ws = spreadsheet.worksheet(SHEET_SAISIES)
-    except gspread.WorksheetNotFound:
-        init_sheets()
-        ws = spreadsheet.worksheet(SHEET_SAISIES)
-
-    horodateur = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    cle        = f"{semaine}{nom_prenom}"
-    rpe_texte  = RPE_LABELS.get(int(rpe), str(rpe)) if not is_rest else "Repos"
-    bien_etre  = f"Fatigue:{fatigue} | Courbatures:{courbatures} | Sommeil:{sommeil}"
-
-    row = [
-        cle,
-        horodateur,
-        rpe_texte,
-        notes,
-        nom_prenom,
-        poste,
-        semaine,
-        jour,
-        rpe if not is_rest else 0,
-        duree if not is_rest else 0,
-        charge if not is_rest else 0,
-        bien_etre,
-    ]
-
-    try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
-        return True
-    except Exception as e:
-        st.error(f"Erreur écriture Saisies : {e}")
-        return False
+    """Ajoute ou met à jour une ligne dans l'onglet 'Saisies' (alias sécurisé)."""
+    return append_or_update_saisie(
+        nom_prenom=nom_prenom,
+        poste=poste,
+        semaine=semaine,
+        jour=jour,
+        rpe=rpe,
+        duree=duree,
+        charge=charge,
+        fatigue=fatigue,
+        courbatures=courbatures,
+        sommeil=sommeil,
+        notes=notes,
+        is_rest=is_rest,
+    )
 
 
 # ── ÉCRITURE — Onglet RPE INDV ─────────────────────────────────────────────────
@@ -619,14 +781,17 @@ def update_rpe_par_ligne_semaine(
 # ── LECTURE — Données depuis Google Sheets ────────────────────────────────────
 
 def read_saisies_as_df() -> pd.DataFrame:
-    """Lit l'onglet Saisies et retourne un DataFrame."""
+    """Lit l'onglet Saisies, déduplique par clé de recherche (conserve la plus récente) et retourne un DataFrame."""
     spreadsheet = get_spreadsheet()
     if spreadsheet is None:
         return pd.DataFrame()
     try:
-        ws  = spreadsheet.worksheet(SHEET_SAISIES)
-        data = ws.get_all_records()
-        return pd.DataFrame(data)
+        ws = execute_with_retry(lambda: spreadsheet.worksheet(SHEET_SAISIES), max_attempts=3)
+        data = execute_with_retry(lambda: ws.get_all_records(), max_attempts=3)
+        df = pd.DataFrame(data)
+        if not df.empty and "Cle de recherche" in df.columns:
+            df = df.drop_duplicates(subset=["Cle de recherche"], keep="last")
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -634,7 +799,8 @@ def read_saisies_as_df() -> pd.DataFrame:
 def is_configured() -> bool:
     """Vérifie si les secrets Google sont configurés."""
     try:
-        _ = st.secrets["gcp_service_account"]
-        return True
-    except (KeyError, FileNotFoundError):
+        return ("gcp_service_account" in st.secrets) or (
+            "connections" in st.secrets and "gsheets" in st.secrets["connections"]
+        )
+    except Exception:
         return False

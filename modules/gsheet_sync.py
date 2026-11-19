@@ -179,19 +179,26 @@ def get_worksheet_data(spreadsheet_name: str, worksheet_name: str) -> pd.DataFra
         return pd.DataFrame()
 
     try:
-        if spreadsheet_name.startswith("http"):
-            sh = client.open_by_url(spreadsheet_name)
-        elif len(spreadsheet_name) > 30 and "/" not in spreadsheet_name and " " not in spreadsheet_name:
-            try:
-                sh = client.open_by_key(spreadsheet_name)
-            except Exception:
-                sh = client.open(spreadsheet_name)
-        else:
-            sh = client.open(spreadsheet_name)
+        from modules.gsheets import execute_with_retry
 
-        worksheet = sh.worksheet(worksheet_name)
-        records = worksheet.get_all_records()
-        return pd.DataFrame(records)
+        def _get_sh():
+            if spreadsheet_name.startswith("http"):
+                return client.open_by_url(spreadsheet_name)
+            elif len(spreadsheet_name) > 30 and "/" not in spreadsheet_name and " " not in spreadsheet_name:
+                try:
+                    return client.open_by_key(spreadsheet_name)
+                except Exception:
+                    return client.open(spreadsheet_name)
+            else:
+                return client.open(spreadsheet_name)
+
+        sh = execute_with_retry(_get_sh, max_attempts=3)
+        worksheet = execute_with_retry(lambda: sh.worksheet(worksheet_name), max_attempts=3)
+        records = execute_with_retry(lambda: worksheet.get_all_records(), max_attempts=3)
+        df_out = pd.DataFrame(records)
+        if worksheet_name.strip().lower() == "saisies" and not df_out.empty and "Cle de recherche" in df_out.columns:
+            df_out = df_out.drop_duplicates(subset=["Cle de recherche"], keep="last")
+        return df_out
     except Exception as e:
         st.warning(f"Impossible de lire l'onglet '{worksheet_name}' de '{spreadsheet_name}' : {e}")
         return pd.DataFrame()
@@ -339,7 +346,8 @@ def save_wellness_entry(entry: Dict[str, Any]) -> bool:
                 str(entry.get("Douleurs_Localisation", "Aucune")),
                 str(entry.get("Commentaires", ""))
             ]
-            sheet.append_row(row)
+            from modules.gsheets import execute_with_retry
+            execute_with_retry(lambda: sheet.append_row(row, value_input_option="USER_ENTERED"), max_attempts=3)
             # Invalidation immédiate du cache de Streamlit
             st.cache_data.clear()
             return True
@@ -355,3 +363,49 @@ def save_wellness_entry(entry: Dict[str, Any]) -> bool:
     st.session_state["mock_wellness"] = new_df
     st.cache_data.clear()
     return True
+
+
+def safe_update_worksheet(conn: Any, worksheet: str, data: pd.DataFrame, allow_shrink: bool = False) -> None:
+    """Garde-fou global contre l'écrasement accidentel des feuilles Google Sheets.
+
+    1. Bloque toute écriture si data est None ou vide.
+    2. Bloque formellement l'utilisation de conn.update sur 'Saisies' (qui doit être append-only),
+       sauf si allow_shrink=True (cas d'une suppression de joueur dans Gestion Joueurs).
+    3. Si allow_shrink=False, compare len(data) au nombre de lignes existantes pour empêcher
+       l'écrasement par un DataFrame tronqué ou incomplet.
+    4. Réessaye avec backoff exponentiel (3 tentatives) en cas d'erreur 429 ou APIError.
+    """
+    if data is None or not isinstance(data, pd.DataFrame) or data.empty:
+        raise ValueError(
+            f"SÉCURITÉ ANTI-ÉCRASEMENT : Tentative d'écriture d'un DataFrame vide sur '{worksheet}'. "
+            "Opération annulée pour protéger vos données."
+        )
+
+    # Interdiction formelle d'écraser Saisies sans allow_shrink explicite
+    if worksheet.strip().lower() == "saisies" and not allow_shrink:
+        raise PermissionError(
+            "SÉCURITÉ ANTI-ÉCRASEMENT : L'onglet 'Saisies' est protégé contre tout écrasement global. "
+            "Utilisez l'ajout en fin de feuille via append_or_update_saisie()."
+        )
+
+    # Vérification du nombre de lignes existantes
+    if not allow_shrink:
+        try:
+            current_df = conn.read(worksheet=worksheet, ttl=0)
+            if current_df is not None and isinstance(current_df, pd.DataFrame) and len(current_df) > 0:
+                if len(data) < len(current_df):
+                    raise ValueError(
+                        f"SÉCURITÉ ANTI-ÉCRASEMENT : Le DataFrame ({len(data)} lignes) a moins de lignes "
+                        f"que la feuille existante '{worksheet}' ({len(current_df)} lignes). "
+                        "Écriture bloquée pour éviter toute perte de données."
+                    )
+        except Exception as e:
+            if isinstance(e, (ValueError, PermissionError)) and "SÉCURITÉ" in str(e):
+                raise
+            raise RuntimeError(
+                f"SÉCURITÉ ANTI-ÉCRASEMENT : Impossible de vérifier le contenu actuel de '{worksheet}' ({e}). "
+                "Écriture globale annulée par précaution."
+            )
+
+    from modules.gsheets import execute_with_retry
+    execute_with_retry(lambda: conn.update(worksheet=worksheet, data=data), max_attempts=3, initial_delay=1.5)

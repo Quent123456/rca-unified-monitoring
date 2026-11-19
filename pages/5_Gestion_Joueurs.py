@@ -106,7 +106,8 @@ if not players_df.empty:
             players_df.at[idx, 'poste'] = edit_poste
             players_df.at[idx, 'groupe'] = edit_groupe
             
-            conn.update(worksheet="Effectif", data=players_df)
+            from modules.gsheet_sync import safe_update_worksheet
+            safe_update_worksheet(conn, worksheet="Effectif", data=players_df, allow_shrink=False)
             
             # 2. Mise à jour de l'onglet Saisies (si le nom ou le poste a changé)
             if ancien_nom_complet != nouveau_nom_complet or selected_player['poste'] != edit_poste:
@@ -121,7 +122,7 @@ if not players_df.empty:
                         # Mettre à jour la clé de recherche qui contenait l'ancien nom
                         saisies_df.loc[mask, 'Cle de recherche'] = saisies_df.loc[mask, 'Numero Semaine'].astype(str) + nouveau_nom_complet.replace(' ', '')
                         
-                        conn.update(worksheet="Saisies", data=saisies_df)
+                        safe_update_worksheet(conn, worksheet="Saisies", data=saisies_df, allow_shrink=False)
                 except Exception as e:
                     st.error(f"Le profil est mis à jour, mais l'historique n'a pas pu être renommé : {e}")
 
@@ -133,9 +134,10 @@ if not players_df.empty:
             nom_complet_a_supprimer = f"{selected_player['nom'].upper()} {selected_player['prenom'].capitalize()}"
 
             with st.spinner("Suppression du joueur et de son historique en cours..."):
+                from modules.gsheet_sync import safe_update_worksheet
                 # 1. Suppression du joueur dans l'onglet Effectif
                 updated_players_df = players_df[players_df['id'] != selected_player['id']]
-                conn.update(worksheet="Effectif", data=updated_players_df)
+                safe_update_worksheet(conn, worksheet="Effectif", data=updated_players_df, allow_shrink=True)
                 
                 # 2. Nettoyage en cascade dans l'onglet Saisies
                 try:
@@ -143,7 +145,7 @@ if not players_df.empty:
                     if not saisies_df.empty:
                         # Ne garder que les lignes qui NE SONT PAS le joueur à supprimer
                         updated_saisies_df = saisies_df[saisies_df['Nom / Prenom'] != nom_complet_a_supprimer]
-                        conn.update(worksheet="Saisies", data=updated_saisies_df)
+                        safe_update_worksheet(conn, worksheet="Saisies", data=updated_saisies_df, allow_shrink=True)
                 except Exception as e:
                     st.error(f"Le joueur est supprimé, mais son historique n'a pas pu être effacé : {e}")
 
@@ -181,7 +183,8 @@ with st.form("add_player_form"):
             }])
             
             updated_df = pd.concat([players_df, new_player], ignore_index=True)
-            conn.update(worksheet="Effectif", data=updated_df)
+            from modules.gsheet_sync import safe_update_worksheet
+            safe_update_worksheet(conn, worksheet="Effectif", data=updated_df, allow_shrink=False)
             st.cache_data.clear()
             
             st.success(f"✅ {prenom.capitalize()} {nom.upper()} ajouté(e) au poste de {poste}.")

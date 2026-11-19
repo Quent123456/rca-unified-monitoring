@@ -27,9 +27,12 @@ st.markdown("Vue d'ensemble de la charge, du risque et de la perception de l'eff
 # ── Connexion à Google Sheets et Chargement mis en cache ─────────────────────
 @st.cache_data(ttl=600)
 def load_sessions_data(_conn) -> pd.DataFrame:
-    """Charge les saisies depuis Google Sheets avec mise en cache (10 min)."""
+    """Charge les saisies depuis Google Sheets avec mise en cache (10 min) et déduplication."""
     df = _conn.read(worksheet="Saisies", ttl=600)
-    return df.dropna(how="all")
+    df = df.dropna(how="all")
+    if not df.empty and "Cle de recherche" in df.columns:
+        df = df.drop_duplicates(subset=["Cle de recherche"], keep="last")
+    return df
 
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)

@@ -302,35 +302,34 @@ if st.button("✅ Enregistrer la séance", type="primary", use_container_width=T
     st.session_state.saved_duration = duration
     st.session_state.saved_group = groupe_entrainement
 
-    with st.spinner("Enregistrement dans Google Sheets..."):
+    with st.spinner("Enregistrement sécurisé dans Google Sheets..."):
         try:
-            saisies_df = conn.read(worksheet="Saisies", ttl=0)
-            notes_gs = f"[{groupe_entrainement}] {final_notes}" if final_notes else f"[{groupe_entrainement}]"
-            horodateur = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            
-            new_row = pd.DataFrame([{
-                "Cle de recherche": f"{semaine}{nom_prenom.replace(' ', '')}",
-                "Horodateur": horodateur,
-                "Difficulte seance": RPE_LABELS[actual_rpe],
-                "Ressenti / Notes": notes_gs,
-                "Nom / Prenom": nom_prenom,
-                "Poste": poste,
-                "Numero Semaine": semaine,
-                "Jour seance": jour,
-                "RPE (Chiffre)": actual_rpe,
-                "Duree (min)": actual_duration,
-                "Charge (UA)": actual_load,
-                "Fatigue | Courbatures | Sommeil": f"Fatigue:{final_fatigue} | Courbatures:{final_courbatures} | Sommeil:{final_sommeil}"
-            }])
-            
-            updated_df = pd.concat([saisies_df, new_row], ignore_index=True)
-            conn.update(worksheet="Saisies", data=updated_df)
-            
-            # Ajout du joueur à la liste des "déjà saisis"
-            st.session_state.submitted_players.append(selected_label)
-            
-            # Rechargement immédiat de la page pour le masquer
-            st.rerun()
-            
+            from modules.gsheets import append_or_update_saisie
+
+            success = append_or_update_saisie(
+                nom_prenom=nom_prenom,
+                poste=poste,
+                semaine=int(semaine),
+                jour=jour,
+                rpe=float(actual_rpe),
+                duree=float(actual_duration),
+                charge=float(actual_load),
+                fatigue=final_fatigue,
+                courbatures=final_courbatures,
+                sommeil=final_sommeil,
+                notes=final_notes,
+                is_rest=is_rest_day,
+                groupe_entrainement=groupe_entrainement,
+            )
+
+            if success:
+                # Ajout du joueur à la liste des "déjà saisis"
+                st.session_state.submitted_players.append(selected_label)
+
+                # Rechargement immédiat de la page pour le masquer
+                st.rerun()
+            else:
+                st.error("Impossible d'enregistrer la séance dans Google Sheets. Veuillez réessayer.")
+
         except Exception as e:
             st.error(f"Erreur lors de l'enregistrement : {e}")

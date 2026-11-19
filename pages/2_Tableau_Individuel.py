@@ -36,9 +36,11 @@ try:
     players_df = conn.read(worksheet="Effectif", ttl=300)
     players_df = players_df.dropna(how="all")
     
-    # Lecture de l'onglet Saisies avec mise en cache (5 min)
+    # Lecture de l'onglet Saisies avec mise en cache (5 min) et déduplication propre
     sessions_df = conn.read(worksheet="Saisies", ttl=300)
     sessions_df = sessions_df.dropna(how="all")
+    if not sessions_df.empty and "Cle de recherche" in sessions_df.columns:
+        sessions_df = sessions_df.drop_duplicates(subset=["Cle de recherche"], keep="last")
     gsheets_ok = True
 except Exception as e:
     gsheets_ok = False
