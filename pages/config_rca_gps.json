@@ -47,9 +47,9 @@
     "2": "5 de devant",
     "12": "Trois-quarts"
   },
-  "derniere_mise_a_jour": "19/11/2026 14:18:11",
+  "derniere_mise_a_jour": "20/11/2026 09:19:50",
   "nb_boitiers": 22,
-  "last_validated_file_sig": "DB 181126.xlsx_89787",
+  "last_validated_file_sig": "Données brutes -J7.xlsx_58010",
   "splits_participation": {
     "PECQUERY Thomas:::Split 1": true,
     "PECQUERY Thomas:::Split 2": true,
@@ -346,6 +346,9 @@
     "VENIN Benoît:::Split 2": true,
     "VENIN Benoît:::Split 3": true,
     "VENIN Benoît:::Split 4": true,
-    "VENIN Benoît:::Split 5": true
+    "VENIN Benoît:::Split 5": true,
+    "OPE:::1er mi-temps": true,
+    "BAMIERE Clément:::1er mi-temps": true,
+    "VENIN Benoît:::1er mi-temps": true
   }
 }
